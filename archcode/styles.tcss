@@ -1,0 +1,44 @@
+Screen {
+    layout: vertical;
+}
+
+#chat {
+    height: 1fr;
+    border: tall $surface-lighten-1;
+    padding: 0 1;
+}
+
+#input {
+    height: auto;
+    max-height: 8;
+    border: tall $primary;
+    margin-top: 1;
+}
+
+.user-msg {
+    margin: 1 0;
+    color: $text;
+}
+
+.assistant-msg {
+    margin: 1 0;
+}
+
+.system-msg {
+    margin: 1 0;
+    color: $text-muted;
+    text-style: italic;
+}
+
+.error-msg {
+    margin: 1 0;
+    color: $error;
+}
+
+.status-bar {
+    dock: bottom;
+    height: 1;
+    background: $surface;
+    color: $text-muted;
+    padding: 0 1;
+}
