@@ -10,7 +10,7 @@ from textual.message import Message as TMessage
 from textual.widgets import Footer, Header, Markdown, Static, TextArea
 
 from archcode.agent import Agent, ErrorEvent, LoopComplete, StreamText
-from archcode.conversation import ConversationManager
+from archcode.conversation.manager import ConversationManager
 
 
 class ChatInput(TextArea):

@@ -22,6 +22,7 @@ class ProviderConfig:
     model: str
     api_key: str = ""
     max_output_tokens: int = 4096
+    thinking: bool = False
 
     def resolve_api_key(self) -> str:
         if self.api_key:
@@ -61,6 +62,7 @@ def _parse_provider(raw: dict) -> ProviderConfig:
         model=raw["model"],
         api_key=_resolve_env(str(raw.get("api_key", ""))),
         max_output_tokens=int(raw.get("max_output_tokens", 4096)),
+        thinking=bool(raw.get("thinking", False)),
     )
 
 

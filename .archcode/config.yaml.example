@@ -3,11 +3,12 @@
 
 providers:
   - name: default
-    protocol: openai-compat
+    protocol: openai-compat   # openai-compat | openai | anthropic
     base_url: https://api.openai.com/v1
     model: gpt-4o-mini
     api_key: ${OPENAI_API_KEY}   # 或直接写 sk-xxx
     max_output_tokens: 4096
+    # thinking: false            # anthropic 可开
 
 # 可选：追加到系统提示词
 # system_prompt: |

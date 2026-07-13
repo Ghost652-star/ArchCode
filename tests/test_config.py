@@ -8,6 +8,14 @@ import pytest
 from archcode.config import ConfigError, load_config
 
 
+def test_build_system_prompt_from_prompt_package() -> None:
+    from archcode.prompts.builder import build_system_prompt
+
+    prompt = build_system_prompt(work_dir="/workspace", extra="Use Chinese.")
+    assert "Working directory: /workspace" in prompt
+    assert prompt.endswith("Use Chinese.")
+
+
 def test_load_config_missing(tmp_path: Path) -> None:
     with pytest.raises(ConfigError, match="Config not found"):
         load_config(tmp_path / "nope.yaml")
