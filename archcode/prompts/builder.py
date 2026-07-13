@@ -1,12 +1,6 @@
 from __future__ import annotations
 
-from pathlib import Path
-
-
-DEFAULT_SYSTEM_PROMPT = """\
-You are ArchCode, a helpful AI coding assistant running in the terminal.
-Answer clearly and concisely. When writing code, use markdown code blocks.
-"""
+from archcode.prompts.system import DEFAULT_SYSTEM_PROMPT
 
 
 def build_system_prompt(work_dir: str | None = None, extra: str = "") -> str:

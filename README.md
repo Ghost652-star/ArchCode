@@ -36,31 +36,9 @@ uv run archcode -p "用 Python 写一个快速排序"
 
 ## 架构
 
-```
-archcode/
-├── __main__.py      # CLI 入口
-├── app.py           # TUI 主界面（Textual）
-├── driver.py        # 终端驱动
-├── agent.py         # Agent 主循环
-├── client.py        # LLM 客户端
-├── conversation.py  # 对话历史
-├── config.py        # 配置加载
-├── prompts.py       # 系统提示词
-│
-├── tools/           # 工具：Bash、文件读写、搜索等
-├── permissions/     # 权限控制与沙箱
-├── commands/        # 斜杠命令
-├── mcp/             # MCP 外部工具集成
-├── agents/          # 子代理
-├── memory/          # 会话与长期记忆
-├── hooks/           # 事件钩子
-├── context/         # 上下文压缩
-├── skills/          # 可插拔技能
-├── teams/           # 多代理协作
-└── worktree/        # Git worktree 隔离
-```
+ArchCode 采用分层设计：`conversation/` 管理协议无关的对话历史，`llm/` 封装各厂商 API 差异并产出统一的流式事件，`agent.py` 编排用户输入、模型调用与事件转发，`app.py` 负责终端渲染。工具、权限、记忆等能力以可插拔模块形式逐步加入。
 
-当前版本已实现：TUI 界面、配置加载、LLM 流式对话、历史记录。其余模块按版本迭代逐步完善。
+详细的目录结构、开发状态与待办见 [`workstatus/`](./workstatus) 目录。
 
 ## 开发路线
 
@@ -89,7 +67,11 @@ archcode/
 
 | 协议 | 说明 |
 |------|------|
-| `openai-compat` | OpenAI 兼容接口，适用于 OpenAI、中转 API、vLLM、Ollama 等 |
+| `openai-compat` | Chat Completions，适用于 OpenAI 兼容中转、vLLM、Ollama 等 |
+| `openai` | OpenAI Responses API |
+| `anthropic` | Anthropic Messages API（支持 thinking） |
+
+上层只通过统一的 `LLMClient.stream()` 消费 `StreamEvent`，协议差异在适配层内部处理。
 
 配置示例：
 
