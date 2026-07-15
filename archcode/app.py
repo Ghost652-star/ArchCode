@@ -9,7 +9,14 @@ from textual.containers import VerticalScroll
 from textual.message import Message as TMessage
 from textual.widgets import Footer, Header, Markdown, Static, TextArea
 
-from archcode.agent import Agent, ErrorEvent, LoopComplete, StreamText
+from archcode.agent import (
+    Agent,
+    ErrorEvent,
+    LoopComplete,
+    StreamText,
+    ToolResultEvent,
+    ToolUseEvent,
+)
 from archcode.conversation.manager import ConversationManager
 
 
@@ -98,6 +105,30 @@ class ArchCodeApp(App):
     def _show_error(self, text: str) -> None:
         self._append_message(Static(text, classes="error-msg"))
 
+    def _show_tool_use(self, event: ToolUseEvent) -> None:
+        """显示工具调用:工具名 + 参数。"""
+        args_str = ", ".join(f"{k}={v!r}" for k, v in event.arguments.items())
+        self._append_message(
+            Static(f"⚙ [tool]{event.tool_name}[/tool]({args_str})", classes="tool-use-msg")
+        )
+
+    def _show_tool_result(self, event: ToolResultEvent) -> None:
+        """显示工具结果:输出 + 计时 + is_error 高亮。"""
+        elapsed_ms = event.elapsed * 1000
+        status = "✗" if event.is_error else "✓"
+        classes = "tool-result-msg" if not event.is_error else "tool-result-msg-error"
+        # 截断长输出,避免淹没屏幕
+        output = event.output
+        if len(output) > 2000:
+            output = output[:2000] + f"\n... (truncated, total {len(event.output)} chars)"
+        self._append_message(
+            Static(
+                f"{status} [{event.tool_name}] ({elapsed_ms:.1f}ms)\n{output}",
+                classes=classes,
+                markup=False,
+            )
+        )
+
     def action_clear_chat(self) -> None:
         self._conversation.clear()
         self._chat().remove_children()
@@ -139,6 +170,10 @@ class ArchCodeApp(App):
                     if self._response_widget is not None:
                         self._response_widget.update("".join(self._response_buffer))
                         self._response_widget.scroll_visible(animate=False)
+                elif isinstance(event, ToolUseEvent):
+                    self._show_tool_use(event)
+                elif isinstance(event, ToolResultEvent):
+                    self._show_tool_result(event)
                 elif isinstance(event, ErrorEvent):
                     self._show_error(f"Error: {event.message}")
                 elif isinstance(event, LoopComplete):

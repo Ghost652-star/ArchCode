@@ -35,6 +35,27 @@ Screen {
     color: $error;
 }
 
+.tool-use-msg {
+    margin: 1 0;
+    padding: 0 1;
+    background: $surface-darken-1;
+    color: $secondary;
+}
+
+.tool-result-msg {
+    margin: 1 0;
+    padding: 0 1;
+    background: $surface;
+    color: $text-muted;
+}
+
+.tool-result-msg-error {
+    margin: 1 0;
+    padding: 0 1;
+    background: $surface;
+    color: $error;
+}
+
 .status-bar {
     dock: bottom;
     height: 1;

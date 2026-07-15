@@ -47,6 +47,8 @@ class NetworkError(LLMError):
 class LLMClient(ABC):
     """统一 LLM 接口。上层只消费 StreamEvent，不碰各家协议细节。"""
 
+    protocol: str = ""  # 子类各自赋值："anthropic" / "openai" / "openai-compat"
+
     @abstractmethod
     async def stream(
         self,
@@ -61,6 +63,8 @@ class LLMClient(ABC):
 
 
 class AnthropicClient(LLMClient):
+    protocol = "anthropic"
+
     def __init__(self, config: ProviderConfig) -> None:
         self.model = config.model
         self.thinking = config.thinking
@@ -186,6 +190,8 @@ class AnthropicClient(LLMClient):
 class OpenAIClient(LLMClient):
     """OpenAI Responses API（/responses）。"""
 
+    protocol = "openai"
+
     def __init__(self, config: ProviderConfig) -> None:
         self.model = config.model
         self.max_output_tokens = config.max_output_tokens or 4096
@@ -299,6 +305,8 @@ class OpenAIClient(LLMClient):
 
 class OpenAICompatClient(LLMClient):
     """Chat Completions（/chat/completions），兼容中转 / vLLM / Ollama 等。"""
+
+    protocol = "openai-compat"
 
     def __init__(self, config: ProviderConfig) -> None:
         self.model = config.model

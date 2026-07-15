@@ -4,6 +4,7 @@ import json
 from typing import Any
 
 from archcode.conversation.models import Message
+from archcode.tools.base import Tool
 
 
 def build_anthropic_messages(messages: list[Message]) -> list[dict[str, Any]]:
@@ -122,3 +123,34 @@ def build_chat_completion_messages(messages: list[Message]) -> list[dict[str, An
         else:
             result.append({"role": message.role, "content": message.content})
     return result
+
+
+def build_anthropic_tools(tools: list[Tool]) -> list[dict[str, Any]]:
+    """Tool 列表 → Anthropic API 的 tools 参数格式。
+
+    输出:[{name, description, input_schema}]
+    input_schema 来自 Pydantic model_json_schema(),去掉 title。
+    """
+    return [tool.get_schema() for tool in tools]
+
+
+def build_openai_tools(tools: list[Tool]) -> list[dict[str, Any]]:
+    """Tool 列表 → OpenAI Responses API / Chat Completions 通用格式。
+
+    输出:[{type: function, name, description, parameters}]
+    OpenAICompatClient 内部的 _convert_tools 会再包一层 function 嵌套,
+    转成 Chat Completions 格式。
+    """
+    schemas: list[dict[str, Any]] = []
+    for tool in tools:
+        parameters = tool.params_model.model_json_schema()
+        parameters.pop("title", None)
+        schemas.append(
+            {
+                "type": "function",
+                "name": tool.name,
+                "description": tool.description,
+                "parameters": parameters,
+            }
+        )
+    return schemas
