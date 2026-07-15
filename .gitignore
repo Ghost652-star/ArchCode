@@ -8,5 +8,9 @@ build/
 .vscode/
 .archcode/sessions/
 .archcode/debug.log
+.archcode/config.local.yaml
+.archcode/config.yaml
+CLAUDE.md
+docs/
 learning.md
 workstatus/

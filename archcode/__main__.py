@@ -11,6 +11,7 @@ from archcode.conversation.manager import ConversationManager
 from archcode.llm.client import AuthenticationError, LLMError, create_client
 from archcode.config import ConfigError, load_config
 from archcode.prompts import build_system_prompt
+from archcode.tools import create_default_registry
 
 
 async def _run_prompt(agent: Agent, prompt: str) -> None:
@@ -55,13 +56,19 @@ def main() -> None:
         print(f"Auth error: {e}", file=sys.stderr)
         sys.exit(1)
 
+    work_dir = Path(os.getcwd())
     system_prompt = build_system_prompt(
-        work_dir=os.getcwd(),
+        work_dir=str(work_dir),
         extra=config.system_prompt,
     )
+
+    # v0.2:创建默认工具注册中心,所有 6 个工具都启用
+    tool_registry = create_default_registry(work_dir=work_dir)
+
     agent = Agent(
         client=client,
         system_prompt=system_prompt,
+        tool_registry=tool_registry,
         max_output_tokens=provider.max_output_tokens,
     )
 
