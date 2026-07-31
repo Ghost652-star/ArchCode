@@ -46,6 +46,53 @@ class ConversationManager:
             Message(role="user", content="", tool_results=tool_results)
         )
 
+    def add_assistant_message(
+        self,
+        content: str,
+        *,
+        tool_uses: list[ToolUseBlock] | None = None,
+        thinking_blocks: list[ThinkingBlock] | None = None,
+    ) -> None:
+        """add_assistant 的别名，供 agent 直接调用。"""
+        self.add_assistant(content, tool_uses=tool_uses, thinking_blocks=thinking_blocks)
+
+    def add_tool_results_message(self, tool_results: list[ToolResultBlock]) -> None:
+        """add_tool_results 的别名，供 agent 直接调用。"""
+        self.add_tool_results(tool_results)
+
+    def add_system_reminder(self, content: str) -> None:
+        """注入一条 system-reminder 消息。
+
+        用 role=user 但 content
+        用 ``<system-reminder>`` 标签包起来 — Anthropic SDK 把这种
+        格式当作高优先级 system 指令处理,等价于 system prompt。
+
+        也可以避免走 Anthropic API 的 top-level ``system`` 字段
+        (那个字段在 streaming 模式下不能动态注入,只能初次调用时设)。
+        """
+        self.history.append(
+            Message(
+                role="user",
+                content=f"<system-reminder>\n{content}\n</system-reminder>",
+            )
+        )
+
+    def inject_environment(self, env_context: str) -> None:
+        """在历史中查找或插入环境上下文消息。"""
+        # 简单策略：追加一条 system 消息。更完善的实现可做去重。
+        self.history.append(Message(role="system", content=env_context))
+
+    def inject_long_term_memory(
+        self, instructions: str, memory_content: str
+    ) -> None:
+        if instructions or memory_content:
+            parts = []
+            if instructions:
+                parts.append(instructions)
+            if memory_content:
+                parts.append(f"## Long-term Memory\n{memory_content}")
+            self.history.append(Message(role="system", content="\n\n".join(parts)))
+
     def clear(self) -> None:
         self.history.clear()
         self.baseline_tokens = 0

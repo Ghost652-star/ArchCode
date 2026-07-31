@@ -40,6 +40,15 @@ def main() -> None:
         default=None,
         help="Path to config.yaml (overrides default search paths)",
     )
+    parser.add_argument(
+        "-w", "--work-dir",
+        metavar="PATH",
+        default=None,
+        help=(
+            "项目工作目录。工具读写的相对路径基准,plan 文件落盘位置(.archcode/plans/)。"
+            "默认是启动 agent 时的当前目录。"
+        ),
+    )
     args = parser.parse_args()
 
     try:
@@ -56,7 +65,9 @@ def main() -> None:
         print(f"Auth error: {e}", file=sys.stderr)
         sys.exit(1)
 
-    work_dir = Path(os.getcwd())
+    # 工作目录:CLI 显式指定优先,否则用 cwd
+    work_dir = Path(args.work_dir).resolve() if args.work_dir else Path(os.getcwd())
+
     system_prompt = build_system_prompt(
         work_dir=str(work_dir),
         extra=config.system_prompt,
@@ -70,6 +81,8 @@ def main() -> None:
         system_prompt=system_prompt,
         tool_registry=tool_registry,
         max_output_tokens=provider.max_output_tokens,
+        work_dir=work_dir,
+        # 注意:不再有 CLI --plan 启动选项,plan 模式只能在 TUI 内通过 /plan 进入
     )
 
     try:

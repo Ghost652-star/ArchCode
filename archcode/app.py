@@ -14,6 +14,7 @@ from archcode.agent import (
     ErrorEvent,
     LoopComplete,
     StreamText,
+    ThinkingText,
     ToolResultEvent,
     ToolUseEvent,
 )
@@ -113,26 +114,40 @@ class ArchCodeApp(App):
         )
 
     def _show_tool_result(self, event: ToolResultEvent) -> None:
-        """显示工具结果:输出 + 计时 + is_error 高亮。"""
+        """显示工具结果:仅摘要(名称 + 耗时 + 字节数),不展示实际 output
+        — output 已被 LLM 消费,UI 重复展示会刷屏。"""
         elapsed_ms = event.elapsed * 1000
         status = "✗" if event.is_error else "✓"
         classes = "tool-result-msg" if not event.is_error else "tool-result-msg-error"
-        # 截断长输出,避免淹没屏幕
-        output = event.output
-        if len(output) > 2000:
-            output = output[:2000] + f"\n... (truncated, total {len(event.output)} chars)"
+        char_count = len(event.output)
+        first_line = event.output.splitlines()[0][:80] if event.output else ""
         self._append_message(
             Static(
-                f"{status} [{event.tool_name}] ({elapsed_ms:.1f}ms)\n{output}",
+                f"{status} [{event.tool_name}] ({elapsed_ms:.1f}ms, {char_count:,} chars)"
+                + (f"\n   {first_line}" if first_line and not event.is_error else ""),
                 classes=classes,
                 markup=False,
             )
         )
 
+    def _show_thinking(self, text: str) -> None:
+        """显示模型思考文本:斜体灰色,与正文视觉区分。"""
+        self._append_message(Static(text, classes="thinking-msg", markup=False))
+
     def action_clear_chat(self) -> None:
         self._conversation.clear()
         self._chat().remove_children()
         self._show_system("对话已清空。")
+
+    def _set_plan_mode(self, on: bool) -> None:
+        """切换 plan mode。开启时把 Agent 的 system prompt 注入 reminder,关闭时恢复。"""
+        self._agent.set_plan_mode(on)
+        if on:
+            plan_path = getattr(self._agent, "_plan_path", None)
+            label = str(plan_path) if plan_path else "(unknown)"
+            self._show_system(f"Plan mode ON. 只读工具可用,写操作请用 /exit-plan 退出。\n   Plan file: {label}")
+        else:
+            self._show_system("Plan mode OFF. 已恢复正常操作。")
 
     async def on_chat_input_submitted(self, event: ChatInput.Submitted) -> None:
         text = event.text.strip()
@@ -144,6 +159,12 @@ class ArchCodeApp(App):
             return
         if text.lower() == "/clear":
             self.action_clear_chat()
+            return
+        if text.lower() == "/plan":
+            self._set_plan_mode(True)
+            return
+        if text.lower() == "/exit-plan":
+            self._set_plan_mode(False)
             return
 
         if self._streaming:
@@ -157,8 +178,7 @@ class ArchCodeApp(App):
         )
 
         self._response_buffer = []
-        self._response_widget = Markdown("", classes="assistant-msg")
-        self._append_message(self._response_widget, scroll=False)
+        self._response_widget = None  # 懒创建:第一次 StreamText 时才挂 Markdown
 
         self._streaming = True
         self._set_input_enabled(False)
@@ -166,12 +186,20 @@ class ArchCodeApp(App):
         try:
             async for event in self._agent.run(text, self._conversation):
                 if isinstance(event, StreamText):
+                    # 第一次流式文字 / 上一次被工具调用打断 → 新建一个 Markdown 段
+                    if self._response_widget is None:
+                        self._response_widget = Markdown("", classes="assistant-msg")
+                        self._append_message(self._response_widget, scroll=False)
                     self._response_buffer.append(event.text)
-                    if self._response_widget is not None:
-                        self._response_widget.update("".join(self._response_buffer))
-                        self._response_widget.scroll_visible(animate=False)
+                    self._response_widget.update("".join(self._response_buffer))
+                    self._response_widget.scroll_visible(animate=False)
+                elif isinstance(event, ThinkingText):
+                    self._show_thinking(event.text)
                 elif isinstance(event, ToolUseEvent):
                     self._show_tool_use(event)
+                    # 冻结当前 Markdown:下一次 StreamText 会开新段
+                    self._response_widget = None
+                    self._response_buffer = []
                 elif isinstance(event, ToolResultEvent):
                     self._show_tool_result(event)
                 elif isinstance(event, ErrorEvent):
@@ -184,5 +212,6 @@ class ArchCodeApp(App):
         finally:
             self._streaming = False
             self._response_widget = None
+            self._response_buffer = []
             self._set_input_enabled(True)
             self._input().focus()

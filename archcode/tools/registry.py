@@ -1,9 +1,6 @@
 """ToolRegistry:工具注册中心。
 
-对齐 mewcode/tools/__init__.py 的 ToolRegistry 类,去掉 defer 相关方法和字段:
-- 删除:_discovered / mark_discovered / is_discovered / get_deferred_tool_names /
-  search_deferred / find_deferred_by_names
-- get_all_schemas 不再过滤 should_defer 工具
+提供工具的注册与启/停控制、按协议导出 schema。
 """
 
 from __future__ import annotations
@@ -79,4 +76,21 @@ class ToolRegistry:
                 )
             else:  # anthropic
                 schemas.append(base)
+        return schemas
+
+    def get_schemas(
+        self, allowed: list[str] | None = None
+    ) -> list[dict[str, Any]]:
+        """返回已注册工具的 schema 列表，支持 allowed 过滤。
+
+        Args:
+            allowed: 如果非空，只返回列表中的工具 schema；为 None 则返回全部。
+        """
+        schemas: list[dict[str, Any]] = []
+        for name, tool in self._tools.items():
+            if name in self._disabled:
+                continue
+            if allowed is not None and name not in allowed:
+                continue
+            schemas.append(tool.get_schema())
         return schemas

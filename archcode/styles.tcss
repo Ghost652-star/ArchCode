@@ -24,6 +24,14 @@ Screen {
     margin: 1 0;
 }
 
+.thinking-msg {
+    margin: 1 0 1 2;
+    padding: 0 1;
+    color: $text-muted;
+    text-style: italic;
+    background: $surface-darken-2;
+}
+
 .system-msg {
     margin: 1 0;
     color: $text-muted;

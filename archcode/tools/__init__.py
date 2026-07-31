@@ -47,13 +47,13 @@ def create_default_registry(work_dir) -> ToolRegistry:
     """创建默认工具注册中心,包含 6 个基础工具。
 
     Args:
-        work_dir: 工作目录(传给文件类工具用于路径解析)。
+        work_dir: 工作目录(传给文件类工具用于路径解析,Bash 用作 subprocess cwd)。
     """
     registry = ToolRegistry()
     registry.register(ReadFile(work_dir=work_dir))
     registry.register(WriteFile(work_dir=work_dir))
     registry.register(EditFile(work_dir=work_dir))
-    registry.register(Bash())
+    registry.register(Bash(work_dir=work_dir))
     registry.register(Glob(work_dir=work_dir))
     registry.register(Grep(work_dir=work_dir))
     return registry

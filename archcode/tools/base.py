@@ -1,6 +1,6 @@
 """Tool 基类、ToolResult、常量定义。
 
-对齐 mewcode/tools/base.py,去掉 should_defer 字段(v0.2 不做 defer 机制)。
+v0.2 不做 defer 机制,Tool 上没有 should_defer 字段。
 """
 
 from __future__ import annotations

@@ -1,6 +1,6 @@
-# 斜杠命令 — 待实现
+# 自定义斜杠命令:用户用 / 命令扩展 Agent。
 #
-# 参考 NowCode/mewcode/commands/ 学习：
-# - registry.py   命令注册表
+# 待实现的子模块:
+# - registry.py   命令注册中心
 # - parser.py     解析 /command args
-# - handlers/     各命令处理器（/clear, /compact, /help ...）
+# - handlers/     各命令处理器(/clear、/compact、/help 等)
