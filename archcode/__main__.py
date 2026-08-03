@@ -10,6 +10,7 @@ from archcode.agent import Agent
 from archcode.conversation.manager import ConversationManager
 from archcode.llm.client import AuthenticationError, LLMError, create_client
 from archcode.config import ConfigError, load_config
+from archcode.permissions import PermissionChecker, PermissionMode, PathSandbox
 from archcode.prompts import build_system_prompt
 from archcode.tools import create_default_registry
 
@@ -76,10 +77,18 @@ def main() -> None:
     # v0.2:创建默认工具注册中心,所有 6 个工具都启用
     tool_registry = create_default_registry(work_dir=work_dir)
 
+    # 权限系统:路径沙箱 + 权限检查器
+    sandbox = PathSandbox(project_root=str(work_dir))
+    permission_checker = PermissionChecker(
+        sandbox=sandbox,
+        mode=PermissionMode.DEFAULT,
+    )
+
     agent = Agent(
         client=client,
         system_prompt=system_prompt,
         tool_registry=tool_registry,
+        permission_checker=permission_checker,
         max_output_tokens=provider.max_output_tokens,
         work_dir=work_dir,
         # 注意:不再有 CLI --plan 启动选项,plan 模式只能在 TUI 内通过 /plan 进入

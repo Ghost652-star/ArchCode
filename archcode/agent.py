@@ -7,6 +7,8 @@ from typing import Any, AsyncIterator
 
 from pydantic import ValidationError
 
+import asyncio
+
 from archcode.conversation.manager import ConversationManager
 from archcode.conversation.models import ThinkingBlock, ToolResultBlock, ToolUseBlock
 from archcode.llm.client import LLMClient
@@ -20,6 +22,7 @@ from archcode.llm.events import (
     ToolCallStart,
 )
 from archcode.llm.serializer import build_anthropic_tools, build_openai_tools
+from archcode.permissions import Decision, PermissionChecker, PermissionMode
 from archcode.prompts import build_plan_mode_reminder
 from archcode.tools.base import MAX_OUTPUT_CHARS, ToolResult
 from archcode.tools.registry import ToolRegistry
@@ -59,6 +62,20 @@ class ToolResultEvent:
 
 
 @dataclass
+class PermissionRequest:
+    """权限请求事件——HITL 层：agent 暂停等待用户确认。
+
+    app.py 捕获此事件，弹出 PermissionModal；
+    用户选择 allow/deny 后，通过 future.set_result(True/False) 解除阻塞。
+    """
+
+    tool_name: str
+    category: str
+    reason: str
+    future: asyncio.Future
+
+
+@dataclass
 class TurnComplete:
     turn: int
 
@@ -93,6 +110,7 @@ AgentEvent = (
     | ThinkingText
     | ToolUseEvent
     | ToolResultEvent
+    | PermissionRequest
     | TurnComplete
     | ErrorEvent
     | LoopComplete
@@ -236,6 +254,7 @@ class Agent:
         client: LLMClient,
         system_prompt: str,
         tool_registry: ToolRegistry | None = None,
+        permission_checker: PermissionChecker | None = None,
         max_output_tokens: int = 4096,
         max_iterations: int = 50,
         work_dir: str | Path | None = None,
@@ -246,6 +265,7 @@ class Agent:
         self._plan_mode = False
         self._plan_path: Path | None = None
         self._tool_registry = tool_registry
+        self._permission_checker = permission_checker
         self._max_iterations = max_iterations
         self._work_dir = Path(work_dir).resolve() if work_dir else None
         self._client.set_max_output_tokens(max_output_tokens)
@@ -258,10 +278,20 @@ class Agent:
         plan reminder 不入 system 字段,而是通过每轮
         ``conversation.add_system_reminder()`` 注入到 messages 数组,
         开启时顺便生成 plan 文件路径。
+        同步更新 permission_checker 的状态。
         """
         self._plan_mode = on
         if on:
             self._plan_path = self._get_plan_path()
+            if self._permission_checker is not None:
+                self._permission_checker.mode = PermissionMode.PLAN
+                self._permission_checker.plan_file_path = (
+                    str(self._plan_path) if self._plan_path else ""
+                )
+        else:
+            if self._permission_checker is not None:
+                self._permission_checker.mode = PermissionMode.DEFAULT
+                self._permission_checker.plan_file_path = ""
 
     def _get_plan_path(self) -> Path:
         """生成 plan 文件路径 <work_dir>/.archcode/plans/{slug}.md。"""
@@ -316,24 +346,35 @@ class Agent:
                 False,
             )
 
-        # Plan mode:只允许 read 工具;WriteFile/EditFile 写 plan 文件路径可放行
-        if self._plan_mode and getattr(tool, "category", "read") != "read":
-            target_path = tc.arguments.get("file_path", "")
-            write_target_matches_plan = (
-                tc.tool_name in ("WriteFile", "EditFile")
-                and self._plan_path is not None
-                and target_path
-                and Path(target_path).resolve() == self._plan_path.resolve()
+        # ── 权限判定：5 层检查（危险命令 → 安全白名单 → 沙箱 → 模式矩阵 → HITL）
+        if self._permission_checker is not None:
+            decision = self._permission_checker.check(
+                tool_name=tc.tool_name,
+                category=getattr(tool, "category", "read"),
+                arguments=tc.arguments,
             )
-            if not write_target_matches_plan:
+            if decision.effect == "deny":
                 return (
                     ToolResult(
                         output=(
-                            f"Plan mode is active: tool '{tc.tool_name}' is blocked. "
-                            "Only read-only tools (ReadFile/Glob/Grep) are allowed "
-                            "in plan mode, plus writing to the plan file: "
-                            f"{self._plan_path}. Ask the user to run `/exit-plan` "
-                            "to exit plan mode before retrying other writes."
+                            f"权限拦截: {decision.reason}\n"
+                            f"工具 '{tc.tool_name}' 被拒绝执行。"
+                        ),
+                        is_error=True,
+                    ),
+                    time.monotonic() - start,
+                    False,
+                )
+            if decision.effect == "ask":
+                # HITL: 需要用户确认。当前版本返回 tool_result 告知 LLM，
+                # 用户可通过 /mode accept 或 /mode bypass 切换模式后重试。
+                # TODO(task #38): 接入 PermissionModal 弹窗确认
+                return (
+                    ToolResult(
+                        output=(
+                            f"需要用户确认: {decision.reason}\n"
+                            f"工具 '{tc.tool_name}' 等待授权。"
+                            "请使用 /mode accept 或 /mode bypass 切换权限模式后再试。"
                         ),
                         is_error=True,
                     ),

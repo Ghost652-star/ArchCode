@@ -13,12 +13,14 @@ from archcode.agent import (
     Agent,
     ErrorEvent,
     LoopComplete,
+    PermissionRequest,
     StreamText,
     ThinkingText,
     ToolResultEvent,
     ToolUseEvent,
 )
 from archcode.conversation.manager import ConversationManager
+from archcode.permissions import PermissionMode
 
 
 class ChatInput(TextArea):
@@ -80,10 +82,32 @@ class ArchCodeApp(App):
             placeholder="输入消息，Enter 发送，Shift+Enter 换行，/clear 清空对话",
         )
         yield Static(
-            f"模型: {self._model_name}  |  Ctrl+L 清空  Ctrl+C 退出",
+            self._status_bar_text(),
             classes="status-bar",
+            id="status-bar",
         )
         yield Footer()
+
+    def _status_bar_text(self) -> str:
+        mode_label = self._get_mode_label()
+        return f"模型: {self._model_name}  |  权限: {mode_label}  |  Ctrl+L 清空  Ctrl+C 退出"
+
+    def _get_mode_label(self) -> str:
+        """从 agent 的 permission_checker 读取当前模式的名字。"""
+        try:
+            checker = getattr(self._agent, "_permission_checker", None)
+            if checker is not None:
+                return checker.mode.value
+        except Exception:
+            pass
+        return "default"
+
+    def _update_status_bar(self) -> None:
+        try:
+            sb = self.query_one("#status-bar", Static)
+            sb.update(self._status_bar_text())
+        except Exception:
+            pass
 
     def _chat(self) -> VerticalScroll:
         return self.query_one("#chat", VerticalScroll)
@@ -148,6 +172,21 @@ class ArchCodeApp(App):
             self._show_system(f"Plan mode ON. 只读工具可用,写操作请用 /exit-plan 退出。\n   Plan file: {label}")
         else:
             self._show_system("Plan mode OFF. 已恢复正常操作。")
+        self._update_status_bar()
+
+    def _set_permission_mode(self, mode: PermissionMode) -> None:
+        """切换权限模式（default / accept / bypass）。"""
+        checker = getattr(self._agent, "_permission_checker", None)
+        if checker is None:
+            self._show_error("权限系统未初始化，无法切换模式。")
+            return
+        # plan mode 只能通过 /plan /exit-plan 进入/退出，不能通过 /mode
+        if mode == PermissionMode.PLAN:
+            self._show_system("Plan mode 请使用 /plan 或 /exit-plan 切换。")
+            return
+        checker.mode = mode
+        self._show_system(f"权限模式已切换为: {mode.value}")
+        self._update_status_bar()
 
     async def on_chat_input_submitted(self, event: ChatInput.Submitted) -> None:
         text = event.text.strip()
@@ -165,6 +204,23 @@ class ArchCodeApp(App):
             return
         if text.lower() == "/exit-plan":
             self._set_plan_mode(False)
+            return
+        if text.lower().startswith("/mode"):
+            parts = text.split(maxsplit=1)
+            mode_str = parts[1].strip().lower() if len(parts) > 1 else ""
+            mode_map = {
+                "default": PermissionMode.DEFAULT,
+                "accept": PermissionMode.ACCEPT,
+                "bypass": PermissionMode.BYPASS,
+                "plan": PermissionMode.PLAN,
+            }
+            if mode_str in mode_map:
+                self._set_permission_mode(mode_map[mode_str])
+            else:
+                self._show_system(
+                    "用法: /mode <default|accept|bypass|plan>\n"
+                    f"  当前模式: {self._get_mode_label()}"
+                )
             return
 
         if self._streaming:
@@ -202,6 +258,18 @@ class ArchCodeApp(App):
                     self._response_buffer = []
                 elif isinstance(event, ToolResultEvent):
                     self._show_tool_result(event)
+                elif isinstance(event, PermissionRequest):
+                    # HITL: 权限请求。当前版本展示提示并自动拒绝，
+                    # 用户通过 /mode 切换后再重试。
+                    # TODO(task #38 完整版): 弹出 PermissionModal 等待用户选择
+                    self._show_system(
+                        f"⚠ 权限请求: {event.tool_name} ({event.category})\n"
+                        f"  原因: {event.reason}\n"
+                        f"  当前模式为 default，请使用 /mode accept 或 /mode bypass 授权。"
+                    )
+                    # 自动拒绝，让 agent 继续
+                    if not event.future.done():
+                        event.future.set_result(False)
                 elif isinstance(event, ErrorEvent):
                     self._show_error(f"Error: {event.message}")
                 elif isinstance(event, LoopComplete):

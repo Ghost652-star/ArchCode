@@ -1,10 +1,33 @@
-# 权限系统：在工具调用前按策略决定 allow / ask / deny。
-#
-# 模式参考：DEFAULT(默认,非读问用户) / ACCEPT_EDITS(写自动允许) / PLAN(只读+plan 文件)
-# / BYPASS(全允许) / CUSTOM(规则配置)
-#
-# 待实现的子模块：
-# - modes.py      模式枚举与策略矩阵
-# - checker.py    工具执行前的权限判断
-# - rules.py      YAML 规则引擎
-# - dialog.py     ask 模式下的用户确认 UI
+"""ArchCode 权限系统。
+
+5 层判定：
+    1. 危险命令黑名单（dangerous.py）
+    2. 安全命令白名单（dangerous.py）
+    3. 路径沙箱（sandbox.py）
+    4. 权限模式矩阵（modes.py）
+    5. HITL 人工确认（agent.py → app.py PermissionModal）
+
+用法：
+    from archcode.permissions import PermissionChecker, PermissionMode, PathSandbox
+
+    sandbox = PathSandbox(project_root=str(work_dir))
+    checker = PermissionChecker(sandbox=sandbox, mode=PermissionMode.DEFAULT)
+    decision = checker.check(tool_name, category, arguments)
+"""
+
+from archcode.permissions.checker import Decision, PermissionChecker, extract_content
+from archcode.permissions.dangerous import DangerousCommandDetector, is_safe_command
+from archcode.permissions.modes import DecisionEffect, PermissionMode, mode_decide
+from archcode.permissions.sandbox import PathSandbox
+
+__all__ = [
+    "Decision",
+    "DecisionEffect",
+    "DangerousCommandDetector",
+    "PathSandbox",
+    "PermissionChecker",
+    "PermissionMode",
+    "extract_content",
+    "is_safe_command",
+    "mode_decide",
+]
