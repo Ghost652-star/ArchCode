@@ -1,86 +1,91 @@
+/* ArchCode 极简样式 —— 对照 mewcode/styles.tcss
+   - 无粗边框：输入框 border:none，聊天区无边框
+   - 只用细分割线（border-top: solid #303030）分隔区域
+   - 弹窗完全内嵌，无盒子，靠 Rich markup 颜色区分
+*/
+
 Screen {
     layout: vertical;
 }
 
 #chat {
     height: 1fr;
-    border: tall $surface-lighten-1;
+    min-height: 18;
     padding: 0 1;
 }
 
 #input {
     height: auto;
-    max-height: 8;
-    border: tall $primary;
-    margin-top: 1;
+    min-height: 1;
+    max-height: 10;
+    border: none;
+    margin: 0 1;
 }
 
 .user-msg {
-    margin: 1 0;
+    padding: 0 2;
+    margin: 0;
     color: $text;
 }
 
 .assistant-msg {
-    margin: 1 0;
+    padding: 0 2;
+    margin: 0;
 }
 
 .thinking-msg {
-    margin: 1 0 1 2;
-    padding: 0 1;
+    padding: 0 2;
+    margin: 0;
     color: $text-muted;
     text-style: italic;
-    background: $surface-darken-2;
 }
 
 .system-msg {
-    margin: 1 0;
+    padding: 0 2;
     color: $text-muted;
     text-style: italic;
 }
 
 .error-msg {
-    margin: 1 0;
+    padding: 0 2;
     color: $error;
 }
 
 .tool-use-msg {
-    margin: 1 0;
-    padding: 0 1;
-    background: $surface-darken-1;
+    padding: 0 2;
     color: $secondary;
 }
 
 .tool-result-msg {
-    margin: 1 0;
-    padding: 0 1;
-    background: $surface;
+    padding: 0 2;
     color: $text-muted;
 }
 
 .tool-result-msg-error {
-    margin: 1 0;
-    padding: 0 1;
-    background: $surface;
+    padding: 0 2;
     color: $error;
 }
 
+/* --- 内嵌权限/提问弹窗（无盒子，照搬 mewcode #perm-inline） --- */
+
 .perm-modal {
-    margin: 1 0;
-    padding: 0 1;
-    border: tall $warning;
-    background: $surface;
     height: auto;
+    padding: 0 0;
+    margin: 1 0 1 0;
 }
 
 #perm-content {
     height: auto;
     width: 100%;
+    padding: 0 0;
 }
+
+/* --- 状态栏（细分割线分隔） --- */
 
 .status-bar {
     dock: bottom;
     height: 1;
-    background: $surface;
-    color: $text-muted;
     padding: 0 1;
+    color: $text-muted;
+    border-top: solid #303030;
 }

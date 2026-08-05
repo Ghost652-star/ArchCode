@@ -32,7 +32,16 @@ def setup(level: int = logging.DEBUG) -> Path:
     root = logging.getLogger()
     for h in list(root.handlers):
         root.removeHandler(h)
-    root.setLevel(level)
+    # root 用 INFO：过滤第三方 DEBUG 噪音（markdown_it / httpcore / httpx…）
+    root.setLevel(logging.INFO)
+
+    # 我们自己（archcode.*）保持详细级别
+    archcode_logger = logging.getLogger("archcode")
+    archcode_logger.setLevel(level)
+
+    # 已知吵的第三方 logger 压到 WARNING，避免刷屏
+    for noisy in ("markdown_it", "httpcore", "httpx", "openai", "httpcore.http11"):
+        logging.getLogger(noisy).setLevel(logging.WARNING)
 
     fmt = logging.Formatter(
         "%(asctime)s %(levelname)-7s [%(name)s] %(message)s",

@@ -138,6 +138,7 @@ class ArchCodeApp(App):
         self._agent_task: asyncio.Task[None] | None = None
         self._response_widget: Markdown | None = None
         self._response_buffer: list[str] = []
+        self._pending_permission_future: asyncio.Future | None = None
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -192,6 +193,29 @@ class ArchCodeApp(App):
 
     def _set_input_enabled(self, enabled: bool) -> None:
         self._input().disabled = not enabled
+
+    def on_permission_modal_responded(
+        self, event: PermissionModal.Responded
+    ) -> None:
+        """权限/提问弹窗用户做出选择 → 回填 future、移除弹窗、恢复输入框。
+
+        照搬 MewCode on_inline_permission_widget_responded：
+        - future.set_result 让 agent 的 _execute_tool 继续
+        - 移除弹窗，避免再次接收按键
+        - 重新启用输入框并聚焦
+        """
+        _log.info("PermissionModal responded: %r", event.value)
+        req = self._pending_permission_future
+        if req is not None and not req.done():
+            req.set_result(event.value)
+            self._pending_permission_future = None
+        try:
+            self.query_one("#perm-inline", PermissionModal).remove()
+        except Exception:
+            pass
+        # 弹窗结束后恢复输入
+        self._set_input_enabled(True)
+        self._input().focus()
 
     def _append_message(self, widget: Static | Markdown, *, scroll: bool = True) -> None:
         chat = self._chat()
@@ -301,7 +325,12 @@ class ArchCodeApp(App):
         if self._streaming:
             return
 
-        await self._handle_user_message(text)
+        # 照搬 MewCode（app.py:941）：agent 循环放独立 task，事件处理器立即返回。
+        # 若在 handler 里 await 整个 agent 运行，HITL 等待期间 handler 一直挂起，
+        # Textual 消息泵会阻塞，弹窗按键失去响应（设计文档 §8.7）。
+        self._agent_task = asyncio.create_task(
+            self._handle_user_message(text)
+        )
 
     async def _handle_user_message(self, text: str) -> None:
         self._append_message(
@@ -365,27 +394,25 @@ class ArchCodeApp(App):
                 elif isinstance(event, ToolResultEvent):
                     self._show_tool_result(event)
                 elif isinstance(event, PermissionRequest):
-                    # HITL: 挂载内联弹窗（MewCode 风格）
+                    # HITL: 挂载内联弹窗（MewCode 风格）。结果通过
+                    # PermissionModal.Responded 消息冒泡 → on_permission_modal_responded。
                     _log.info(
                         "PermissionRequest: tool=%r question=%r options=%r",
                         event.tool_name,
                         event.question,
                         event.options,
                     )
-
-                    def _on_select(value):
-                        _log.info("用户选择: %r", value)
-                        if not event.future.done():
-                            event.future.set_result(value)
-
+                    self._pending_permission_future = event.future
                     modal = PermissionModal(
                         tool_name=event.tool_name,
                         description=event.reason,
                         question=event.question,
                         options=event.options,
-                        on_select=_on_select,
+                        multi_select=event.multi_select,
                     )
                     await self._chat().mount(modal)
+                    # 弹窗期间禁用输入框（照搬 MewCode）
+                    self._set_input_enabled(False)
                 elif isinstance(event, ErrorEvent):
                     self._show_error(f"Error: {event.message}")
                 elif isinstance(event, LoopComplete):

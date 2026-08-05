@@ -79,6 +79,7 @@ class PermissionRequest:
     future: asyncio.Future
     question: str | None = None
     options: list | None = None
+    multi_select: bool = False
 
 
 @dataclass
@@ -385,10 +386,12 @@ class Agent:
                 future: asyncio.Future = asyncio.Future()
                 question = None
                 options = None
+                multi_select = False
                 if tc.tool_name == "AskUserQuestion":
                     args = tc.arguments or {}
                     question = args.get("question")
                     options = args.get("options")
+                    multi_select = bool(args.get("multi_select", False))
                 req = PermissionRequest(
                     tool_name=tc.tool_name,
                     category=getattr(tool, "category", "read"),
@@ -396,6 +399,7 @@ class Agent:
                     future=future,
                     question=question,
                     options=options,
+                    multi_select=multi_select,
                 )
                 yield req
                 value = await future
