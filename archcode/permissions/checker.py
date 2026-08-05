@@ -18,16 +18,6 @@ from archcode.permissions.modes import DecisionEffect, PermissionMode, mode_deci
 from archcode.permissions.sandbox import PathSandbox
 
 
-# ---------------------------------------------------------------------------
-# Plan 模式下允许放行的特殊工具
-# ---------------------------------------------------------------------------
-
-_PLAN_MODE_ALLOWED_TOOLS = frozenset({
-    "Agent",
-    "AskUserQuestion",
-    "ExitPlanMode",
-})
-
 # 工具参数中承载"操作对象"的字段名（用于提取 content）
 _CONTENT_FIELDS: dict[str, str] = {
     "Bash": "command",
@@ -110,7 +100,12 @@ class PermissionChecker:
         args = arguments or {}
         content = extract_content(tool_name, args)
 
-        # ── Layer 0: Plan 模式专用路径 ─────────────────────────────
+        # ── Layer 0: AskUserQuestion 永远走 HITL 路径 ─────────────
+        # AskUserQuestion 是交互工具，无论任何模式都触发弹窗让用户选择
+        if tool_name == "AskUserQuestion":
+            return Decision(effect="ask", reason="AskUserQuestion: 需要用户选择")
+
+        # ── Layer 1: Plan 模式专用路径 ─────────────────────────────
         if self.mode == PermissionMode.PLAN:
             return self._check_plan_mode(tool_name, category, content)
 
@@ -135,7 +130,15 @@ class PermissionChecker:
                     reason=f"路径沙箱拦截: {reason}",
                 )
 
-        # ── Layer 3: 权限模式矩阵 ─────────────────────────────────
+        # ── Layer 3: 规则引擎（暂未实现，留位） ──────────────────────
+        # TODO: 未来加入 RuleEngine 后在这里插入规则匹配
+        # rule_result = self.rule_engine.evaluate(tool_name, content)
+        # if rule_result == "allow":
+        #     return Decision(effect="allow", reason="规则允许")
+        # if rule_result == "deny":
+        #     return Decision(effect="deny", reason="规则拒绝")
+
+        # ── Layer 4: 权限模式矩阵 ─────────────────────────────────
         effect = mode_decide(self.mode, category)
         if effect in ("allow", "deny"):
             return Decision(
@@ -143,7 +146,7 @@ class PermissionChecker:
                 reason=f"权限模式 {self.mode.value} → {effect}",
             )
 
-        # ── Layer 4: HITL 人工确认 ────────────────────────────────
+        # ── Layer 5: HITL 人工确认 ────────────────────────────────
         return Decision(effect="ask", reason="需要用户确认此操作")
 
     # ------------------------------------------------------------------
@@ -153,12 +156,13 @@ class PermissionChecker:
     def _check_plan_mode(
         self, tool_name: str, category: str, content: str
     ) -> Decision:
-        """Plan 模式专用判定：只允许读取 + 写 plan 文件 + 特定工具。"""
-        # 特殊工具放行（AskUserQuestion, ExitPlanMode 等）
-        if tool_name in _PLAN_MODE_ALLOWED_TOOLS:
-            return Decision(effect="allow", reason="Plan mode: 特殊工具放行")
+        """Plan 模式专用判定：写 plan 文件放行，其它走默认 ask/hitl 路径。
 
-        # 写 plan 文件放行
+        理由：plan mode 的安全约束主要靠 system prompt 让 LLM 自觉只读，
+        写/命令 类操作仍走 default 模式的 ask 路径（而不是 deny），
+        这样和 default 行为一致，LLM 不会因为被强制 deny 而困惑。
+        """
+        # 写 plan 文件放行（突破 LLM 自觉不写的约束）
         if tool_name in ("WriteFile", "EditFile") and content:
             if self._is_plan_file(content):
                 return Decision(effect="allow", reason="Plan mode: 写入 plan 文件")
@@ -171,13 +175,10 @@ class PermissionChecker:
                     return Decision(effect="deny", reason=f"Plan mode + 沙箱: {reason}")
             return Decision(effect="allow", reason="Plan mode: 只读放行")
 
-        # 其余全部拒绝
+        # 写/命令 走默认 ask（让用户确认）—— 不在这里 deny
         return Decision(
-            effect="deny",
-            reason=(
-                f"Plan mode 已开启: 工具 '{tool_name}' 被拦截。"
-                "只允许只读工具和修改 plan 文件。用 /exit-plan 退出 plan mode。"
-            ),
+            effect="ask",
+            reason=f"Plan mode: 工具 '{tool_name}' 需要用户确认",
         )
 
     def _is_plan_file(self, target_path: str) -> bool:

@@ -67,12 +67,18 @@ class PermissionRequest:
 
     app.py 捕获此事件，弹出 PermissionModal；
     用户选择 allow/deny 后，通过 future.set_result(True/False) 解除阻塞。
+
+    两种模式：
+    - 权限询问（question=None, options=None）：弹 Yes/No
+    - AskUserQuestion（question=..., options=[...]）：弹 LLM 给的选项
     """
 
     tool_name: str
     category: str
     reason: str
     future: asyncio.Future
+    question: str | None = None
+    options: list | None = None
 
 
 @dataclass
@@ -318,35 +324,43 @@ class Agent:
 
     async def _execute_tool(
         self, tc: ToolCallComplete
-    ) -> tuple[ToolResult, float, bool]:
-        """执行单个工具调用，返回 (result, elapsed, is_unknown)。"""
+    ) -> AsyncIterator[tuple[ToolResult | PermissionRequest, float, bool]]:
+        """执行单个工具调用——async generator（照搬 MewCode）。
+
+        yield 三种之一：
+        1. PermissionRequest — HITL 暂停等用户
+        2. (ToolResult, elapsed, is_unknown) — 工具执行结果（最后一次 yield）
+        """
         if self._tool_registry is None:
-            return (
+            yield (
                 ToolResult(output="no tool registry configured", is_error=True),
                 0.0,
                 False,
             )
+            return
 
         tool = self._tool_registry.get(tc.tool_name)
         start = time.monotonic()
 
         if tool is None:
-            return (
+            yield (
                 ToolResult(output=f"Error: unknown tool '{tc.tool_name}'", is_error=True),
                 time.monotonic() - start,
                 True,  # is_unknown
             )
+            return
 
         if not self._tool_registry.is_enabled(tc.tool_name):
-            return (
+            yield (
                 ToolResult(
                     output=f"Error: tool '{tc.tool_name}' is disabled", is_error=True
                 ),
                 time.monotonic() - start,
                 False,
             )
+            return
 
-        # ── 权限判定：5 层检查（危险命令 → 安全白名单 → 沙箱 → 模式矩阵 → HITL）
+        # ── 权限判定：5 层检查
         if self._permission_checker is not None:
             decision = self._permission_checker.check(
                 tool_name=tc.tool_name,
@@ -354,7 +368,7 @@ class Agent:
                 arguments=tc.arguments,
             )
             if decision.effect == "deny":
-                return (
+                yield (
                     ToolResult(
                         output=(
                             f"权限拦截: {decision.reason}\n"
@@ -365,22 +379,52 @@ class Agent:
                     time.monotonic() - start,
                     False,
                 )
+                return
             if decision.effect == "ask":
-                # HITL: 需要用户确认。当前版本返回 tool_result 告知 LLM，
-                # 用户可通过 /mode accept 或 /mode bypass 切换模式后重试。
-                # TODO(task #38): 接入 PermissionModal 弹窗确认
-                return (
-                    ToolResult(
-                        output=(
-                            f"需要用户确认: {decision.reason}\n"
-                            f"工具 '{tc.tool_name}' 等待授权。"
-                            "请使用 /mode accept 或 /mode bypass 切换权限模式后再试。"
-                        ),
-                        is_error=True,
-                    ),
-                    time.monotonic() - start,
-                    False,
+                # HITL：yield PermissionRequest 出去，等用户回填 future
+                future: asyncio.Future = asyncio.Future()
+                question = None
+                options = None
+                if tc.tool_name == "AskUserQuestion":
+                    args = tc.arguments or {}
+                    question = args.get("question")
+                    options = args.get("options")
+                req = PermissionRequest(
+                    tool_name=tc.tool_name,
+                    category=getattr(tool, "category", "read"),
+                    reason=decision.reason,
+                    future=future,
+                    question=question,
+                    options=options,
                 )
+                yield req
+                value = await future
+
+                # 解析用户决策
+                if tc.tool_name == "AskUserQuestion":
+                    user_answer = value if value else "用户没选择"
+                    yield (
+                        ToolResult(
+                            output=f"用户选择了: {user_answer}",
+                            is_error=False,
+                        ),
+                        0.0,
+                        False,
+                    )
+                    return
+                else:
+                    allowed = bool(value)
+                    if not allowed:
+                        yield (
+                            ToolResult(
+                                output=f"用户拒绝了工具 '{tc.tool_name}' 的执行请求。",
+                                is_error=True,
+                            ),
+                            0.0,
+                            False,
+                        )
+                        return
+                    # 允许 → 继续执行工具（透传到下面）
 
         try:
             params = tool.params_model.model_validate(tc.arguments)
@@ -393,7 +437,7 @@ class Agent:
         # 截断:超 MAX_OUTPUT_CHARS 砍前面+尾部加标记,免得撑爆 context
         result = self._truncate_tool_result(result)
 
-        return result, time.monotonic() - start, False
+        yield result, time.monotonic() - start, False
 
     @staticmethod
     def _truncate_tool_result(result: ToolResult) -> ToolResult:
@@ -417,11 +461,24 @@ class Agent:
     async def _execute_batch_parallel(
         self, calls: list[ToolCallComplete]
     ) -> list[tuple[ToolCallComplete, ToolResult, float, bool]]:
-        """并发执行同一个 batch 内的所有工具调用。"""
+        """并发执行同一个 batch 内的所有工具调用。
+
+        HITL 不走并发路径——batch 里只要有 ask 的工具就会被拆成串行，
+        不会走到这里。这里只处理纯安全工具的并发。
+        """
         import asyncio
 
-        async def run_one(tc: ToolCallComplete):
-            result, elapsed, is_unknown = await self._execute_tool(tc)
+        async def run_one(tc: ToolCallComplete) -> tuple[ToolCallComplete, ToolResult, float, bool]:
+            # 收集最后一次 yield（必定是 ToolResult，不会有 PermissionRequest）
+            final = None
+            async for item in self._execute_tool(tc):
+                if isinstance(item, PermissionRequest):
+                    # 并发路径不应触发 HITL（ask 的工具不并发），跳过即可
+                    continue
+                final = item
+            if final is None:
+                return tc, ToolResult(output="no result", is_error=True), 0.0, False
+            result, elapsed, is_unknown = final
             return tc, result, elapsed, is_unknown
 
         tasks = [run_one(tc) for tc in calls]
@@ -576,9 +633,22 @@ class Agent:
                             elapsed=elapsed,
                         )
                 else:
-                    # 串行执行
+                    # 串行执行：async for 处理 _execute_tool 的 yield
                     for tc in batch.calls:
-                        result, elapsed, is_unknown = await self._execute_tool(tc)
+                        result = None
+                        elapsed = 0.0
+                        is_unknown = False
+                        async for item in self._execute_tool(tc):
+                            if isinstance(item, PermissionRequest):
+                                # HITL: yield 给 app.py 处理（app 端 set_result 后解除）
+                                yield item
+                                continue
+                            result, elapsed, is_unknown = item
+
+                        if result is None:
+                            # 工具被取消 / 没结果
+                            continue
+
                         if is_unknown:
                             consecutive_unknown += 1
                         else:

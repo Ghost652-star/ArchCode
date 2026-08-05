@@ -64,6 +64,19 @@ Screen {
     color: $error;
 }
 
+.perm-modal {
+    margin: 1 0;
+    padding: 0 1;
+    border: tall $warning;
+    background: $surface;
+    height: auto;
+}
+
+#perm-content {
+    height: auto;
+    width: 100%;
+}
+
 .status-bar {
     dock: bottom;
     height: 1;

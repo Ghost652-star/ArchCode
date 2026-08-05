@@ -8,6 +8,8 @@ build/
 .vscode/
 .archcode/sessions/
 .archcode/debug.log
+.archcode/archcode.log
+.archcode/hitl-debug.log
 .archcode/config.local.yaml
 .archcode/config.yaml
 .archcode/plans/
