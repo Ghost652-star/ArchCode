@@ -10,18 +10,12 @@ on_permission_modal_responded 里回填 future、移除弹窗、重新启用输�
 
 from __future__ import annotations
 
-import logging
-import os
-import time
-from pathlib import Path
-
 from rich.markup import escape
 from textual.binding import Binding
 from textual.containers import Vertical
 from textual.message import Message as TMessage
 from textual.widgets import Static
 
-_log = logging.getLogger("archcode.perm")
 
 _PERM_OPTIONS = [
     ("Yes", True),
@@ -82,7 +76,6 @@ class PermissionModal(Vertical, can_focus=True):
         yield Static(self._build_content(), id="perm-content")
 
     def on_mount(self) -> None:
-        self._dump()
         self.focus()
 
     # ── 选项数据 ────────────────────────────────────────────────
@@ -157,31 +150,6 @@ class PermissionModal(Vertical, can_focus=True):
         except Exception:
             pass
 
-    # ── 调试 ────────────────────────────────────────────────────
-
-    def _dump(self) -> None:
-        log_path = Path(os.getcwd()) / ".archcode" / "hitl-debug.log"
-        try:
-            log_path.parent.mkdir(parents=True, exist_ok=True)
-            with log_path.open("a", encoding="utf-8") as f:
-                f.write(f"\n--- {time.strftime('%H:%M:%S')} ---\n")
-                f.write(f"tool_name={self._tool_name!r}\n")
-                f.write(f"description={self._description!r}\n")
-                f.write(f"question={self._question!r}\n")
-                f.write(f"options={self._options!r}\n")
-                f.write(f"multi_select={self._multi_select!r}\n")
-                f.write(f"option_count={self._option_count()}\n")
-                f.flush()
-        except OSError as e:
-            _log.warning("写 hitl-debug.log 失败: %s", e)
-        _log.info(
-            "PermissionModal mounted: tool=%r question=%r option_count=%d multi=%s",
-            self._tool_name,
-            self._question,
-            self._option_count(),
-            self._multi_select,
-        )
-
     # ── Controller：action_* ────────────────────────────────────
 
     def action_cursor_up(self) -> None:
@@ -205,7 +173,6 @@ class PermissionModal(Vertical, can_focus=True):
             self._refresh()
 
     def _emit(self, value) -> None:
-        _log.info("PermissionModal 用户选择: %r", value)
         self.post_message(self.Responded(value))
 
     def _select(self, idx: int) -> None:

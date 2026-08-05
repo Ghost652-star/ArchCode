@@ -1,13 +1,10 @@
 from __future__ import annotations
 
 import asyncio
-import logging
 import random
 import time
 from pathlib import Path
 from typing import Any
-
-_log = logging.getLogger("archcode.app")
 
 from textual.app import App, ComposeResult
 from textual.binding import Binding
@@ -204,7 +201,6 @@ class ArchCodeApp(App):
         - 移除弹窗，避免再次接收按键
         - 重新启用输入框并聚焦
         """
-        _log.info("PermissionModal responded: %r", event.value)
         req = self._pending_permission_future
         if req is not None and not req.done():
             req.set_result(event.value)
@@ -396,12 +392,6 @@ class ArchCodeApp(App):
                 elif isinstance(event, PermissionRequest):
                     # HITL: 挂载内联弹窗（MewCode 风格）。结果通过
                     # PermissionModal.Responded 消息冒泡 → on_permission_modal_responded。
-                    _log.info(
-                        "PermissionRequest: tool=%r question=%r options=%r",
-                        event.tool_name,
-                        event.question,
-                        event.options,
-                    )
                     self._pending_permission_future = event.future
                     modal = PermissionModal(
                         tool_name=event.tool_name,

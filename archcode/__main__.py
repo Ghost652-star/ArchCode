@@ -24,16 +24,6 @@ async def _run_prompt(agent: Agent, prompt: str) -> None:
 def main() -> None:
     Path(".archcode").mkdir(parents=True, exist_ok=True)
 
-    # 文件日志:启动即把所有输出落盘 .archcode/archcode.log
-    import logging
-
-    from archcode.logging_setup import setup as setup_logging
-    log_path = setup_logging()
-    logging.getLogger("main").info(
-        "日志文件: %s  (用 `tail -f` 或记事本随时查看)",
-        log_path.resolve(),
-    )
-
     parser = argparse.ArgumentParser(
         prog="archcode",
         description="ArchCode AI coding assistant",
