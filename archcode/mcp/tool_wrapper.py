@@ -55,14 +55,19 @@ def _extract_text(content: list[Any]) -> str:
     for block in content:
         if hasattr(block, "text"):
             parts.append(block.text)
-        elif hasattr(block, "mimeType"):
-            parts.append(f"[image: {block.mimeType}]")
-        elif hasattr(block, "resource"):
-            resource = block.resource
-            if hasattr(resource, "text"):
-                parts.append(resource.text)
-            elif hasattr(resource, "uri"):
-                parts.append(f"[binary resource: {resource.uri}]")
+        else:
+            # MCP SDK 1.x 用 mime_type(下划线),不是 mimeType(驼峰)
+            mime_type = getattr(block, "mime_type", None) or getattr(
+                block, "mimeType", None
+            )
+            if mime_type:
+                parts.append(f"[binary content: {mime_type}]")
+            elif hasattr(block, "resource"):
+                resource = block.resource
+                if hasattr(resource, "text"):
+                    parts.append(resource.text)
+                elif hasattr(resource, "uri"):
+                    parts.append(f"[binary resource: {resource.uri}]")
     return "\n".join(parts) if parts else "(no output)"
 
 
