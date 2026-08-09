@@ -130,4 +130,8 @@ class MCPToolWrapper(Tool):
             )
 
         text = _extract_text(result.content)
-        return ToolResult(output=text, is_error=bool(result.isError))
+        # MCP SDK 1.x 用 is_error(下划线),不是 isError(驼峰)
+        is_err = getattr(result, "is_error", None)
+        if is_err is None:
+            is_err = getattr(result, "isError", False)
+        return ToolResult(output=text, is_error=bool(is_err))
