@@ -10,6 +10,8 @@ from typing import Any
 
 from pydantic import create_model
 
+from archcode.tools.base import Tool, ToolResult
+
 
 def _json_type_to_python(json_type: str) -> type:
     """JSON Schema 顶层类型 → Python 类型映射。未知类型 fallback 到 str。"""
@@ -45,3 +47,80 @@ def _build_params_model(tool_name: str, input_schema: dict[str, Any]):
             field_definitions[name] = (py_type | None, None)
 
     return create_model(f"{tool_name}Params", **field_definitions)
+
+
+def _extract_text(content: list[Any]) -> str:
+    """从 MCP content 列表里提取文字。Image/EmbeddedResource 显示占位。"""
+    parts: list[str] = []
+    for block in content:
+        if hasattr(block, "text"):
+            parts.append(block.text)
+        elif hasattr(block, "mimeType"):
+            parts.append(f"[image: {block.mimeType}]")
+        elif hasattr(block, "resource"):
+            resource = block.resource
+            if hasattr(resource, "text"):
+                parts.append(resource.text)
+            elif hasattr(resource, "uri"):
+                parts.append(f"[binary resource: {resource.uri}]")
+    return "\n".join(parts) if parts else "(no output)"
+
+
+class MCPToolWrapper(Tool):
+    """MCP server 提供的工具包装为 ArchCode Tool 接口。
+
+    属性:
+    - name:           mcp_{server_name}_{tool_def.name}
+    - should_defer:   True(LLM 通过 ToolSearch 按需加载)
+    - category:       "command"(走权限系统的 HITL 弹窗)
+    - is_concurrency_safe: False(MCP 调用串行)
+    """
+
+    def __init__(self, server_name: str, tool_def: Any, client: Any) -> None:
+        self._server_name = server_name
+        self._tool_def = tool_def
+        self._client = client
+        self.name = f"mcp_{server_name}_{tool_def.name}"
+        self.description = tool_def.description or tool_def.name
+        self.category = "command"
+        self.is_concurrency_safe = False
+        self.should_defer = True
+        self.params_model = _build_params_model(tool_def.name, tool_def.inputSchema)
+
+    def get_schema(self) -> dict[str, Any]:
+        """直接用 MCP server 返回的 inputSchema,不重新生成。"""
+        return {
+            "name": self.name,
+            "description": self.description,
+            "input_schema": self._tool_def.inputSchema,
+        }
+
+    async def execute(self, params: Any) -> ToolResult:
+        """调 client.call_tool,返回 ToolResult。
+
+        - client 死了 → 重连一次
+        - call_tool 抛异常 → is_error=True + 把 _alive 设 False(下次重连)
+        """
+        if not self._client.is_alive:
+            try:
+                await self._client.connect()
+            except Exception as e:
+                return ToolResult(
+                    output=f"MCP server '{self._server_name}' reconnect failed: {e}",
+                    is_error=True,
+                )
+
+        try:
+            result = await self._client.call_tool(
+                self._tool_def.name, params.model_dump(exclude_none=True)
+            )
+        except Exception as e:
+            # 标记 client 死亡,下次自动重连
+            self._client._alive = False
+            return ToolResult(
+                output=f"MCP tool call failed: {e}",
+                is_error=True,
+            )
+
+        text = _extract_text(result.content)
+        return ToolResult(output=text, is_error=bool(result.isError))
