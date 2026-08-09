@@ -10,15 +10,42 @@ from archcode.agent import Agent
 from archcode.conversation.manager import ConversationManager
 from archcode.llm.client import AuthenticationError, LLMError, create_client
 from archcode.config import ConfigError, load_config
+from archcode.mcp import MCPManager
 from archcode.permissions import PermissionChecker, PermissionMode, PathSandbox
 from archcode.prompts import build_system_prompt
 from archcode.tools import create_default_registry
+from archcode.tools.tool_search import ToolSearchTool
 
 
-async def _run_prompt(agent: Agent, prompt: str) -> None:
+async def _setup_registry_and_mcp(config, work_dir, protocol):
+    """异步初始化:建默认 registry + 注册 ToolSearch + 连 MCP server。
+
+    Returns: (registry, mcp_manager_or_None, mcp_errors)
+    """
+    tool_registry = create_default_registry(work_dir=work_dir)
+    tool_registry.register(ToolSearchTool(tool_registry, protocol=protocol))
+
+    mcp_manager: MCPManager | None = None
+    mcp_errors: list[str] = []
+    if config.mcp_servers:
+        mcp_manager = MCPManager()
+        mcp_manager.load_configs(config.mcp_servers)
+        try:
+            mcp_errors = await mcp_manager.register_all_tools(tool_registry)
+        except Exception as e:
+            print(f"[MCP init error] {e}", file=sys.stderr)
+
+    return tool_registry, mcp_manager, mcp_errors
+
+
+async def _run_prompt(agent: Agent, prompt: str, mcp_manager: MCPManager | None) -> None:
     conversation = ConversationManager()
-    result = await agent.run_to_completion(prompt, conversation)
-    print(result, flush=True)
+    try:
+        result = await agent.run_to_completion(prompt, conversation)
+        print(result, flush=True)
+    finally:
+        if mcp_manager is not None:
+            await mcp_manager.shutdown()
 
 
 def main() -> None:
@@ -74,8 +101,12 @@ def main() -> None:
         extra=config.system_prompt,
     )
 
-    # v0.2:创建默认工具注册中心,所有 6 个工具都启用
-    tool_registry = create_default_registry(work_dir=work_dir)
+    # 异步初始化 tool registry + MCP manager
+    tool_registry, mcp_manager, mcp_errors = asyncio.run(
+        _setup_registry_and_mcp(config, work_dir, provider.protocol)
+    )
+    for err in mcp_errors:
+        print(f"[MCP warning] {err}", file=sys.stderr)
 
     # 权限系统:路径沙箱 + 权限检查器
     sandbox = PathSandbox(project_root=str(work_dir))
@@ -96,7 +127,7 @@ def main() -> None:
 
     try:
         if args.p is not None:
-            asyncio.run(_run_prompt(agent, args.p))
+            asyncio.run(_run_prompt(agent, args.p, mcp_manager))
         else:
             from archcode.app import ArchCodeApp
             from archcode.driver import NoAltScreenDriver
@@ -106,7 +137,12 @@ def main() -> None:
                 model_name=provider.model,
                 driver_class=NoAltScreenDriver,
             )
+            # 保存 manager 引用,app 退出时清理
+            app._mcp_manager = mcp_manager
             app.run()
+            # run() 阻塞直到用户退出
+            if mcp_manager is not None:
+                asyncio.run(mcp_manager.shutdown())
     except LLMError as e:
         print(f"LLM error: {e}", file=sys.stderr)
         sys.exit(1)
@@ -114,4 +150,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
