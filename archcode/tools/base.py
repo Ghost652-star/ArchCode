@@ -40,6 +40,7 @@ class Tool(ABC):
     - category:工具分类,默认 "read"(安全默认值)
     - is_concurrency_safe:能否并发执行,默认 False
     - is_system_tool:是否系统级基础设施,默认 False(v0.2 不消费,留给 v0.3+)
+    - should_defer:是否延迟加载,默认 False(MCP 工具设为 True)
     """
 
     name: str
@@ -48,6 +49,7 @@ class Tool(ABC):
     category: ToolCategory = "read"
     is_concurrency_safe: bool = False
     is_system_tool: bool = False  # v0.2 保留,框架暂不消费
+    should_defer: bool = False  # MCP 工具延迟加载标记
 
     @property
     def is_read_only(self) -> bool:
