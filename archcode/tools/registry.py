@@ -1,6 +1,6 @@
 """ToolRegistry:工具注册中心。
 
-提供工具的注册与启/停控制、按协议导出 schema。
+提供工具的注册、启/停控制、延迟加载状态、按协议导出 schema。
 """
 
 from __future__ import annotations
@@ -16,13 +16,15 @@ class ToolRegistry:
     职责:
     - 名字 ↔ Tool 实例的映射(register / get)
     - 启/停控制(enable / disable / enable_all / is_enabled)
-    - 列出所有工具(list_tools)
-    - 把工具列表转成各协议 schema 格式(get_all_schemas)
+    - 延迟加载状态(_discovered 集合 + mark_discovered / is_discovered)
+    - 延迟工具查询(get_deferred_tool_names / search_deferred / find_deferred_by_names)
+    - 按协议导出 schema(get_all_schemas),自动过滤 should_defer && not discovered
     """
 
     def __init__(self) -> None:
         self._tools: dict[str, Tool] = {}
         self._disabled: set[str] = set()
+        self._discovered: set[str] = set()
 
     def register(self, tool: Tool) -> None:
         """注册一个 Tool 实例。同名工具会被覆盖。"""
@@ -49,31 +51,116 @@ class ToolRegistry:
         """启用所有工具。"""
         self._disabled.clear()
 
+    # ── 延迟加载状态 ──────────────────────────────────────
+
+    def mark_discovered(self, name: str) -> None:
+        """标记工具为已发现(完整 schema 已发给 LLM)。"""
+        self._discovered.add(name)
+
+    def is_discovered(self, name: str) -> bool:
+        return name in self._discovered
+
+    def get_deferred_tool_names(self) -> list[str]:
+        """返回所有未发现且未禁用的延迟工具名字列表。"""
+        return [
+            name
+            for name, tool in self._tools.items()
+            if getattr(tool, "should_defer", False)
+            and name not in self._discovered
+            and name not in self._disabled
+        ]
+
+    def search_deferred(
+        self, query: str, max_results: int, protocol: str = "anthropic"
+    ) -> list[dict[str, Any]]:
+        """关键词搜索延迟工具,按名字/描述打分排序。"""
+        query_lower = query.lower()
+        scored: list[tuple[int, str, Tool]] = []
+        for name, tool in self._tools.items():
+            if not getattr(tool, "should_defer", False):
+                continue
+            if name in self._disabled:
+                continue
+            score = 0
+            name_lower = name.lower()
+            desc_lower = (tool.description or "").lower()
+            if query_lower in name_lower:
+                score += 10
+            if query_lower in desc_lower:
+                score += 5
+            for word in query_lower.split():
+                if word in name_lower:
+                    score += 3
+                if word in desc_lower:
+                    score += 1
+            if score > 0:
+                scored.append((score, name, tool))
+        scored.sort(key=lambda x: x[0], reverse=True)
+        results: list[dict[str, Any]] = []
+        for _, _name, tool in scored[:max_results]:
+            base = tool.get_schema()
+            if protocol in ("openai", "openai-compat"):
+                results.append({
+                    "type": "function",
+                    "name": base["name"],
+                    "description": base["description"],
+                    "parameters": base["input_schema"],
+                })
+            else:
+                results.append(base)
+        return results
+
+    def find_deferred_by_names(
+        self, names: list[str], protocol: str = "anthropic"
+    ) -> list[dict[str, Any]]:
+        """按精确名字查找延迟工具。"""
+        results: list[dict[str, Any]] = []
+        for name in names:
+            tool = self._tools.get(name)
+            if tool is None:
+                continue
+            if not getattr(tool, "should_defer", False):
+                continue
+            base = tool.get_schema()
+            if protocol in ("openai", "openai-compat"):
+                results.append({
+                    "type": "function",
+                    "name": base["name"],
+                    "description": base["description"],
+                    "parameters": base["input_schema"],
+                })
+            else:
+                results.append(base)
+        return results
+
+    # ── 标准输出 ──────────────────────────────────────────
+
     def list_tools(self) -> list[Tool]:
         """返回所有已注册的工具实例。"""
         return list(self._tools.values())
 
     def get_all_schemas(self, protocol: str = "anthropic") -> list[dict[str, Any]]:
-        """返回所有启用工具的 schema 列表,按协议分发。
+        """返回所有启用工具的 schema 列表,自动过滤延迟加载。
 
         - anthropic:返回 [{name, description, input_schema}]
-        - openai / openai-compat:返回 [{type: function, name, description, parameters}]
-          (OpenAICompatClient 内部会再包一层 function 嵌套,转 Chat Completions 格式)
+        - openai / openai-compat:返回 [{type: function, ...}]
+
+        延迟工具(should_defer=True)未发现(discovered)时跳过。
         """
         schemas: list[dict[str, Any]] = []
         for name, tool in self._tools.items():
             if name in self._disabled:
                 continue
+            if getattr(tool, "should_defer", False) and name not in self._discovered:
+                continue
             base = tool.get_schema()
             if protocol in ("openai", "openai-compat"):
-                schemas.append(
-                    {
-                        "type": "function",
-                        "name": base["name"],
-                        "description": base["description"],
-                        "parameters": base["input_schema"],
-                    }
-                )
+                schemas.append({
+                    "type": "function",
+                    "name": base["name"],
+                    "description": base["description"],
+                    "parameters": base["input_schema"],
+                })
             else:  # anthropic
                 schemas.append(base)
         return schemas
@@ -81,11 +168,7 @@ class ToolRegistry:
     def get_schemas(
         self, allowed: list[str] | None = None
     ) -> list[dict[str, Any]]:
-        """返回已注册工具的 schema 列表，支持 allowed 过滤。
-
-        Args:
-            allowed: 如果非空，只返回列表中的工具 schema；为 None 则返回全部。
-        """
+        """返回已注册工具的 schema 列表,支持 allowed 过滤。"""
         schemas: list[dict[str, Any]] = []
         for name, tool in self._tools.items():
             if name in self._disabled:
