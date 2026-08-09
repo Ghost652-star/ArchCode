@@ -527,6 +527,17 @@ class Agent:
                     )
                 )
 
+            # ── MCP 延迟工具注入(独立于 plan_mode,每轮都注) ────
+            if self._tool_registry is not None:
+                deferred_names = self._tool_registry.get_deferred_tool_names()
+                if deferred_names:
+                    conversation.add_system_reminder(
+                        "以下工具可通过 ToolSearch 加载(完整 schema 默认不发):\n"
+                        + "\n".join(f"  - {n}" for n in deferred_names)
+                        + '\n用法:ToolSearch(query="select:name1,name2") 或 '
+                        + 'ToolSearch(query="关键词")'
+                    )
+
             # 构造 LLM 响应收集器
             collector = StreamCollector()
 
