@@ -165,35 +165,43 @@ class ArchCodeApp(App):
             self._mcp_init_task = asyncio.create_task(self._init_mcp())
 
     async def _init_mcp(self) -> None:
-        """连接 MCP server + 注册工具到 registry。每个 server 的结果都报告。"""
+        """连接 MCP server + 注册工具到 registry。每个 server 的结果都报告。
+
+        整段 try/except 兜底:任何异常都展示在聊天里,不让后台 task 静默死掉
+        ——之前 _show_system_message 不存在导致整个 init 静默失败,工具永远不注册。
+        """
         from archcode.mcp import MCPManager
 
-        configs = self._mcp_server_configs
-        if not configs:
-            return
+        try:
+            configs = self._mcp_server_configs
+            if not configs:
+                return
 
-        names = [c.name for c in configs]
-        self._show_system_message(
-            f"[MCP] Connecting to {len(configs)} server(s): {', '.join(names)}"
-        )
-
-        manager = MCPManager()
-        manager.load_configs(configs)
-        errors, successes = await manager.register_all_tools(
-            self._agent._tool_registry
-        )
-        self._mcp_manager = manager
-
-        for name, count in successes:
-            self._show_system_message(
-                f"[MCP] ✓ {name}: {count} tool(s) registered"
+            names = [c.name for c in configs]
+            self._show_system(
+                f"[MCP] Connecting to {len(configs)} server(s): {', '.join(names)}"
             )
-        for err in errors:
-            self._show_system_message(f"[MCP] ✗ {err}")
 
-        self._show_system_message(
-            f"[MCP] Done. {len(successes)}/{len(configs)} server(s) ready."
-        )
+            manager = MCPManager()
+            manager.load_configs(configs)
+            errors, successes = await manager.register_all_tools(
+                self._agent._tool_registry
+            )
+            self._mcp_manager = manager
+
+            for name, count in successes:
+                self._show_system(
+                    f"[MCP] ✓ {name}: {count} tool(s) registered"
+                )
+            for err in errors:
+                self._show_system(f"[MCP] ✗ {err}")
+
+            self._show_system(
+                f"[MCP] Done. {len(successes)}/{len(configs)} server(s) ready."
+            )
+        except Exception as e:
+            # 兜底:任何 init 异常都打到聊天,避免静默失败导致工具永不注册
+            self._show_system(f"[MCP] ✗ init crashed: {type(e).__name__}: {e}")
 
     async def on_unmount(self) -> None:
         """App 退出:关 MCP manager。"""
