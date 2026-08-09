@@ -17,10 +17,10 @@ from archcode.tools import create_default_registry
 from archcode.tools.tool_search import ToolSearchTool
 
 
-async def _setup_registry_and_mcp(config, work_dir, protocol):
+async def _build_runtime(config, work_dir, protocol):
     """异步初始化:建默认 registry + 注册 ToolSearch + 连 MCP server。
 
-    Returns: (registry, mcp_manager_or_None, mcp_errors)
+    Returns: (tool_registry, mcp_manager_or_None, mcp_errors)
     """
     tool_registry = create_default_registry(work_dir=work_dir)
     tool_registry.register(ToolSearchTool(tool_registry, protocol=protocol))
@@ -38,7 +38,9 @@ async def _setup_registry_and_mcp(config, work_dir, protocol):
     return tool_registry, mcp_manager, mcp_errors
 
 
-async def _run_prompt(agent: Agent, prompt: str, mcp_manager: MCPManager | None) -> None:
+async def _run_prompt(
+    agent: Agent, prompt: str, mcp_manager: MCPManager | None
+) -> None:
     conversation = ConversationManager()
     try:
         result = await agent.run_to_completion(prompt, conversation)
@@ -46,6 +48,28 @@ async def _run_prompt(agent: Agent, prompt: str, mcp_manager: MCPManager | None)
     finally:
         if mcp_manager is not None:
             await mcp_manager.shutdown()
+
+
+def _build_agent_sync(config, work_dir, tool_registry):
+    """TUI 路径的同步构建 agent(不开新 event loop)。"""
+    provider = config.providers[0]
+    sandbox = PathSandbox(project_root=str(work_dir))
+    permission_checker = PermissionChecker(
+        sandbox=sandbox,
+        mode=PermissionMode.DEFAULT,
+    )
+    system_prompt = build_system_prompt(
+        work_dir=str(work_dir),
+        extra=config.system_prompt,
+    )
+    return Agent(
+        client=create_client(provider),
+        system_prompt=system_prompt,
+        tool_registry=tool_registry,
+        permission_checker=permission_checker,
+        max_output_tokens=provider.max_output_tokens,
+        work_dir=work_dir,
+    )
 
 
 def main() -> None:
@@ -73,7 +97,7 @@ def main() -> None:
         metavar="PATH",
         default=None,
         help=(
-            "项目工作目录。工具读写的相对路径基准,plan 文件落盘位置(.archcode/plans/)。"
+            "项目工作目录。工具读写的相对路径基准,plan 文件落盘位置。"
             "默认是启动 agent 时的当前目录。"
         ),
     )
@@ -86,63 +110,46 @@ def main() -> None:
         print(f"Config error: {e}", file=sys.stderr)
         sys.exit(1)
 
-    provider = config.providers[0]
-    try:
-        client = create_client(provider)
-    except AuthenticationError as e:
-        print(f"Auth error: {e}", file=sys.stderr)
-        sys.exit(1)
-
-    # 工作目录:CLI 显式指定优先,否则用 cwd
     work_dir = Path(args.work_dir).resolve() if args.work_dir else Path(os.getcwd())
-
-    system_prompt = build_system_prompt(
-        work_dir=str(work_dir),
-        extra=config.system_prompt,
-    )
-
-    # 异步初始化 tool registry + MCP manager
-    tool_registry, mcp_manager, mcp_errors = asyncio.run(
-        _setup_registry_and_mcp(config, work_dir, provider.protocol)
-    )
-    for err in mcp_errors:
-        print(f"[MCP warning] {err}", file=sys.stderr)
-
-    # 权限系统:路径沙箱 + 权限检查器
-    sandbox = PathSandbox(project_root=str(work_dir))
-    permission_checker = PermissionChecker(
-        sandbox=sandbox,
-        mode=PermissionMode.DEFAULT,
-    )
-
-    agent = Agent(
-        client=client,
-        system_prompt=system_prompt,
-        tool_registry=tool_registry,
-        permission_checker=permission_checker,
-        max_output_tokens=provider.max_output_tokens,
-        work_dir=work_dir,
-        # 注意:不再有 CLI --plan 启动选项,plan 模式只能在 TUI 内通过 /plan 进入
-    )
 
     try:
         if args.p is not None:
-            asyncio.run(_run_prompt(agent, args.p, mcp_manager))
+            # -p 路径:build + run + shutdown 全部在同一个 asyncio.run 里
+            # 这样 MCP stdio_client 的 task group enter/exit 在同一个 task
+            async def _oneshot():
+                tool_registry, mcp_manager, mcp_errors = await _build_runtime(
+                    config, work_dir, config.providers[0].protocol
+                )
+                for err in mcp_errors:
+                    print(f"[MCP warning] {err}", file=sys.stderr)
+                agent = _build_agent_sync(config, work_dir, tool_registry)
+                await _run_prompt(agent, args.p, mcp_manager)
+
+            asyncio.run(_oneshot())
         else:
+            # TUI 路径:build 同步做(create_default_registry 不需要 await),
+            # MCP 连接放到 background task,在 TUI 的 event loop 里跑。
+            # 这样 stdio_client 的 task group 跟 TUI 是同一个 event loop。
             from archcode.app import ArchCodeApp
             from archcode.driver import NoAltScreenDriver
+
+            provider = config.providers[0]
+            tool_registry = create_default_registry(work_dir=work_dir)
+            tool_registry.register(
+                ToolSearchTool(tool_registry, protocol=provider.protocol)
+            )
+
+            agent = _build_agent_sync(config, work_dir, tool_registry)
 
             app = ArchCodeApp(
                 agent=agent,
                 model_name=provider.model,
                 driver_class=NoAltScreenDriver,
             )
-            # 保存 manager 引用,app 退出时清理
-            app._mcp_manager = mcp_manager
+            # 把 mcp_servers 配置传给 app,它在 on_mount 里 background task 启动
+            app._mcp_server_configs = config.mcp_servers
             app.run()
-            # run() 阻塞直到用户退出
-            if mcp_manager is not None:
-                asyncio.run(mcp_manager.shutdown())
+            # MCP 清理交给 app.on_unmount(跟 TUI 同一个 event loop,避免跨 loop 死锁)
     except LLMError as e:
         print(f"LLM error: {e}", file=sys.stderr)
         sys.exit(1)

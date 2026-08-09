@@ -136,6 +136,10 @@ class ArchCodeApp(App):
         self._response_widget: Markdown | None = None
         self._response_buffer: list[str] = []
         self._pending_permission_future: asyncio.Future | None = None
+        # MCP:由 __main__.py 传入配置,on_mount 里 background task 启动
+        self._mcp_server_configs: list = []
+        self._mcp_manager: MCPManager | None = None
+        self._mcp_init_task: asyncio.Task | None = None
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -149,6 +153,33 @@ class ArchCodeApp(App):
             classes="status-bar",
             id="status-bar",
         )
+
+    async def on_mount(self) -> None:
+        """App 挂载后:在 TUI 的 event loop 里 background task 启动 MCP。
+
+        关键:不能用 __main__.py 里 asyncio.run 起 MCP——那样 stdio_client
+        的 task group 跨 event loop,会死锁。这里用 create_task 让 MCP
+        跟 TUI 同一个 loop。
+        """
+        if self._mcp_server_configs:
+            self._mcp_init_task = asyncio.create_task(self._init_mcp())
+
+    async def _init_mcp(self) -> None:
+        """连接 MCP server + 注册工具到 registry。失败不阻塞 TUI。"""
+        from archcode.mcp import MCPManager
+
+        manager = MCPManager()
+        manager.load_configs(self._mcp_server_configs)
+        errors = await manager.register_all_tools(self._agent._tool_registry)
+        self._mcp_manager = manager
+        for err in errors:
+            self._show_system_message(f"[MCP warning] {err}")
+
+    async def on_unmount(self) -> None:
+        """App 退出:关 MCP manager。"""
+        if self._mcp_manager is not None:
+            await self._mcp_manager.shutdown()
+            self._mcp_manager = None
 
     def _status_bar_text(self) -> str:
         mode_label = self._get_mode_label()

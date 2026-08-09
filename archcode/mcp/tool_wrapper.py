@@ -85,14 +85,21 @@ class MCPToolWrapper(Tool):
         self.category = "command"
         self.is_concurrency_safe = False
         self.should_defer = True
-        self.params_model = _build_params_model(tool_def.name, tool_def.inputSchema)
+        # MCP SDK 1.x 用 input_schema(下划线),不是 inputSchema(驼峰)
+        schema = getattr(tool_def, "input_schema", None) or getattr(
+            tool_def, "inputSchema", None
+        )
+        self.params_model = _build_params_model(tool_def.name, schema)
 
     def get_schema(self) -> dict[str, Any]:
-        """直接用 MCP server 返回的 inputSchema,不重新生成。"""
+        """直接用 MCP server 返回的 input_schema,不重新生成。"""
+        schema = getattr(self._tool_def, "input_schema", None) or getattr(
+            self._tool_def, "inputSchema", None
+        )
         return {
             "name": self.name,
             "description": self.description,
-            "input_schema": self._tool_def.inputSchema,
+            "input_schema": schema,
         }
 
     async def execute(self, params: Any) -> ToolResult:
