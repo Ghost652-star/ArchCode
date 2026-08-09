@@ -20,12 +20,18 @@ providers:
 
 mcp_servers:
 
-  # stdio 类型:本地子进程
+  # stdio 类型:本地子进程(ArchCode spawn → 通过 stdin/stdout JSON-RPC 通信)
   - name: github
     command: npx
     args: ["-y", "@modelcontextprotocol/server-github"]
     env:
-      GITHUB_TOKEN: "${GITHUB_TOKEN}"
+      GITHUB_PERSONAL_ACCESS_TOKEN: "${GITHUB_PERSONAL_ACCESS_TOKEN}"
+
+  - name: tavily
+    command: npx
+    args: ["-y", "tavily-mcp@latest"]
+    env:
+      TAVILY_API_KEY: "${TAVILY_API_KEY}"
 
   - name: filesystem
     command: npx
@@ -39,7 +45,7 @@ mcp_servers:
     command: uvx
     args: ["some-mcp-package"]
 
-  # streamable_http 类型:远程服务
+  # streamable_http 类型:远程 HTTP 服务(ArchCode 通过 HTTPS JSON-RPC 通信)
   - name: corp_gateway
     url: https://mcp.corp.example.com
     headers:

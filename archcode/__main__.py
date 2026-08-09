@@ -20,22 +20,25 @@ from archcode.tools.tool_search import ToolSearchTool
 async def _build_runtime(config, work_dir, protocol):
     """异步初始化:建默认 registry + 注册 ToolSearch + 连 MCP server。
 
-    Returns: (tool_registry, mcp_manager_or_None, mcp_errors)
+    Returns: (tool_registry, mcp_manager_or_None, mcp_errors, mcp_successes)
     """
     tool_registry = create_default_registry(work_dir=work_dir)
     tool_registry.register(ToolSearchTool(tool_registry, protocol=protocol))
 
     mcp_manager: MCPManager | None = None
     mcp_errors: list[str] = []
+    mcp_successes: list[tuple[str, int]] = []
     if config.mcp_servers:
         mcp_manager = MCPManager()
         mcp_manager.load_configs(config.mcp_servers)
         try:
-            mcp_errors = await mcp_manager.register_all_tools(tool_registry)
+            mcp_errors, mcp_successes = await mcp_manager.register_all_tools(
+                tool_registry
+            )
         except Exception as e:
             print(f"[MCP init error] {e}", file=sys.stderr)
 
-    return tool_registry, mcp_manager, mcp_errors
+    return tool_registry, mcp_manager, mcp_errors, mcp_successes
 
 
 async def _run_prompt(
@@ -117,11 +120,13 @@ def main() -> None:
             # -p 路径:build + run + shutdown 全部在同一个 asyncio.run 里
             # 这样 MCP stdio_client 的 task group enter/exit 在同一个 task
             async def _oneshot():
-                tool_registry, mcp_manager, mcp_errors = await _build_runtime(
-                    config, work_dir, config.providers[0].protocol
+                tool_registry, mcp_manager, mcp_errors, mcp_successes = (
+                    await _build_runtime(config, work_dir, config.providers[0].protocol)
                 )
+                for name, count in mcp_successes:
+                    print(f"[MCP] ✓ {name}: {count} tool(s) registered", file=sys.stderr)
                 for err in mcp_errors:
-                    print(f"[MCP warning] {err}", file=sys.stderr)
+                    print(f"[MCP] ✗ {err}", file=sys.stderr)
                 agent = _build_agent_sync(config, work_dir, tool_registry)
                 await _run_prompt(agent, args.p, mcp_manager)
 

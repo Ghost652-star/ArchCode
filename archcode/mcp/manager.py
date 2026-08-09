@@ -38,13 +38,18 @@ class MCPManager:
         for cfg in configs:
             self._configs[cfg.name] = cfg
 
-    async def register_all_tools(self, registry: "ToolRegistry") -> list[str]:
+    async def register_all_tools(
+        self, registry: "ToolRegistry"
+    ) -> tuple[list[str], list[tuple[str, int]]]:
         """对每个 server 串行 connect + list_tools + 注册 wrapper。
 
         失败 server:warning + 跳过,其他继续。
-        返回错误列表(每个失败一条)。
+        返回 (errors, successes):
+          - errors:    失败列表,每条 "MCP server 'name': <error>"
+          - successes: 成功列表,每条 (name, tool_count)
         """
         errors: list[str] = []
+        successes: list[tuple[str, int]] = []
         for name, config in self._configs.items():
             try:
                 client = MCPClient(config)
@@ -56,12 +61,13 @@ class MCPManager:
                     wrapper = MCPToolWrapper(name, tool_def, client)
                     registry.register(wrapper)
 
+                successes.append((name, len(tools)))
             except Exception as e:
                 msg = f"MCP server '{name}': {e}"
                 logger.warning(msg)
                 errors.append(msg)
 
-        return errors
+        return errors, successes
 
     async def shutdown(self) -> None:
         """关闭所有 client,清理 _clients。"""
