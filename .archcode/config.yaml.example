@@ -12,4 +12,35 @@ providers:
 
 # 可选：追加到系统提示词
 # system_prompt: |
-#   请用中文回答。
+#   自定义指令。
+
+# ── MCP 外部工具(可选)────────────────────────────────
+# 支持任意遵循 MCP 协议的 server。两种 transport 二选一。
+# 工具默认延迟加载,LLM 通过 ToolSearch 按需加载完整 schema。
+
+mcp_servers:
+
+  # stdio 类型:本地子进程
+  - name: github
+    command: npx
+    args: ["-y", "@modelcontextprotocol/server-github"]
+    env:
+      GITHUB_TOKEN: "${GITHUB_TOKEN}"
+
+  - name: filesystem
+    command: npx
+    args: ["-y", "@modelcontextprotocol/server-filesystem", "/path/to/project"]
+
+  - name: my_python_server
+    command: python
+    args: ["-m", "my_mcp_server"]
+
+  - name: uvx_server
+    command: uvx
+    args: ["some-mcp-package"]
+
+  # streamable_http 类型:远程服务
+  - name: corp_gateway
+    url: https://mcp.corp.example.com
+    headers:
+      Authorization: "Bearer ${MCP_TOKEN}"
