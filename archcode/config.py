@@ -77,10 +77,75 @@ def build_child_env(declared_env: dict[str, str] | None) -> dict[str, str]:
 
 
 @dataclass
+class SummaryProviderConfig:
+    """摘要专用 provider 配置。
+
+    启用时,压缩模块会用这个 client 跑 SUMMARY_PROMPT(独立于主对话 client)。
+    默认走 MiniMax(OpenAI 兼容协议),通过环境变量 ``MINIMAX_API_KEY`` 拿 key。
+    base_url / model 用户可在 YAML 覆盖。
+    """
+
+    enabled: bool = False  # 默认关闭,需要时在 YAML 里启用
+    protocol: str = "openai-compat"
+    base_url: str = "https://api.MiniMax.io/v1"
+    model: str = "MiniMax-M3"
+    api_key: str = ""  # 缺省时按 api_key_env 查环境变量
+    api_key_env: str = "MINIMAX_API_KEY"
+    max_output_tokens: int = 4096
+
+    def resolve_api_key(self) -> str:
+        if self.api_key:
+            return self.api_key
+        return os.environ.get(self.api_key_env, "")
+
+
+@dataclass
+class CompressionConfig:
+    """上下文压缩总配置。
+
+    所有阈值跟 MewCode 一致,详见 ``archcode/context/compactor.py``。
+    字段含义:
+    - single_char_limit / aggregate_char_limit:Layer 1 单条 + 单消息聚合阈值
+    - summary_output_reserve / auto_safety_margin / manual_safety_margin:Layer 2 阈值
+    - preview_chars / old_result_snip_chars:替换后的预览长度
+    - keep_recent_turns / keep_recent_tokens / keep_max_tokens / min_keep_messages:压缩时保留窗口
+    - min_summarize_prefix_tokens:摘要调用本身的最小前缀(防止微调被空总结)
+    - recovery_*:RecoveryState 渲染附件的预算
+    - max_summary_failures / max_force_compact_failures:两类熔断器的阈值
+    - summary_provider:可选独立摘要 client
+    """
+
+    enabled: bool = True
+    single_char_limit: int = 50_000
+    aggregate_char_limit: int = 200_000
+    summary_output_reserve: int = 20_000
+    auto_safety_margin: int = 13_000
+    manual_safety_margin: int = 3_000
+    preview_chars: int = 2_000
+    old_result_snip_chars: int = 200
+    keep_recent_turns: int = 10
+    keep_recent_tokens: int = 10_000
+    keep_max_tokens: int = 40_000
+    min_keep_messages: int = 5
+    min_summarize_prefix_tokens: int = 2_000
+    recovery_file_limit: int = 5
+    recovery_tokens_per_file: int = 5_000
+    recovery_skills_budget: int = 25_000
+    recovery_tokens_per_skill: int = 5_000
+    max_summary_retries: int = 3
+    max_summary_failures: int = 3  # auto_compact 熔断阈值
+    max_force_compact_failures: int = 2  # force_compact 熔断阈值
+    summary_provider: SummaryProviderConfig = field(
+        default_factory=SummaryProviderConfig
+    )
+
+
+@dataclass
 class AppConfig:
     providers: list[ProviderConfig]
     system_prompt: str = ""
     mcp_servers: list[MCPServerConfig] = field(default_factory=list)
+    compression: CompressionConfig = field(default_factory=CompressionConfig)
 
 
 def _parse_provider(raw: dict) -> ProviderConfig:
@@ -138,12 +203,61 @@ def _load_file(path: Path) -> AppConfig:
 
     providers = [_parse_provider(p) for p in providers_raw]
     mcp_servers = [_parse_mcp_server(s) for s in raw.get("mcp_servers", [])]
+    compression = _parse_compression(raw.get("compression", {}))
 
     return AppConfig(
         providers=providers,
         system_prompt=str(raw.get("system_prompt", "")),
         mcp_servers=mcp_servers,
+        compression=compression,
     )
+
+
+def _parse_summary_provider(raw: dict | None) -> SummaryProviderConfig:
+    """解析 summary_provider YAML 块。空块返回默认值(默认禁用)。"""
+    if not raw:
+        return SummaryProviderConfig()
+    return SummaryProviderConfig(
+        enabled=bool(raw.get("enabled", False)),
+        protocol=str(raw.get("protocol", "openai-compat")),
+        base_url=str(raw.get("base_url", "https://api.MiniMax.io/v1")),
+        model=str(raw.get("model", "MiniMax-M3")),
+        api_key=str(raw.get("api_key", "")),
+        api_key_env=str(raw.get("api_key_env", "MINIMAX_API_KEY")),
+        max_output_tokens=int(raw.get("max_output_tokens", 4096)),
+    )
+
+
+def _parse_compression(raw: dict | None) -> CompressionConfig:
+    """解析 compression YAML 块。空块返回默认配置(启用 + 所有阈值默认)。"""
+    if not raw:
+        return CompressionConfig()
+    cfg = CompressionConfig(
+        enabled=bool(raw.get("enabled", True)),
+        single_char_limit=int(raw.get("single_char_limit", 50_000)),
+        aggregate_char_limit=int(raw.get("aggregate_char_limit", 200_000)),
+        summary_output_reserve=int(raw.get("summary_output_reserve", 20_000)),
+        auto_safety_margin=int(raw.get("auto_safety_margin", 13_000)),
+        manual_safety_margin=int(raw.get("manual_safety_margin", 3_000)),
+        preview_chars=int(raw.get("preview_chars", 2_000)),
+        old_result_snip_chars=int(raw.get("old_result_snip_chars", 200)),
+        keep_recent_turns=int(raw.get("keep_recent_turns", 10)),
+        keep_recent_tokens=int(raw.get("keep_recent_tokens", 10_000)),
+        keep_max_tokens=int(raw.get("keep_max_tokens", 40_000)),
+        min_keep_messages=int(raw.get("min_keep_messages", 5)),
+        min_summarize_prefix_tokens=int(
+            raw.get("min_summarize_prefix_tokens", 2_000)
+        ),
+        recovery_file_limit=int(raw.get("recovery_file_limit", 5)),
+        recovery_tokens_per_file=int(raw.get("recovery_tokens_per_file", 5_000)),
+        recovery_skills_budget=int(raw.get("recovery_skills_budget", 25_000)),
+        recovery_tokens_per_skill=int(raw.get("recovery_tokens_per_skill", 5_000)),
+        max_summary_retries=int(raw.get("max_summary_retries", 3)),
+        max_summary_failures=int(raw.get("max_summary_failures", 3)),
+        max_force_compact_failures=int(raw.get("max_force_compact_failures", 2)),
+        summary_provider=_parse_summary_provider(raw.get("summary_provider")),
+    )
+    return cfg
 
 
 def _resolve_env(value: str) -> str:
@@ -180,6 +294,8 @@ def load_config(path: Path | None = None) -> AppConfig:
                 merged.system_prompt = layer.system_prompt
             if layer.mcp_servers:
                 merged.mcp_servers = layer.mcp_servers
+            if layer.compression:
+                merged.compression = layer.compression
 
     if merged is None:
         raise ConfigError(

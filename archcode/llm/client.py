@@ -44,6 +44,33 @@ class NetworkError(LLMError):
     pass
 
 
+# 各家 provider 描述「prompt 超出窗口」错误的常见文案(全小写匹配)
+_PROMPT_TOO_LONG_PATTERNS = (
+    "prompt is too long",
+    "context length exceeded",
+    "context length maximum",
+    "maximum context length",
+    "reduce the length of the messages",
+    "reduce the length",
+    "too many tokens",
+    "input is too long",
+    "request too large",
+)
+
+
+def is_prompt_too_long_error(error: Exception) -> bool:
+    """嗅探 LLMError 文本,识别 prompt 超出窗口的错误。
+
+    客户端没有专门的子类,只能按常见错误文案 pattern-match。
+    任何子类(AuthenticationError / RateLimitError / NetworkError)的「太长」类
+    描述也会被命中 —— 这些不应该走 force-compact 路径,而是各自单独处理。
+    因此调用方需要先判断 ``isinstance(error, LLMError)`` 且非鉴权/限流/网络错误,
+    再调用此函数。
+    """
+    msg = str(error).lower()
+    return any(pat in msg for pat in _PROMPT_TOO_LONG_PATTERNS)
+
+
 class LLMClient(ABC):
     """统一 LLM 接口。上层只消费 StreamEvent，不碰各家协议细节。"""
 
@@ -61,9 +88,33 @@ class LLMClient(ABC):
     def set_max_output_tokens(self, tokens: int) -> None:
         pass
 
+    @property
+    def context_window(self) -> int:
+        """模型上下文窗口大小(单位:token)。
+
+        子类按模型表返回。基类默认 200K(Sonnet 兜底值)。
+        压缩模块据此计算触发阈值,不持有独立副本,避免和模型不同步。
+        """
+        return 200_000
+
 
 class AnthropicClient(LLMClient):
     protocol = "anthropic"
+
+    # 模型名 → context_window 的映射表。
+    # 没列出的模型默认 200K(Sonnet 全家兜底)。
+    _CONTEXT_WINDOWS = {
+        "claude-opus-4": 200_000,
+        "claude-opus-4-1": 200_000,
+        "claude-sonnet-4": 200_000,
+        "claude-sonnet-4-5": 200_000,
+        "claude-haiku-4-5": 200_000,
+        "claude-3-5-sonnet": 200_000,
+        "claude-3-5-haiku": 200_000,
+        "claude-3-opus": 200_000,
+        "claude-3-sonnet": 200_000,
+        "claude-3-haiku": 200_000,
+    }
 
     def __init__(self, config: ProviderConfig) -> None:
         self.model = config.model
@@ -82,6 +133,16 @@ class AnthropicClient(LLMClient):
 
     def set_max_output_tokens(self, tokens: int) -> None:
         self.max_output_tokens = tokens
+
+    @property
+    def context_window(self) -> int:
+        # 精确匹配失败时,按前缀匹配(如 claude-sonnet-4-20250501 → claude-sonnet-4)
+        if self.model in self._CONTEXT_WINDOWS:
+            return self._CONTEXT_WINDOWS[self.model]
+        for prefix, size in self._CONTEXT_WINDOWS.items():
+            if self.model.startswith(prefix):
+                return size
+        return 200_000
 
     async def stream(
         self,
@@ -192,6 +253,19 @@ class OpenAIClient(LLMClient):
 
     protocol = "openai"
 
+    _CONTEXT_WINDOWS = {
+        "gpt-4.1": 1_047_576,
+        "gpt-4.1-mini": 1_047_576,
+        "gpt-4.1-nano": 1_047_576,
+        "gpt-4o": 128_000,
+        "gpt-4o-mini": 128_000,
+        "o3": 200_000,
+        "o3-mini": 200_000,
+        "o4-mini": 200_000,
+        "gpt-5": 400_000,
+        "gpt-5-mini": 400_000,
+    }
+
     def __init__(self, config: ProviderConfig) -> None:
         self.model = config.model
         self.max_output_tokens = config.max_output_tokens or 4096
@@ -208,6 +282,15 @@ class OpenAIClient(LLMClient):
 
     def set_max_output_tokens(self, tokens: int) -> None:
         self.max_output_tokens = tokens
+
+    @property
+    def context_window(self) -> int:
+        if self.model in self._CONTEXT_WINDOWS:
+            return self._CONTEXT_WINDOWS[self.model]
+        for prefix, size in self._CONTEXT_WINDOWS.items():
+            if self.model.startswith(prefix):
+                return size
+        return 128_000  # GPT 兜底
 
     async def stream(
         self,
@@ -308,6 +391,23 @@ class OpenAICompatClient(LLMClient):
 
     protocol = "openai-compat"
 
+    _CONTEXT_WINDOWS = {
+        # MiniMax / 国产
+        "MiniMax-M3": 200_000,
+        "MiniMax-M2": 200_000,
+        "MiniMax-M1": 200_000,
+        "MiniMax": 200_000,  # 通用兜底:任何 "MiniMax-..." 都按 200K
+        # Qwen
+        "qwen3-max": 256_000,
+        "qwen-plus": 128_000,
+        "qwen-turbo": 128_000,
+        # DeepSeek
+        "deepseek-v3": 64_000,
+        "deepseek-r1": 64_000,
+        # Llama 本地
+        "llama-3.3-70b": 128_000,
+    }
+
     def __init__(self, config: ProviderConfig) -> None:
         self.model = config.model
         self.max_output_tokens = config.max_output_tokens or 4096
@@ -324,6 +424,15 @@ class OpenAICompatClient(LLMClient):
 
     def set_max_output_tokens(self, tokens: int) -> None:
         self.max_output_tokens = tokens
+
+    @property
+    def context_window(self) -> int:
+        if self.model in self._CONTEXT_WINDOWS:
+            return self._CONTEXT_WINDOWS[self.model]
+        for prefix, size in self._CONTEXT_WINDOWS.items():
+            if self.model.startswith(prefix):
+                return size
+        return 32_000  # 中转模型兜底(常见 vLLM 默认)
 
     @staticmethod
     def _convert_tools(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:

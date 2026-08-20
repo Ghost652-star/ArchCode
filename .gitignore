@@ -6,6 +6,10 @@ dist/
 build/
 .idea/
 .vscode/
+.claude/
+.cursor/
+.codegraph/
+.pytest_cache/
 .archcode/sessions/
 .archcode/debug.log
 .archcode/config.local.yaml

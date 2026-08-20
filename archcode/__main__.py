@@ -72,6 +72,7 @@ def _build_agent_sync(config, work_dir, tool_registry):
         permission_checker=permission_checker,
         max_output_tokens=provider.max_output_tokens,
         work_dir=work_dir,
+        compression=config.compression,
     )
 
 

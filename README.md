@@ -1,6 +1,6 @@
 # ArchCode
 
-ArchCode 是一个终端 AI 编程助手，基于 Textual 构建 TUI 界面。支持流式对话、对话历史管理、5 层权限系统、HITL 权限弹窗、可插拔工具、计划模式（Plan Mode），以及通过 MCP 协议接入任意外部工具 server。
+ArchCode 是一个终端 AI 编程助手，基于 Textual 构建 TUI 界面。支持流式对话、对话历史管理、5 层权限系统、HITL 权限弹窗、可插拔工具、计划模式（Plan Mode）、上下文自动压缩，以及通过 MCP 协议接入任意外部工具 server。
 
 ## 快速开始
 
@@ -39,6 +39,7 @@ uv run archcode -p "用 Python 写一个快速排序"
 | 命令 | 功能 |
 |------|------|
 | `/clear` | 清空当前对话 |
+| `/compact` | 手动触发上下文压缩（不受自动阈值限制） |
 | `/quit` / `/exit` | 退出 ArchCode |
 | `/plan` | 进入 Plan 模式（只读工具 + 写计划文件） |
 | `/exit-plan` | 退出 Plan 模式 |
@@ -74,6 +75,7 @@ Communication  llm/client.py                         # LLMClient + 各厂商协�
        │
 Data           conversation/models.py                 # Message, ToolUseBlock, ToolResultBlock
                 conversation/manager.py              # ConversationManager（历史 + token anchor）
+                context/                             # 上下文压缩（工具结果预算 + LLM 摘要 + 恢复附件）
        │
 Config         config.py / prompts/                  # YAML 配置 + 系统提示词
                 mcp/                                 # MCP 协议适配（stdio + HTTP）
@@ -104,6 +106,16 @@ ArchCode 通过 MCP（Model Context Protocol）接入任意外部工具 server�
 - 部分 server 失败不影响其他
 
 配置示例见下方「配置」章节。
+
+### 上下文压缩
+
+长对话接近模型窗口上限时自动压缩，`archcode/context/` 分两层：
+
+- **Layer 1（工具结果预算，`manager.py`）**：每轮 agent loop 前扫描所有 `tool_result`。单条超限落盘只留 preview、单消息聚合超限按长度倒序裁、超过保留轮次的旧结果剪成 `<snipped>` 片段。每个 `tool_use_id` 只评估一次（决策冻结），保证 prompt cache 前缀字节级稳定。
+- **Layer 2（LLM 摘要，`compactor.py`）**：token 数达到阈值（`context_window − 20K 摘要预留 − 13K 余量`）时，用独立摘要 prompt 把旧历史压成 9 段结构化摘要并原子替换 history。带熔断器（连续失败自动停）、drop-oldest 1/5 重试、摘要质量校验。
+- **恢复附件（`recovery.py`）**：线程安全记录本会话读过的文件 / 激活的 skills，压缩后拼成 Markdown 附件挂在摘要后，提示模型需要原文时用工具按需加载。
+
+`/compact` 可随时手动触发压缩（跳过阈值检查）。压缩进度、token 用量在 TUI 状态栏实时显示。摘要也可走独立 provider（默认 MiniMax，见配置章节）。
 
 ## 配置
 
@@ -189,6 +201,27 @@ mcp_servers:
 4. LLM 通过 `ToolSearch` 按需加载 schema
 
 发现新 server：搜索 `mcp-server-*`（npm / PyPI）、看 [MCP 官方 server 列表](https://github.com/modelcontextprotocol/servers)。
+
+### 上下文压缩配置
+
+所有阈值都有默认值，可按需覆盖：
+
+```yaml
+compression:
+  enabled: true            # 总开关
+  single_char_limit: 50000 # Layer 1: 单条 tool_result 落盘阈值（字符）
+  aggregate_char_limit: 200000  # Layer 1: 单消息内聚合阈值
+  preview_chars: 2000      # 落盘后 preview 长度
+  keep_recent_turns: 10    # Layer 2: 保留最近 N 轮原文
+  max_summary_failures: 3  # auto_compact 熔断阈值
+  # 摘要可走独立 provider（默认关闭，走主对话 client）
+  summary_provider:
+    enabled: false
+    protocol: openai-compat
+    base_url: https://api.MiniMax.io/v1
+    model: MiniMax-M3
+    api_key_env: MINIMAX_API_KEY
+```
 
 ## 工作目录与沙箱
 

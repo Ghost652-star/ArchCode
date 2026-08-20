@@ -1,12 +1,23 @@
 /* ArchCode 极简样式 —— 对照 mewcode/styles.tcss
-   - 无粗边框：输入框 border:none，聊天区无边框
-   - 只用细分割线（border-top: solid #303030）分隔区域
-   - 弹窗完全内嵌，无盒子，靠 Rich markup 颜色区分
+   - 无粗边框:输入框 border:none,聊天区无边框
+   - 只用细分割线(border-top: solid #303030)分隔区域
+   - 弹窗完全内嵌,无盒子,靠 RichText 颜色区分
+   - 状态栏三栏:左权限  中 ctx  右模型
 */
 
 Screen {
     layout: vertical;
 }
+
+/* --- 顶栏:ASCII logo + 标题 --- */
+
+#title-bar {
+    dock: top;
+    height: 3;
+    padding: 0 1;
+}
+
+/* --- 聊天区 --- */
 
 #chat {
     height: 1fr;
@@ -22,23 +33,31 @@ Screen {
     margin: 0 1;
 }
 
-.user-msg {
+/* --- 用户消息:❯ 浅蓝前缀 + 白色文本 --- */
+
+.user-message {
     padding: 0 2;
-    margin: 0;
+    margin: 1 0 0 0;
     color: $text;
 }
 
+/* --- AI 响应:正常正文,前后留空 --- */
+
 .assistant-msg {
     padding: 0 2;
-    margin: 0;
+    margin: 0 0 1 0;
 }
+
+/* --- 思考提示:斜体灰,独立行,前后留空 --- */
 
 .thinking-msg {
     padding: 0 2;
-    margin: 0;
+    margin: 1 0 0 0;
     color: $text-muted;
     text-style: italic;
 }
+
+/* --- 系统 / 提示消息:灰色斜体小字 --- */
 
 .system-msg {
     padding: 0 2;
@@ -46,19 +65,50 @@ Screen {
     text-style: italic;
 }
 
+/* --- 错误:只在出错时用红色,其它仅 caution --- */
+
 .error-msg {
     padding: 0 2;
     color: $error;
 }
 
+/* --- 工具调用 / 工具结果:统一 tool-block 类 --- */
+
+.tool-block {
+    padding: 0 2;
+    color: $text;
+}
+
+.tool-block-loading {
+    color: $text-muted;
+}
+
+.tool-block-error {
+    color: $error;
+}
+
+/* --- 兼容老样式,保留别名 --- */
+
 .tool-use-msg {
     padding: 0 2;
-    color: $secondary;
+    color: $text-muted;
+}
+
+.ai-loading-dot {
+    height: 1;
+    width: 1;
+    color: #875FFF;
+    padding: 0 0 0 0;
+}
+
+.ai-row {
+    height: auto;
+    width: 100%;
 }
 
 .tool-result-msg {
     padding: 0 2;
-    color: $text-muted;
+    color: $text;
 }
 
 .tool-result-msg-error {
@@ -66,7 +116,7 @@ Screen {
     color: $error;
 }
 
-/* --- 内嵌权限/提问弹窗（无盒子，照搬 mewcode #perm-inline） --- */
+/* --- 内嵌权限/提问弹窗(无盒子,照搬 mewcode #perm-inline) --- */
 
 .perm-modal {
     height: auto;
@@ -80,7 +130,38 @@ Screen {
     padding: 0 0;
 }
 
-/* --- 状态栏（细分割线分隔） --- */
+/* --- 状态栏:三栏布局 --- */
+
+#status-bar {
+    dock: bottom;
+    height: 1;
+    width: 100%;
+    padding: 0 1;
+    border-top: solid #303030;
+}
+
+#mode-label {
+    width: auto;
+    height: 1;
+    color: $text-muted;
+    padding: 0 1;
+}
+
+#ctx-label {
+    width: 1fr;
+    height: 1;
+    text-align: center;
+    color: $text-muted;
+}
+
+#model-label {
+    width: auto;
+    height: 1;
+    text-align: right;
+    color: $text-muted;
+}
+
+/* --- 兼容老 class,保留单字段状态栏 --- */
 
 .status-bar {
     dock: bottom;

@@ -98,6 +98,19 @@ class ConversationManager:
         self.baseline_tokens = 0
         self.anchor_count = 0
 
+    def replace_history(self, new_messages: list[Message]) -> None:
+        """原子替换整个 history,清空 token 锚点。
+
+        压缩模块用:把「summary user 消息 + keep_tail」一次性塞进来,清空
+        ``baseline_tokens`` 和 ``anchor_count``,否则下次 ``current_tokens()``
+        会把旧 anchor 之后的字符估算叠加在新 history 上 —— double-counting。
+
+        下一次 ``record_usage_anchor`` 会基于新 history 重新锚定。
+        """
+        self.history = list(new_messages)
+        self.baseline_tokens = 0
+        self.anchor_count = 0
+
     def record_usage_anchor(
         self,
         input_tokens: int,
