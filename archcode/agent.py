@@ -39,8 +39,11 @@ from archcode.context.compactor import (
 )
 from archcode.context.manager import (
     ContentReplacementState,
+    SINGLE_RESULT_CHAR_LIMIT,
     apply_tool_result_budget,
     ensure_session_dir,
+    make_persisted_preview,
+    persist_tool_result,
 )
 from archcode.context.recovery import RecoveryState
 
@@ -512,8 +515,9 @@ class Agent:
         except Exception as e:
             result = ToolResult(output=f"Tool execution error: {e}", is_error=True)
 
-        # 截断:超 MAX_OUTPUT_CHARS 砍前面+尾部加标记,免得撑爆 context
-        result = self._truncate_tool_result(result)
+        # 截断/落盘:先落盘(>50K 全文存磁盘可恢复),再硬截断(>10K 有损)
+        # 顺序关键 —— 落盘必须在截断之前,>50K 的全文才能完整存下来
+        result = self._maybe_persist_or_truncate(tc.tool_id, result)
 
         # 记录 Read 类工具的输出,供压缩后恢复上下文用
         self._record_recovery_data(tool, tc, result)
@@ -563,6 +567,44 @@ class Agent:
             ),
             is_error=result.is_error,
         )
+
+    def _maybe_persist_or_truncate(
+        self, tool_use_id: str, result: ToolResult
+    ) -> ToolResult:
+        """工具结果先落盘、再硬截断 —— 照搬 MewCode 的顺序。
+
+        - len > SINGLE_RESULT_CHAR_LIMIT (50K) → 全文写磁盘,inline 换 preview,
+          可恢复。落盘检查在截断之前,所以 >50K 的全文能完整存下来。
+        - 否则交给 _truncate_tool_result:10K-50K 硬截断(有损),≤10K 原样。
+
+        落盘后同步登记进 ``_replacement_state``,Layer 1 的三个 Pass 就会跳过
+        这条 id —— 避免把已经换成 preview 的结果再 snip 掉、丢掉文件指针。
+
+        ``_session_dir`` 为 None(compression 关闭)时退化为只截断。
+        """
+        content = result.output
+        if (
+            len(content) > SINGLE_RESULT_CHAR_LIMIT
+            and self._session_dir is not None
+        ):
+            fp = persist_tool_result(tool_use_id, content, self._session_dir)
+            if fp is not None:
+                # 登记:Layer 1 Pass 1/2/3 见到此 id 直接跳过,不再动 preview
+                self._replacement_state.replacements[tool_use_id] = str(fp)
+                self._replacement_state.seen_ids.add(tool_use_id)
+                return ToolResult(
+                    output=make_persisted_preview(content, tool_use_id, fp),
+                    is_error=result.is_error,
+                )
+            # fp is None:文件已存在(并发/重放),用已知路径重生成稳定 preview
+            known_path = self._session_dir / f"{tool_use_id}.txt"
+            self._replacement_state.replacements[tool_use_id] = str(known_path)
+            self._replacement_state.seen_ids.add(tool_use_id)
+            return ToolResult(
+                output=make_persisted_preview(content, tool_use_id, known_path),
+                is_error=result.is_error,
+            )
+        return self._truncate_tool_result(result)
 
     async def _execute_batch_parallel(
         self, calls: list[ToolCallComplete]
