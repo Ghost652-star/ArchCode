@@ -31,6 +31,7 @@ class ConversationManager:
         *,
         tool_uses: list[ToolUseBlock] | None = None,
         thinking_blocks: list[ThinkingBlock] | None = None,
+        completes_user_turn: bool = False,
     ) -> None:
         self.history.append(
             Message(
@@ -38,6 +39,7 @@ class ConversationManager:
                 content=content,
                 tool_uses=tool_uses or [],
                 thinking_blocks=thinking_blocks or [],
+                completes_user_turn=completes_user_turn,
             )
         )
 
@@ -52,9 +54,15 @@ class ConversationManager:
         *,
         tool_uses: list[ToolUseBlock] | None = None,
         thinking_blocks: list[ThinkingBlock] | None = None,
+        completes_user_turn: bool = False,
     ) -> None:
         """add_assistant 的别名，供 agent 直接调用。"""
-        self.add_assistant(content, tool_uses=tool_uses, thinking_blocks=thinking_blocks)
+        self.add_assistant(
+            content,
+            tool_uses=tool_uses,
+            thinking_blocks=thinking_blocks,
+            completes_user_turn=completes_user_turn,
+        )
 
     def add_tool_results_message(self, tool_results: list[ToolResultBlock]) -> None:
         """add_tool_results 的别名，供 agent 直接调用。"""

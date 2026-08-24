@@ -6,7 +6,7 @@
 1. **单条超限** — ``len(content) > SINGLE_RESULT_CHAR_LIMIT`` 时落盘 + preview
 2. **单条消息内聚合** — ``sum(本条消息所有 tool_result) > AGGREGATE_CHAR_LIMIT``
    时按长度倒序挑大的逐个替换,直到总和不超限
-3. **陈旧裁剪** — assistant turn 数超过 ``KEEP_RECENT_TURNS`` 的旧 tool_result,
+3. **陈旧裁剪** — 最近 ``KEEP_RECENT_TURNS`` 个已完成用户轮次之前的 tool_result,
    只保留前 ``OLD_RESULT_SNIP_CHARS`` 字符 + ``<snipped>`` 标签
 
 **决策冻结**:每条 tool_result 一旦被评估,``tool_use_id`` 进 ``seen_ids``,
@@ -159,16 +159,25 @@ def make_persisted_preview(
 # ── 三 Pass 主函数 ────────────────────────────────────────────────
 
 
-def _count_assistant_turns(history: list[Message], at_index: int) -> int:
-    """从 0 数到 ``at_index``,assistant turn 数是多少。
+def _old_completed_turn_region_end(
+    history: list[Message], keep_recent_turns: int
+) -> int:
+    """返回可被 Pass 3 处理的旧历史右边界（exclusive）。
 
-    用于 Pass 3 决定「这条 user(tool_results)是否够旧」。
+    从最新消息向前数已完成的用户级轮次；最近 ``keep_recent_turns`` 个
+    完成轮次及其后的活跃尾部不进入旧区域。返回的边界包含第一个需要裁剪的
+    旧轮次的最终 assistant 消息，因此该轮次前面的 tool_result 会一并处理。
     """
-    turns = 0
-    for i in range(at_index + 1):
-        if history[i].role == "assistant":
-            turns += 1
-    return turns
+    completed_seen = 0
+    for index in range(len(history) - 1, -1, -1):
+        if not history[index].completes_user_turn:
+            continue
+
+        completed_seen += 1
+        if completed_seen > keep_recent_turns:
+            return index + 1
+
+    return 0
 
 
 def _align_message_with_tool_pair(
@@ -322,13 +331,10 @@ def apply_tool_result_budget(
         message.tool_results = results
 
     # ── Pass 3:陈旧裁剪 ─────────────────────────────────────────
-    # 只有 assistant turn 数超过 keep_recent_turns 时,旧 turn 里的 tool_result
-    # 才被裁剪到前 N 字符 + <snipped> 标签
-    for idx, message in enumerate(history):
+    # 只裁最近 N 个已完成用户轮次之前的工具结果；未完成的活跃尾部保留原样。
+    old_region_end = _old_completed_turn_region_end(history, keep_recent_turns)
+    for message in history[:old_region_end]:
         if not message.tool_results:
-            continue
-        assistant_turns_so_far = _count_assistant_turns(history, idx)
-        if assistant_turns_so_far <= keep_recent_turns:
             continue
 
         mutated = False

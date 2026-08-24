@@ -34,6 +34,9 @@ class Message:
     tool_uses: list[ToolUseBlock] = field(default_factory=list)
     tool_results: list[ToolResultBlock] = field(default_factory=list)
     thinking_blocks: list[ThinkingBlock] = field(default_factory=list)
+    # 仅由 Agent 在一个用户任务的最终回答上标记。ReAct 的工具调用、
+    # max_tokens 续写和中间消息均不应被当成已完成的用户级轮次。
+    completes_user_turn: bool = False
 
 
 _CHARS_PER_TOKEN = 3.5

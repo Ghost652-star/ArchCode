@@ -957,6 +957,7 @@ class Agent:
                 conversation.add_assistant_message(
                     result_collector.response.text,
                     thinking_blocks=conv_thinking or None,
+                    completes_user_turn=True,
                 )
                 yield TurnComplete(turn=iteration)
                 yield LoopComplete(total_turns=iteration, text=final_text)
