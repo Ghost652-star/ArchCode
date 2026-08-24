@@ -108,7 +108,7 @@ class CompressionConfig:
     - single_char_limit / aggregate_char_limit:Layer 1 单条 + 单消息聚合阈值
     - summary_output_reserve / auto_safety_margin / manual_safety_margin:Layer 2 阈值
     - preview_chars / old_result_snip_chars:替换后的预览长度
-    - keep_recent_turns / keep_recent_tokens / keep_max_tokens / min_keep_messages:压缩时保留窗口
+    - keep_recent_turns / keep_recent_tokens / keep_max_tokens / min_keep_turns:压缩时保留窗口
     - min_summarize_prefix_tokens:摘要调用本身的最小前缀(防止微调被空总结)
     - recovery_*:RecoveryState 渲染附件的预算
     - max_summary_failures / max_force_compact_failures:两类熔断器的阈值
@@ -126,7 +126,7 @@ class CompressionConfig:
     keep_recent_turns: int = 10
     keep_recent_tokens: int = 10_000
     keep_max_tokens: int = 40_000
-    min_keep_messages: int = 5
+    min_keep_turns: int = 1
     min_summarize_prefix_tokens: int = 2_000
     recovery_file_limit: int = 5
     recovery_tokens_per_file: int = 5_000
@@ -244,7 +244,7 @@ def _parse_compression(raw: dict | None) -> CompressionConfig:
         keep_recent_turns=int(raw.get("keep_recent_turns", 10)),
         keep_recent_tokens=int(raw.get("keep_recent_tokens", 10_000)),
         keep_max_tokens=int(raw.get("keep_max_tokens", 40_000)),
-        min_keep_messages=int(raw.get("min_keep_messages", 5)),
+        min_keep_turns=int(raw.get("min_keep_turns", 1)),
         min_summarize_prefix_tokens=int(
             raw.get("min_summarize_prefix_tokens", 2_000)
         ),

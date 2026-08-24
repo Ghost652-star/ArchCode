@@ -60,7 +60,7 @@ MANUAL_COMPACT_SAFETY_MARGIN = 3_000
 KEEP_RECENT_TURNS = 10
 KEEP_RECENT_TOKENS = 10_000
 KEEP_MAX_TOKENS = 40_000
-MIN_KEEP_MESSAGES = 5
+MIN_KEEP_TURNS = 1
 
 MIN_SUMMARIZE_PREFIX_TOKENS = 2_000
 
@@ -211,38 +211,64 @@ def extract_summary(llm_output: str) -> str | None:
 def _compute_keep_start_index(
     messages: list[Message],
     *,
+    keep_recent_turns: int = KEEP_RECENT_TURNS,
     keep_recent_tokens: int = KEEP_RECENT_TOKENS,
     keep_max_tokens: int = KEEP_MAX_TOKENS,
-    min_keep_messages: int = MIN_KEEP_MESSAGES,
+    min_keep_turns: int = MIN_KEEP_TURNS,
 ) -> int:
-    """从尾部向头部遍历,累积 token 直到满足 keep_recent_tokens / min_keep_messages。
+    """按完整用户任务从尾部保留历史，并受 token 预算约束。
 
     返回的 ``start_index`` 是「要保留的第一条消息」的索引;它左边的消息
     (索引 < start) 都会被摘要。
 
-    单条消息不让它吞掉整个窗口(``keep_max_tokens`` 硬限)。
+    ``completes_user_turn`` 是唯一任务边界。工具调用、工具结果及其最终回答
+    必须整体保留或整体摘要；尚未完成的当前 ReAct 任务始终整体保留。
     """
-    n = len(messages)
-    if n == 0:
+    if not messages:
         return 0
-    accumulated = 0
-    start = n  # 默认从末尾开始,什么都不保留
-    for i in range(n - 1, -1, -1):
-        msg = messages[i]
-        msg_tokens = estimate_tokens([msg])
-        if accumulated + msg_tokens > keep_recent_tokens:
-            # 已经满足 keep_recent_tokens,但还没到 min_keep_messages → 继续收
-            if (n - i) >= min_keep_messages and accumulated > 0:
-                # 单条消息不让它突破 keep_max_tokens
-                if msg_tokens > keep_max_tokens:
-                    # 太长的消息单独截断:仍计入但下条不再追加
-                    start = i + 1
-                break
-        accumulated += msg_tokens
-        start = i
 
-    # 对齐到 assistant-tool_use 配对(避免孤立 tool_result)
-    start = _align_keep_start_to_tool_pair(messages, start)
+    groups: list[tuple[int, int, bool]] = []
+    group_start = 0
+    has_explicit_turn_boundary = any(
+        message.completes_user_turn for message in messages
+    )
+    for index, message in enumerate(messages):
+        # 旧会话历史没有 ``completes_user_turn`` 字段时，兼容早期的简单
+        # user → assistant 对话；一旦存在显式标记，就绝不再猜测边界。
+        is_legacy_final_answer = (
+            not has_explicit_turn_boundary
+            and message.role == "assistant"
+            and not message.tool_uses
+        )
+        if message.completes_user_turn or is_legacy_final_answer:
+            groups.append((group_start, index + 1, True))
+            group_start = index + 1
+    if group_start < len(messages):
+        groups.append((group_start, len(messages), False))
+
+    accumulated = 0
+    completed_kept = 0
+    start = len(messages)
+    for group_start, group_end, is_completed_turn in reversed(groups):
+        group_tokens = estimate_tokens(messages[group_start:group_end])
+        required = not is_completed_turn or completed_kept < min_keep_turns
+        if (
+            accumulated + group_tokens > keep_max_tokens
+            and accumulated > 0
+        ):
+            break
+        if (
+            accumulated + group_tokens > keep_recent_tokens
+            and not required
+        ):
+            break
+        if is_completed_turn and completed_kept >= keep_recent_turns:
+            break
+
+        accumulated += group_tokens
+        start = group_start
+        if is_completed_turn:
+            completed_kept += 1
     return start
 
 
@@ -402,9 +428,10 @@ async def auto_compact(
     breaker: CompactCircuitBreaker | None = None,
     *,
     manual: bool = False,
+    keep_recent_turns: int = KEEP_RECENT_TURNS,
     keep_recent_tokens: int = KEEP_RECENT_TOKENS,
     keep_max_tokens: int = KEEP_MAX_TOKENS,
-    min_keep_messages: int = MIN_KEEP_MESSAGES,
+    min_keep_turns: int = MIN_KEEP_TURNS,
     min_summarize_prefix_tokens: int = MIN_SUMMARIZE_PREFIX_TOKENS,
     max_retries: int = MAX_SUMMARY_RETRIES,
     on_text_delta: Callable[[str], None] | None = None,
@@ -435,9 +462,10 @@ async def auto_compact(
 
     keep_start = _compute_keep_start_index(
         history,
+        keep_recent_turns=keep_recent_turns,
         keep_recent_tokens=keep_recent_tokens,
         keep_max_tokens=keep_max_tokens,
-        min_keep_messages=min_keep_messages,
+        min_keep_turns=min_keep_turns,
     )
     to_summarize = history[:keep_start]
     keep_tail = history[keep_start:]
@@ -504,9 +532,10 @@ async def force_compact(
     tool_schemas: list[Mapping[str, Any]] | None,
     breaker: ForceCompactBreaker,
     *,
+    keep_recent_turns: int = KEEP_RECENT_TURNS,
     keep_recent_tokens: int = KEEP_RECENT_TOKENS,
     keep_max_tokens: int = KEEP_MAX_TOKENS,
-    min_keep_messages: int = MIN_KEEP_MESSAGES,
+    min_keep_turns: int = MIN_KEEP_TURNS,
     min_summarize_prefix_tokens: int = MIN_SUMMARIZE_PREFIX_TOKENS,
     max_retries: int = MAX_SUMMARY_RETRIES,
     on_text_delta: Callable[[str], None] | None = None,
@@ -529,9 +558,10 @@ async def force_compact(
 
     keep_start = _compute_keep_start_index(
         history,
+        keep_recent_turns=keep_recent_turns,
         keep_recent_tokens=keep_recent_tokens,
         keep_max_tokens=keep_max_tokens,
-        min_keep_messages=min_keep_messages,
+        min_keep_turns=min_keep_turns,
     )
     to_summarize = history[:keep_start]
     keep_tail = history[keep_start:]
