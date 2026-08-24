@@ -269,12 +269,19 @@ def _align_keep_start_to_tool_pair(
 # ── 摘要消息构造 ──────────────────────────────────────────────────
 
 
+COMPACT_BOUNDARY_MESSAGE = (
+    "上面是此前对话的结构化摘要和恢复线索。"
+    "如果需要文件原文、完整工具输出或更详细代码段，请用对应工具按需重新读取；"
+    "不要凭摘要脑补细节。"
+)
+
+
 def build_compact_messages(
     summary: str,
     recovery_attachment: str,
     keep_tail: list[Message],
 ) -> list[Message]:
-    """构造压缩后的新 history:[summary user, ...keep_tail]。
+    """构造压缩后的新 history:[summary user, boundary assistant, ...keep_tail]。
 
     摘要消息格式::
 
@@ -286,26 +293,21 @@ def build_compact_messages(
         ... files / skills / tools / hint(若有)
         </recovery-attachment>
 
-        <system-reminder>
-        以上是对话历史摘要。如需文件原文 / 更详细代码段,请用对应工具按需加载。
-        </system-reminder>
+        assistant: 上面是摘要；需要细节时应重新用工具读取，不能凭摘要脑补。
 
-    返回 ``[summary_message] + keep_tail``。当 ``recovery_attachment`` 为空时,
-    跳过 ``<recovery-attachment>`` 段。
+    摘要事实与 assistant 行为引导分开，避免把提示伪装成用户输入。返回
+    ``[summary_message, boundary_message] + keep_tail``。当
+    ``recovery_attachment`` 为空时，跳过该段。
     """
     parts = ["<summary>", summary, "</summary>"]
     if recovery_attachment:
         parts.extend(
             ["\n<recovery-attachment>", recovery_attachment, "</recovery-attachment>"]
         )
-    parts.append(
-        "\n<system-reminder>\n"
-        "以上是对话历史摘要。如需文件原文 / 更详细代码段,请用对应工具按需加载,不要凭摘要脑补。\n"
-        "</system-reminder>"
-    )
     content = "\n\n".join(parts)
     summary_message = Message(role="user", content=content)
-    return [summary_message] + list(keep_tail)
+    boundary_message = Message(role="assistant", content=COMPACT_BOUNDARY_MESSAGE)
+    return [summary_message, boundary_message] + list(keep_tail)
 
 
 # ── 主入口:自动压缩 ──────────────────────────────────────────────
