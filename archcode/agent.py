@@ -920,13 +920,8 @@ class Agent:
             # 从收集器取 tool_calls
             tool_calls = result_collector.response.tool_calls
 
-            # 记录 token 用量
-            conversation.record_usage_anchor(
-                result_collector.response.input_tokens,
-                result_collector.response.output_tokens,
-                result_collector.response.cache_read,
-                result_collector.response.cache_creation,
-            )
+            # 向 UI 报告本轮实际用量。Conversation 的 usage anchor 要等
+            # assistant 消息写入 history 后再建立，避免下一轮重复估算输出。
             yield UsageEvent(
                 input_tokens=result_collector.response.input_tokens,
                 output_tokens=result_collector.response.output_tokens,
@@ -939,6 +934,13 @@ class Agent:
                 # 简单重试：将当前输出接续到下一轮
                 if result_collector.response.text:
                     conversation.add_assistant_message(result_collector.response.text)
+                conversation.record_usage_anchor(
+                    result_collector.response.input_tokens,
+                    result_collector.response.output_tokens,
+                    result_collector.response.cache_read,
+                    result_collector.response.cache_creation,
+                )
+                if result_collector.response.text:
                     conversation.add_user_message(
                         "Output token limit hit. Resume directly where you stopped. "
                         "Do not apologize or repeat previous content."
@@ -958,6 +960,12 @@ class Agent:
                     result_collector.response.text,
                     thinking_blocks=conv_thinking or None,
                     completes_user_turn=True,
+                )
+                conversation.record_usage_anchor(
+                    result_collector.response.input_tokens,
+                    result_collector.response.output_tokens,
+                    result_collector.response.cache_read,
+                    result_collector.response.cache_creation,
                 )
                 yield TurnComplete(turn=iteration)
                 yield LoopComplete(total_turns=iteration, text=final_text)
@@ -980,6 +988,12 @@ class Agent:
                 result_collector.response.text,
                 tool_uses=uses,
                 thinking_blocks=conv_thinking or None,
+            )
+            conversation.record_usage_anchor(
+                result_collector.response.input_tokens,
+                result_collector.response.output_tokens,
+                result_collector.response.cache_read,
+                result_collector.response.cache_creation,
             )
 
             # 执行工具分组：同一 batch 可并发，不同 batch 串行
