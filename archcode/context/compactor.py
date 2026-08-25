@@ -44,7 +44,14 @@ from archcode.conversation.models import (
     estimate_tokens,
 )
 from archcode.context.manager import cleanup_tool_results
-from archcode.context.recovery import RecoveryState, build_recovery_attachment
+from archcode.context.recovery import (
+    DEFAULT_RECOVERY_FILE_LIMIT,
+    DEFAULT_RECOVERY_SKILLS_BUDGET,
+    DEFAULT_RECOVERY_TOKENS_PER_FILE,
+    DEFAULT_RECOVERY_TOKENS_PER_SKILL,
+    RecoveryState,
+    build_recovery_attachment,
+)
 from archcode.llm.client import LLMError, is_prompt_too_long_error
 from archcode.llm.events import StreamEvent, TextDelta, ToolCallComplete, ToolCallDelta, ToolCallStart
 
@@ -433,6 +440,10 @@ async def auto_compact(
     keep_max_tokens: int = KEEP_MAX_TOKENS,
     min_keep_turns: int = MIN_KEEP_TURNS,
     min_summarize_prefix_tokens: int = MIN_SUMMARIZE_PREFIX_TOKENS,
+    recovery_file_limit: int = DEFAULT_RECOVERY_FILE_LIMIT,
+    recovery_tokens_per_file: int = DEFAULT_RECOVERY_TOKENS_PER_FILE,
+    recovery_skills_budget: int = DEFAULT_RECOVERY_SKILLS_BUDGET,
+    recovery_tokens_per_skill: int = DEFAULT_RECOVERY_TOKENS_PER_SKILL,
     max_retries: int = MAX_SUMMARY_RETRIES,
     on_text_delta: Callable[[str], None] | None = None,
     on_started: Callable[[], None] | None = None,
@@ -500,6 +511,10 @@ async def auto_compact(
     attachment = build_recovery_attachment(
         recovery,
         tool_schemas,
+        file_limit=recovery_file_limit,
+        tokens_per_file=recovery_tokens_per_file,
+        skills_budget=recovery_skills_budget,
+        tokens_per_skill=recovery_tokens_per_skill,
     )
 
     new_messages = build_compact_messages(summary, attachment, keep_tail)
@@ -537,6 +552,10 @@ async def force_compact(
     keep_max_tokens: int = KEEP_MAX_TOKENS,
     min_keep_turns: int = MIN_KEEP_TURNS,
     min_summarize_prefix_tokens: int = MIN_SUMMARIZE_PREFIX_TOKENS,
+    recovery_file_limit: int = DEFAULT_RECOVERY_FILE_LIMIT,
+    recovery_tokens_per_file: int = DEFAULT_RECOVERY_TOKENS_PER_FILE,
+    recovery_skills_budget: int = DEFAULT_RECOVERY_SKILLS_BUDGET,
+    recovery_tokens_per_skill: int = DEFAULT_RECOVERY_TOKENS_PER_SKILL,
     max_retries: int = MAX_SUMMARY_RETRIES,
     on_text_delta: Callable[[str], None] | None = None,
     on_started: Callable[[], None] | None = None,
@@ -589,7 +608,14 @@ async def force_compact(
         breaker.record_failure()
         return "摘要生成失败:LLM 输出无法通过质量验证"
 
-    attachment = build_recovery_attachment(recovery, tool_schemas)
+    attachment = build_recovery_attachment(
+        recovery,
+        tool_schemas,
+        file_limit=recovery_file_limit,
+        tokens_per_file=recovery_tokens_per_file,
+        skills_budget=recovery_skills_budget,
+        tokens_per_skill=recovery_tokens_per_skill,
+    )
 
     new_messages = build_compact_messages(summary, attachment, keep_tail)
     dropped_count = len(history) - len(new_messages)

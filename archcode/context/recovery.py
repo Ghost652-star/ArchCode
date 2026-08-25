@@ -17,6 +17,12 @@ from dataclasses import dataclass
 from typing import Any, Mapping
 
 
+DEFAULT_RECOVERY_FILE_LIMIT = 5
+DEFAULT_RECOVERY_TOKENS_PER_FILE = 5_000
+DEFAULT_RECOVERY_SKILLS_BUDGET = 25_000
+DEFAULT_RECOVERY_TOKENS_PER_SKILL = 5_000
+
+
 @dataclass
 class FileReadRecord:
     path: str
@@ -109,10 +115,10 @@ def build_recovery_attachment(
     state: RecoveryState | None,
     tool_schemas: list[Mapping[str, Any]] | None,
     *,
-    file_limit: int = 5,
-    tokens_per_file: int = 5_000,
-    skills_budget: int = 25_000,
-    tokens_per_skill: int = 5_000,
+    file_limit: int = DEFAULT_RECOVERY_FILE_LIMIT,
+    tokens_per_file: int = DEFAULT_RECOVERY_TOKENS_PER_FILE,
+    skills_budget: int = DEFAULT_RECOVERY_SKILLS_BUDGET,
+    tokens_per_skill: int = DEFAULT_RECOVERY_TOKENS_PER_SKILL,
 ) -> str:
     """渲染 4 小节的 Markdown 附件:files / skills / tools / hint。
 
