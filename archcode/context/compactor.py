@@ -343,6 +343,15 @@ def build_compact_messages(
     return [summary_message, boundary_message] + list(keep_tail)
 
 
+def _retained_tool_use_ids(messages: list[Message]) -> set[str]:
+    """收集压缩后仍保留的 tool_result 所引用的落盘文件 id。"""
+    return {
+        result.tool_use_id
+        for message in messages
+        for result in message.tool_results
+    }
+
+
 # ── 主入口:自动压缩 ──────────────────────────────────────────────
 
 
@@ -522,7 +531,10 @@ async def auto_compact(
 
     # 顺序 — replace_history → cleanup → breaker(详见设计文档 Edge E)
     conversation.replace_history(new_messages)
-    cleanup_tool_results(session_dir)
+    cleanup_tool_results(
+        session_dir,
+        retained_tool_use_ids=_retained_tool_use_ids(keep_tail),
+    )
     if breaker is not None:
         breaker.record_success()
 
@@ -621,7 +633,10 @@ async def force_compact(
     dropped_count = len(history) - len(new_messages)
 
     conversation.replace_history(new_messages)
-    cleanup_tool_results(session_dir)
+    cleanup_tool_results(
+        session_dir,
+        retained_tool_use_ids=_retained_tool_use_ids(keep_tail),
+    )
     breaker.record_success()
 
     return CompactEvent(

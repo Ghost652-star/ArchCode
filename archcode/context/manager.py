@@ -376,12 +376,32 @@ def apply_tool_result_budget(
     return records
 
 
-def cleanup_tool_results(session_dir: Path) -> None:
-    """压缩完成后清空整个 ``session_dir``。
+def cleanup_tool_results(
+    session_dir: Path,
+    *,
+    retained_tool_use_ids: set[str] | None = None,
+) -> None:
+    """压缩完成后删除不再被 history 引用的落盘工具结果。
+
+    ``retained_tool_use_ids`` 为 ``None`` 时保持旧行为：清空整个目录。
+    传入 keep_tail 中的 id 集合时，只保留对应的 ``<tool_use_id>.txt``，
+    避免保留的原始工具结果 preview 指向已删除文件。
 
     必须在 ``conversation.replace_history(...)`` 之后调用 —— 失败路径
-    不清理,避免新旧状态混搭。
+    不清理，避免新旧状态混搭。
     """
-    if session_dir.exists():
-        shutil.rmtree(session_dir, ignore_errors=True)
+    if retained_tool_use_ids is None:
+        if session_dir.exists():
+            shutil.rmtree(session_dir, ignore_errors=True)
+        session_dir.mkdir(parents=True, exist_ok=True)
+        return
+
     session_dir.mkdir(parents=True, exist_ok=True)
+    retained_files = {f"{tool_use_id}.txt" for tool_use_id in retained_tool_use_ids}
+    for entry in session_dir.iterdir():
+        if entry.is_file() and entry.name in retained_files:
+            continue
+        if entry.is_dir():
+            shutil.rmtree(entry, ignore_errors=True)
+        else:
+            entry.unlink(missing_ok=True)
