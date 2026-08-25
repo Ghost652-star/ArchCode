@@ -637,6 +637,10 @@ class ArchCodeApp(App):
                 tool_schemas=self._agent._tool_schemas(),
                 breaker=self._agent._auto_compact_breaker,
                 manual=True,
+                recovery_file_limit=compression.recovery_file_limit,
+                recovery_tokens_per_file=compression.recovery_tokens_per_file,
+                recovery_skills_budget=compression.recovery_skills_budget,
+                recovery_tokens_per_skill=compression.recovery_tokens_per_skill,
                 on_text_delta=_on_progress,
             )
         except Exception as e:
