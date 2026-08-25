@@ -57,7 +57,12 @@ class RecoveryState:
             )
 
     def record_skill_invocation(self, name: str, body: str) -> None:
-        """记录一次 skill 激活。ArchCode 当前无调用方,接口预留。"""
+        """记录一次 skill 激活。ArchCode 当前无调用方,接口预留。
+
+        TODO(skills):由 SkillExecutor 的 inline / fork 执行路径调用。``body``
+        应为参数替换后的实际指令；SkillInvocationRecord 后续应扩展执行模式与
+        可选 child task / conversation id，避免压缩后只知道模板而不知道实际目标。
+        """
         with self._lock:
             self._skills[name] = SkillInvocationRecord(
                 name=name,

@@ -545,9 +545,10 @@ class Agent:
         args = tc.arguments or {}
         if category == "read" and isinstance(args.get("path"), str):
             self._recovery_state.record_file_read(args["path"], result.output)
-        # skills/ 是空包,接口预留;后续接入时:
-        # if category == "skill" and isinstance(args.get("name"), str):
-        #     self._recovery_state.record_skill_invocation(args["name"], result.output)
+        # TODO(skills):SkillExecutor 上线后，不要只在 Tool 执行尾部猜测 skill。
+        # inline / fork 两条执行路径都必须在“Skill 已实际激活”后调用
+        # RecoveryState.record_skill_invocation()；记录渲染后的 prompt、执行模式，
+        # fork 时还应记录 child task / conversation 标识，供压缩后恢复工作现场。
 
     @staticmethod
     def _truncate_tool_result(result: ToolResult) -> ToolResult:
