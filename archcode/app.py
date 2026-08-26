@@ -20,6 +20,7 @@ from archcode.agent import (
     CompactProgress,
     CompactStarted,
     ErrorEvent,
+    InstructionDiagnosticsEvent,
     LoopComplete,
     PermissionRequest,
     StreamText,
@@ -780,6 +781,16 @@ class ArchCodeApp(App):
                         self._response_buffer = []
                     else:
                         self._show_error(f"Error: {event.message}")
+                elif isinstance(event, InstructionDiagnosticsEvent):
+                    for diagnostic in event.diagnostics:
+                        location = str(diagnostic.source_path)
+                        if diagnostic.line is not None:
+                            location = f"{location}:{diagnostic.line}"
+                        self._show_system(
+                            f"[instructions] {diagnostic.severity}: "
+                            f"{diagnostic.code} ({location})\n"
+                            f"   {diagnostic.message}"
+                        )
                 elif isinstance(event, UsageEvent):
                     # 更新状态栏的 ctx 占用
                     self._update_ctx_tokens(

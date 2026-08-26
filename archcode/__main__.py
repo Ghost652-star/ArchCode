@@ -11,6 +11,7 @@ from archcode.conversation.manager import ConversationManager
 from archcode.llm.client import AuthenticationError, LLMError, create_client
 from archcode.config import ConfigError, load_config
 from archcode.mcp import MCPManager
+from archcode.memory import InstructionDocumentLoader
 from archcode.permissions import PermissionChecker, PermissionMode, PathSandbox
 from archcode.prompts import build_system_prompt
 from archcode.tools import create_default_registry
@@ -47,6 +48,15 @@ async def _run_prompt(
     conversation = ConversationManager()
     try:
         result = await agent.run_to_completion(prompt, conversation)
+        for diagnostic in agent.last_instruction_diagnostics:
+            location = str(diagnostic.source_path)
+            if diagnostic.line is not None:
+                location = f"{location}:{diagnostic.line}"
+            print(
+                f"[instructions] {diagnostic.severity}: {diagnostic.code} "
+                f"({location}) — {diagnostic.message}",
+                file=sys.stderr,
+            )
         print(result, flush=True)
     finally:
         if mcp_manager is not None:
@@ -73,6 +83,7 @@ def _build_agent_sync(config, work_dir, tool_registry):
         max_output_tokens=provider.max_output_tokens,
         work_dir=work_dir,
         compression=config.compression,
+        instruction_loader=InstructionDocumentLoader(),
     )
 
 

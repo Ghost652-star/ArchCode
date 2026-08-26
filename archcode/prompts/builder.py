@@ -79,6 +79,17 @@ def build_system_prompt(
     return prompt
 
 
+def append_project_instructions(base_prompt: str, compiled_instructions: str) -> str:
+    """把已编译的稳定项目规则追加到协议 system prompt。
+
+    ``compiled_instructions`` 只在一个用户任务开始时检查并冻结；因此这里
+    不涉及 conversation history，也不会在 ReAct 循环中反复改写 system 前缀。
+    """
+    if not compiled_instructions.strip():
+        return base_prompt
+    return f"{base_prompt.rstrip()}\n\n{compiled_instructions.strip()}"
+
+
 # ---------------------------------------------------------------------------
 # Dynamic reminders(走 conversation.add_system_reminder 而不是 system 字段)
 # ---------------------------------------------------------------------------
