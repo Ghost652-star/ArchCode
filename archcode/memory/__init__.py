@@ -6,6 +6,7 @@
 from archcode.memory.instructions import (
     InstructionDiagnostic,
     InstructionDocumentLoader,
+    InstructionLimits,
     InstructionLoadResult,
     InstructionSource,
 )
@@ -13,6 +14,7 @@ from archcode.memory.instructions import (
 __all__ = [
     "InstructionDiagnostic",
     "InstructionDocumentLoader",
+    "InstructionLimits",
     "InstructionLoadResult",
     "InstructionSource",
 ]
