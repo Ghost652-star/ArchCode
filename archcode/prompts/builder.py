@@ -84,7 +84,15 @@ def build_system_prompt(
 # ---------------------------------------------------------------------------
 
 
-def build_plan_mode_reminder(plan_path: str, work_dir: str | None) -> str:
+_PLAN_MODE_FULL_REMINDER_INTERVAL = 5
+
+
+def build_plan_mode_reminder(
+    plan_path: str,
+    work_dir: str | None,
+    *,
+    iteration: int = 1,
+) -> str:
     """构造 plan mode 的 reminder 文本。
 
     system-reminder 跟 system prompt 的区别:
@@ -96,10 +104,20 @@ def build_plan_mode_reminder(plan_path: str, work_dir: str | None) -> str:
     Args:
         plan_path: plan 文件的绝对路径(<work_dir>/.archcode/plans/{slug}.md)
         work_dir: 当前项目工作目录;None 时不显示项目边界提示。
+        iteration: 当前 ReAct iteration。第 1、6、11……轮发送完整提醒，
+            中间轮次发送简短提醒。
 
     Returns:
         提醒文本,会被包在 <system-reminder>...</system-reminder> 标签里发出。
     """
+    if iteration > 1 and (iteration - 1) % _PLAN_MODE_FULL_REMINDER_INTERVAL:
+        return (
+            "Plan Mode 仍开启。仅可执行只读操作；只能修改计划文件：\n"
+            f"{plan_path}\n"
+            "不要修改其他项目文件，也不要执行 Bash。"
+            "完整 Plan Mode 工作流见此前提醒。"
+        )
+
     work_dir_block = ""
     if work_dir:
         work_dir_block = (

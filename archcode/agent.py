@@ -678,6 +678,7 @@ class Agent:
                     build_plan_mode_reminder(
                         plan_path=str(self._plan_path),
                         work_dir=work_dir_str,
+                        iteration=iteration,
                     )
                 )
 
