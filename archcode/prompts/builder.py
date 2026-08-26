@@ -48,17 +48,18 @@ def build_system_prompt(
                   None 时,environment section 仍会生成但工作目录显示 "(unknown)"。
         extra: 配置文件里 system_prompt 字段的自定义追加内容(项目级指令)。
 
-    扩展契约:将来 memory / skills / CLAUDE.md 指令落地时,加 kwarg 时必须:
+    扩展契约:将来新增内建静态 prompt section 时,加 kwarg 时必须:
       1. 默认值 = ""(空字符串),不变现有调用方
       2. 空字符串时跳过对应 section(PromptBuilder 不会加空 content)
       3. 非空时才 ``b.add(PromptSection(name=..., priority=..., content=...))``
       4. priority 排到 70 之后(environment 是 70)
       5. 不要用 list[xxx] 这种"复杂数据"——保持 string 不变,数据拼装在调用方完成
-      6. 同步改 system-reminder 路径:新参数如有"每轮变化"的部分,
-         让 call site 用 conversation.add_system_reminder 注入,而不是塞进 system 字段
-    设计参考:MewCode 的 build_system_prompt 也是用 kwargs+defaults,
-    但 MewCode 把 skills/memory/custom_instructions 全塞 system 字段(会破 cache)。
-    我们保留这种"未来可能加的 kwargs 形状",但劝阻把它们放进 system 字段。
+      6. 新参数如果会在同一个 Task 的每轮变化，必须走
+         ``conversation.add_system_reminder``，不能改动稳定 system 字段。
+
+    ``AGENTS.md`` 项目指令是例外：它由 ``InstructionDocumentLoader`` 在
+    一个 Task 开始时编译，再通过 ``append_project_instructions`` 追加到本函数
+    的稳定输出；任务内不会变动，因此仍可作为 prompt-cache 前缀。
     详细见 docs/prompts-design.md。
 
     Returns:
