@@ -20,6 +20,7 @@ from archcode.agent import (
     CompactProgress,
     CompactStarted,
     ErrorEvent,
+    InstructionDiagnosticsEvent,
     LoopComplete,
     PermissionRequest,
     StreamText,
@@ -29,6 +30,7 @@ from archcode.agent import (
     UsageEvent,
 )
 from archcode.conversation.manager import ConversationManager
+from archcode.memory import format_instruction_diagnostics
 from archcode.permissions import PermissionMode
 from archcode.permission_modal import PermissionModal
 
@@ -780,6 +782,9 @@ class ArchCodeApp(App):
                         self._response_buffer = []
                     else:
                         self._show_error(f"Error: {event.message}")
+                elif isinstance(event, InstructionDiagnosticsEvent):
+                    for message in format_instruction_diagnostics(event.diagnostics):
+                        self._show_system(message)
                 elif isinstance(event, UsageEvent):
                     # 更新状态栏的 ctx 占用
                     self._update_ctx_tokens(

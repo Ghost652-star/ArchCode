@@ -23,7 +23,8 @@ from archcode.llm.events import (
 )
 from archcode.llm.serializer import build_anthropic_tools, build_openai_tools
 from archcode.permissions import Decision, PermissionChecker, PermissionMode
-from archcode.prompts import build_plan_mode_reminder
+from archcode.memory import InstructionDiagnostic, InstructionDocumentLoader
+from archcode.prompts import append_project_instructions, build_plan_mode_reminder
 from archcode.tools.base import MAX_OUTPUT_CHARS, ToolResult
 from archcode.tools.registry import ToolRegistry
 
@@ -113,6 +114,13 @@ class ErrorEvent:
 
 
 @dataclass
+class InstructionDiagnosticsEvent:
+    """任务开始时，指令文档变更产生的加载诊断。"""
+
+    diagnostics: tuple[InstructionDiagnostic, ...]
+
+
+@dataclass
 class LoopComplete:
     total_turns: int
     text: str = ""
@@ -169,6 +177,7 @@ AgentEvent = (
     | PermissionRequest
     | TurnComplete
     | ErrorEvent
+    | InstructionDiagnosticsEvent
     | LoopComplete
     | UsageEvent
     | RetryEvent
@@ -319,8 +328,10 @@ class Agent:
         work_dir: str | Path | None = None,
         plan_mode: bool = False,
         compression: CompressionConfig | None = None,
+        instruction_loader: InstructionDocumentLoader | None = None,
     ) -> None:
         self._client = client
+        self._base_system_prompt = system_prompt
         self._system_prompt = system_prompt
         self._plan_mode = False
         self._plan_path: Path | None = None
@@ -328,6 +339,11 @@ class Agent:
         self._permission_checker = permission_checker
         self._max_iterations = max_iterations
         self._work_dir = Path(work_dir).resolve() if work_dir else None
+        self._instruction_loader = instruction_loader or (
+            InstructionDocumentLoader() if self._work_dir is not None else None
+        )
+        self._instruction_fingerprint: str | None = None
+        self.last_instruction_diagnostics: tuple[InstructionDiagnostic, ...] = ()
         self._client.set_max_output_tokens(max_output_tokens)
         if plan_mode:
             self.set_plan_mode(True)
@@ -399,6 +415,23 @@ class Agent:
         else:
             schemas = build_anthropic_tools(self._tool_registry.list_tools())
         return schemas or None
+
+    def _refresh_project_instructions(self) -> tuple[InstructionDiagnostic, ...]:
+        """在一个新用户任务开始前冻结该任务使用的稳定指令前缀。"""
+        if self._work_dir is None or self._instruction_loader is None:
+            return ()
+
+        result = self._instruction_loader.load(self._work_dir)
+        if result.fingerprint == self._instruction_fingerprint:
+            return ()
+
+        self._instruction_fingerprint = result.fingerprint
+        self._system_prompt = append_project_instructions(
+            self._base_system_prompt,
+            result.compiled_text,
+        )
+        self.last_instruction_diagnostics = result.diagnostics
+        return result.diagnostics
 
     async def _execute_tool(
         self, tc: ToolCallComplete
@@ -638,6 +671,10 @@ class Agent:
         user_input: str,
         conversation: ConversationManager,
     ) -> AsyncIterator[AgentEvent]:
+        instruction_diagnostics = self._refresh_project_instructions()
+        if instruction_diagnostics:
+            yield InstructionDiagnosticsEvent(diagnostics=instruction_diagnostics)
+
         conversation.add_user(user_input)
 
         iteration = 0
