@@ -1,6 +1,18 @@
-# 长期记忆:跨会话保留用户偏好、项目知识,自动注入 system-reminder(将来用)。
-#
-# 待实现的子模块:
-# - session.py        会话持久化(到 .archcode/sessions/)
-# - auto_memory.py    自动从对话提取长期记忆
-# - recall.py         按相关性召回记忆并注入
+"""记忆相关模块。
+
+当前已实现稳定项目指令文档的加载；会话持久化与长期记忆仍是后续子模块。
+"""
+
+from archcode.memory.instructions import (
+    InstructionDiagnostic,
+    InstructionDocumentLoader,
+    InstructionLoadResult,
+    InstructionSource,
+)
+
+__all__ = [
+    "InstructionDiagnostic",
+    "InstructionDocumentLoader",
+    "InstructionLoadResult",
+    "InstructionSource",
+]
