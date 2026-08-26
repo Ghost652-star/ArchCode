@@ -30,6 +30,7 @@ from archcode.agent import (
     UsageEvent,
 )
 from archcode.conversation.manager import ConversationManager
+from archcode.memory import format_instruction_diagnostics
 from archcode.permissions import PermissionMode
 from archcode.permission_modal import PermissionModal
 
@@ -782,15 +783,8 @@ class ArchCodeApp(App):
                     else:
                         self._show_error(f"Error: {event.message}")
                 elif isinstance(event, InstructionDiagnosticsEvent):
-                    for diagnostic in event.diagnostics:
-                        location = str(diagnostic.source_path)
-                        if diagnostic.line is not None:
-                            location = f"{location}:{diagnostic.line}"
-                        self._show_system(
-                            f"[instructions] {diagnostic.severity}: "
-                            f"{diagnostic.code} ({location})\n"
-                            f"   {diagnostic.message}"
-                        )
+                    for message in format_instruction_diagnostics(event.diagnostics):
+                        self._show_system(message)
                 elif isinstance(event, UsageEvent):
                     # 更新状态栏的 ctx 占用
                     self._update_ctx_tokens(

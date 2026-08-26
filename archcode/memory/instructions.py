@@ -7,6 +7,7 @@ LLM client，因此可在任务开始前独立生成可缓存的 system prompt �
 from __future__ import annotations
 
 import hashlib
+import math
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -55,6 +56,25 @@ class InstructionLimits:
     max_included_files: int = 32
     max_compiled_tokens: int = 4_000
     max_file_bytes: int = 64 * 1024
+
+
+def format_instruction_diagnostics(
+    diagnostics: tuple[InstructionDiagnostic, ...],
+) -> tuple[str, ...]:
+    """为 CLI 与 TUI 提供同一份紧凑诊断文本。
+
+    这只属于用户界面/日志交付，调用者绝不能把返回值重新放入模型上下文。
+    """
+    formatted: list[str] = []
+    for diagnostic in diagnostics:
+        location = str(diagnostic.source_path)
+        if diagnostic.line is not None:
+            location = f"{location}:{diagnostic.line}"
+        formatted.append(
+            f"[instructions] {diagnostic.severity}: {diagnostic.code} "
+            f"({location}) — {diagnostic.message}"
+        )
+    return tuple(formatted)
 
 
 class InstructionDocumentLoader:
@@ -162,7 +182,7 @@ class InstructionDocumentLoader:
 
     @staticmethod
     def _approx_tokens(text: str) -> int:
-        return max(1, int(len(text) / 3.5)) if text else 0
+        return max(1, math.ceil(len(text) / 3.5)) if text else 0
 
     def _expand_file(
         self,

@@ -9,6 +9,7 @@ from archcode.memory.instructions import (
     InstructionLimits,
     InstructionLoadResult,
     InstructionSource,
+    format_instruction_diagnostics,
 )
 
 __all__ = [
@@ -17,4 +18,5 @@ __all__ = [
     "InstructionLimits",
     "InstructionLoadResult",
     "InstructionSource",
+    "format_instruction_diagnostics",
 ]
