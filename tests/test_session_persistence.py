@@ -1,0 +1,96 @@
+from __future__ import annotations
+
+from archcode.conversation.manager import ConversationManager
+from archcode.conversation.models import ToolResultBlock, ToolUseBlock
+from archcode.memory.session import SessionManager
+
+
+def test_bound_conversation_round_trips_messages_and_tool_results(tmp_path) -> None:
+    manager = SessionManager(tmp_path)
+    session = manager.create()
+    conversation = ConversationManager()
+    session.bind(conversation)
+
+    conversation.add_user("read the project settings")
+    conversation.add_assistant(
+        "I will inspect it.",
+        tool_uses=[
+            ToolUseBlock(
+                tool_use_id="call_1",
+                tool_name="ReadFile",
+                arguments={"file_path": "settings.py"},
+            )
+        ],
+    )
+    conversation.add_tool_results(
+        [ToolResultBlock(tool_use_id="call_1", content="DEBUG = false")]
+    )
+    conversation.add_assistant("The setting is disabled.", completes_user_turn=True)
+    session.close()
+
+    restored = manager.open(session.id)
+
+    assert restored is not None
+    assert [message.role for message in restored.conversation.history] == [
+        "user",
+        "assistant",
+        "user",
+        "assistant",
+    ]
+    assert restored.conversation.history[1].tool_uses[0].tool_use_id == "call_1"
+    assert restored.conversation.history[2].tool_results[0].content == "DEBUG = false"
+    assert restored.conversation.history[-1].completes_user_turn
+
+
+def test_unmatched_tool_tail_becomes_recovery_material_not_tool_history(tmp_path) -> None:
+    manager = SessionManager(tmp_path)
+    session = manager.create()
+    conversation = ConversationManager()
+    session.bind(conversation)
+
+    conversation.add_user("inspect both configs")
+    conversation.add_assistant(
+        "Reading both files.",
+        tool_uses=[
+            ToolUseBlock("call_1", "ReadFile", {"file_path": "a.py"}),
+            ToolUseBlock("call_2", "ReadFile", {"file_path": "b.py"}),
+        ],
+    )
+    conversation.add_tool_results(
+        [ToolResultBlock(tool_use_id="call_1", content="a.py content")]
+    )
+    conversation.add_assistant("The second config looks wrong.", completes_user_turn=True)
+    session.close()
+
+    restored = manager.open(session.id)
+
+    assert restored is not None
+    assert all(not message.tool_uses for message in restored.conversation.history)
+    assert "会话恢复材料" in restored.conversation.history[-2].content
+    assert "call_1" in restored.conversation.history[-2].content
+    assert "仅可作为线索" in restored.conversation.history[-1].content
+
+
+def test_latest_checkpoint_replaces_compacted_prefix_on_restore(tmp_path) -> None:
+    manager = SessionManager(tmp_path)
+    session = manager.create()
+    conversation = ConversationManager()
+    session.bind(conversation)
+
+    conversation.add_user("old context")
+    conversation.add_assistant("old response", completes_user_turn=True)
+    keep = [
+        conversation.history[-1],
+    ]
+    session.append_checkpoint(summary="compressed history", keep_messages=keep)
+    conversation.replace_history(keep)
+    conversation.add_user("new question")
+    session.close()
+
+    restored = manager.open(session.id)
+
+    assert restored is not None
+    contents = [message.content for message in restored.conversation.history]
+    assert "compressed history" in contents[0]
+    assert "old context" not in contents
+    assert contents[-1] == "new question"

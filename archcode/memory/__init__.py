@@ -1,6 +1,6 @@
 """记忆相关模块。
 
-当前已实现稳定项目指令文档的加载；会话持久化与长期记忆仍是后续子模块。
+当前已实现稳定项目指令文档加载和本地 JSONL 会话持久化；长期记忆仍是后续子模块。
 """
 
 from archcode.memory.instructions import (
@@ -11,6 +11,7 @@ from archcode.memory.instructions import (
     InstructionSource,
     format_instruction_diagnostics,
 )
+from archcode.memory.session import Session, SessionManager, SessionRestore
 
 __all__ = [
     "InstructionDiagnostic",
@@ -19,4 +20,7 @@ __all__ = [
     "InstructionLoadResult",
     "InstructionSource",
     "format_instruction_diagnostics",
+    "Session",
+    "SessionManager",
+    "SessionRestore",
 ]

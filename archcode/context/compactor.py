@@ -529,6 +529,8 @@ async def auto_compact(
     new_messages = build_compact_messages(summary, attachment, keep_tail)
     dropped_count = len(history) - len(new_messages)
 
+    # checkpoint 先落盘，再替换内存 history；恢复时只需摘要 + 原文尾部。
+    conversation.persist_compact_checkpoint(summary, list(keep_tail))
     # 顺序 — replace_history → cleanup → breaker(详见设计文档 Edge E)
     conversation.replace_history(new_messages)
     cleanup_tool_results(
@@ -632,6 +634,7 @@ async def force_compact(
     new_messages = build_compact_messages(summary, attachment, keep_tail)
     dropped_count = len(history) - len(new_messages)
 
+    conversation.persist_compact_checkpoint(summary, list(keep_tail))
     conversation.replace_history(new_messages)
     cleanup_tool_results(
         session_dir,

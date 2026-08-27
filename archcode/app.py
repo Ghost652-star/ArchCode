@@ -30,7 +30,7 @@ from archcode.agent import (
     UsageEvent,
 )
 from archcode.conversation.manager import ConversationManager
-from archcode.memory import format_instruction_diagnostics
+from archcode.memory import SessionManager, format_instruction_diagnostics
 from archcode.permissions import PermissionMode
 from archcode.permission_modal import PermissionModal
 
@@ -145,6 +145,9 @@ class ArchCodeApp(App):
         self._agent = agent
         self._model_name = model_name
         self._conversation = ConversationManager()
+        self._session_manager = SessionManager(getattr(agent, "_work_dir", None) or Path.cwd())
+        self._session = self._session_manager.create()
+        self._session.bind(self._conversation)
         self._streaming = False
         self._agent_task: asyncio.Task[None] | None = None
         self._response_widget: Markdown | None = None
@@ -263,6 +266,7 @@ class ArchCodeApp(App):
 
     async def on_unmount(self) -> None:
         """App 退出:关 MCP manager。"""
+        self._session.close()
         if self._mcp_manager is not None:
             await self._mcp_manager.shutdown()
             self._mcp_manager = None

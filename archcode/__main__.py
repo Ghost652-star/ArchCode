@@ -11,7 +11,11 @@ from archcode.conversation.manager import ConversationManager
 from archcode.llm.client import AuthenticationError, LLMError, create_client
 from archcode.config import ConfigError, load_config
 from archcode.mcp import MCPManager
-from archcode.memory import InstructionDocumentLoader, format_instruction_diagnostics
+from archcode.memory import (
+    InstructionDocumentLoader,
+    SessionManager,
+    format_instruction_diagnostics,
+)
 from archcode.permissions import PermissionChecker, PermissionMode, PathSandbox
 from archcode.prompts import build_system_prompt
 from archcode.tools import create_default_registry
@@ -43,15 +47,18 @@ async def _build_runtime(config, work_dir, protocol):
 
 
 async def _run_prompt(
-    agent: Agent, prompt: str, mcp_manager: MCPManager | None
+    agent: Agent, prompt: str, mcp_manager: MCPManager | None, work_dir: Path
 ) -> None:
     conversation = ConversationManager()
+    session = SessionManager(work_dir).create()
+    session.bind(conversation)
     try:
         result = await agent.run_to_completion(prompt, conversation)
         for message in format_instruction_diagnostics(agent.last_instruction_diagnostics):
             print(message, file=sys.stderr)
         print(result, flush=True)
     finally:
+        session.close()
         if mcp_manager is not None:
             await mcp_manager.shutdown()
 
@@ -133,7 +140,7 @@ def main() -> None:
                 for err in mcp_errors:
                     print(f"[MCP] ✗ {err}", file=sys.stderr)
                 agent = _build_agent_sync(config, work_dir, tool_registry)
-                await _run_prompt(agent, args.p, mcp_manager)
+                await _run_prompt(agent, args.p, mcp_manager, work_dir)
 
             asyncio.run(_oneshot())
         else:

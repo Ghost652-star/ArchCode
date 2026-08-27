@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 from archcode.conversation.models import (
     Message,
@@ -10,6 +11,9 @@ from archcode.conversation.models import (
     estimate_tokens,
 )
 
+if TYPE_CHECKING:
+    from archcode.memory.session import Session
+
 
 @dataclass
 class ConversationManager:
@@ -18,12 +22,22 @@ class ConversationManager:
     history: list[Message] = field(default_factory=list)
     baseline_tokens: int = field(default=0, init=False)
     anchor_count: int = field(default=0, init=False)
+    _session: "Session | None" = field(default=None, init=False, repr=False)
+
+    def bind_session(self, session: "Session") -> None:
+        """绑定会话后，普通对话消息先写盘再进入内存。"""
+        self._session = session
+
+    def _append_persisted(self, message: Message) -> None:
+        if self._session is not None:
+            self._session.append_message(message)
+        self.history.append(message)
 
     def get_messages(self) -> list[Message]:
         return list(self.history)
 
     def add_user(self, content: str) -> None:
-        self.history.append(Message(role="user", content=content))
+        self._append_persisted(Message(role="user", content=content))
 
     def add_assistant(
         self,
@@ -33,7 +47,7 @@ class ConversationManager:
         thinking_blocks: list[ThinkingBlock] | None = None,
         completes_user_turn: bool = False,
     ) -> None:
-        self.history.append(
+        self._append_persisted(
             Message(
                 role="assistant",
                 content=content,
@@ -44,7 +58,7 @@ class ConversationManager:
         )
 
     def add_tool_results(self, tool_results: list[ToolResultBlock]) -> None:
-        self.history.append(
+        self._append_persisted(
             Message(role="user", content="", tool_results=tool_results)
         )
 
@@ -105,6 +119,20 @@ class ConversationManager:
         self.history.clear()
         self.baseline_tokens = 0
         self.anchor_count = 0
+
+    def reset_usage_anchor(self) -> None:
+        self.baseline_tokens = 0
+        self.anchor_count = 0
+
+    def persist_compact_checkpoint(
+        self, summary: str, keep_messages: list[Message]
+    ) -> None:
+        """将已成功压缩的会话事实写成恢复 checkpoint。"""
+        if self._session is not None:
+            self._session.append_checkpoint(
+                summary=summary,
+                keep_messages=keep_messages,
+            )
 
     def replace_history(self, new_messages: list[Message]) -> None:
         """原子替换整个 history,清空 token 锚点。
