@@ -1,5 +1,7 @@
 from pathlib import Path
+from types import SimpleNamespace
 
+from archcode.app import ArchCodeApp
 from archcode.memory.instructions import InstructionDocumentLoader
 
 
@@ -28,3 +30,15 @@ def test_instruction_loader_uses_explicit_app_data_dir_for_user_rules(
     assert "project rule" in result.compiled_text
     assert "local project rule" in result.compiled_text
     assert "user rule" in result.compiled_text
+
+
+def test_app_without_project_work_dir_does_not_create_a_session(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    agent = SimpleNamespace(_work_dir=None)
+
+    app = ArchCodeApp(agent=agent, model_name="test")
+
+    assert app._session is None
+    assert not (tmp_path / ".archcode" / "sessions").exists()
