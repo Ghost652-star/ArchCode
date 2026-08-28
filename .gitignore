@@ -10,14 +10,9 @@ build/
 .cursor/
 .codegraph/
 .pytest_cache/
-.archcode/sessions/
-.archcode/debug.log
-.archcode/config.local.yaml
-.archcode/config.yaml
-.archcode/plans/
-.archcode/session/
-.archcode/AGENTS.md
-.archcode/memory/
+# .archcode/ 是 ArchCode 的应用级运行数据目录；仅提交可复制的配置示例。
+.archcode/*
+!.archcode/config.yaml.example
 tests/
 CLAUDE.md
 docs/

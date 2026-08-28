@@ -121,9 +121,11 @@ ArchCode 通过 MCP（Model Context Protocol）接入任意外部工具 server�
 
 配置文件按优先级合并，后者覆盖前者：
 
-1. `~/.archcode/config.yaml`
-2. `.archcode/config.yaml`
-3. `.archcode/config.local.yaml`
+1. `<archcode-root>/.archcode/config.yaml`
+2. `<work_dir>/.archcode/config.yaml`
+3. `<work_dir>/.archcode/config.local.yaml`
+
+`<archcode-root>` 是 ArchCode 自身的安装或源码根目录；`<work_dir>` 是通过 `-w` 指定的当前工作项目目录。真实配置包含密钥，均由 Git 忽略；仓库只提供 `.archcode/config.yaml.example` 作为可复制模板。
 
 ### LLM Providers
 
@@ -225,7 +227,23 @@ compression:
 
 ## 工作目录与沙箱
 
-`-w` 参数指定工作目录，工具读写的相对路径以它为基准，plan 文件落到 `<work_dir>/.archcode/plans/`。
+`-w` 参数指定工作目录，工具读写的相对路径以它为基准。运行时数据区分为应用级与项目级；它们都不会提交到 Git。
+
+```text
+<archcode-root>/.archcode/        # ArchCode 自己的应用级数据
+├─ config.yaml                    # 本机 API / Provider 配置
+├─ AGENTS.md                      # 用户级指令文档（实现后使用）
+└─ memory/                        # 用户级长期记忆（实现后使用）
+
+<work_dir>/.archcode/             # 当前工作项目的数据
+├─ AGENTS.md                      # 项目私有指令文档
+├─ sessions/                      # 当前项目的会话 JSONL
+├─ session/tool-results/          # 上下文压缩时的临时工具结果
+├─ plans/                         # 当前项目的计划文件
+└─ memory/                        # 项目级长期记忆（实现后使用）
+```
+
+其中，`sessions/` 用于恢复某个具体对话，`session/tool-results/` 是可在压缩后清理的临时文件，`plans/` 保存项目工作计划，两个 `memory/` 分别保存用户级与项目级长期知识。实际运行时目录会随着工作项目和本机配置产生，不属于源码，也不应提交。
 
 ```bash
 # 沙箱以 F:/myproject 为根，AI 只能读写其内文件（+临时目录）
