@@ -15,6 +15,9 @@ build/
 .archcode/config.local.yaml
 .archcode/config.yaml
 .archcode/plans/
+.archcode/session/
+.archcode/AGENTS.md
+.archcode/memory/
 tests/
 CLAUDE.md
 docs/

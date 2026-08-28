@@ -25,6 +25,7 @@ from archcode.llm.serializer import build_anthropic_tools, build_openai_tools
 from archcode.permissions import Decision, PermissionChecker, PermissionMode
 from archcode.memory import InstructionDiagnostic, InstructionDocumentLoader
 from archcode.prompts import append_project_instructions, build_plan_mode_reminder
+from archcode.paths import project_data_dir
 from archcode.tools.base import MAX_OUTPUT_CHARS, ToolResult
 from archcode.tools.registry import ToolRegistry
 
@@ -399,7 +400,7 @@ class Agent:
         import random
 
         base = self._work_dir or Path.cwd()
-        plans_dir = base / ".archcode" / "plans"
+        plans_dir = project_data_dir(base) / "plans"
         plans_dir.mkdir(parents=True, exist_ok=True)
         ts = datetime.datetime.now().strftime("%m%d-%H%M")
         slug = f"{random.choice(self._ADJECTIVES)}-{random.choice(self._NOUNS)}-{ts}"

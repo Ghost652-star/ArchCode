@@ -11,6 +11,7 @@ from typing import Any
 
 from archcode.conversation.manager import ConversationManager
 from archcode.conversation.models import Message, ToolResultBlock, ToolUseBlock
+from archcode.paths import project_data_dir
 
 
 FORMAT_VERSION = 1
@@ -205,7 +206,7 @@ class Session:
 
 class SessionManager:
     def __init__(self, work_dir: str | Path) -> None:
-        self.sessions_dir = Path(work_dir) / ".archcode" / "sessions"
+        self.sessions_dir = project_data_dir(work_dir) / "sessions"
         self.sessions_dir.mkdir(parents=True, exist_ok=True)
 
     def create(self) -> Session:

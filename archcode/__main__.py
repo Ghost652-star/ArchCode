@@ -17,6 +17,7 @@ from archcode.memory import (
     format_instruction_diagnostics,
 )
 from archcode.permissions import PermissionChecker, PermissionMode, PathSandbox
+from archcode.paths import project_data_dir
 from archcode.prompts import build_system_prompt
 from archcode.tools import create_default_registry
 from archcode.tools.tool_search import ToolSearchTool
@@ -88,8 +89,6 @@ def _build_agent_sync(config, work_dir, tool_registry):
 
 
 def main() -> None:
-    Path(".archcode").mkdir(parents=True, exist_ok=True)
-
     parser = argparse.ArgumentParser(
         prog="archcode",
         description="ArchCode AI coding assistant",
@@ -118,14 +117,15 @@ def main() -> None:
     )
     args = parser.parse_args()
 
+    work_dir = Path(args.work_dir).resolve() if args.work_dir else Path(os.getcwd())
+    project_data_dir(work_dir).mkdir(parents=True, exist_ok=True)
+
     try:
         config_path = Path(args.config) if args.config else None
-        config = load_config(config_path)
+        config = load_config(config_path, project_dir=work_dir)
     except ConfigError as e:
         print(f"Config error: {e}", file=sys.stderr)
         sys.exit(1)
-
-    work_dir = Path(args.work_dir).resolve() if args.work_dir else Path(os.getcwd())
 
     try:
         if args.p is not None:

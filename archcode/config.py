@@ -7,6 +7,8 @@ from pathlib import Path
 
 import yaml
 
+from archcode.paths import application_data_dir, project_data_dir
+
 _ENV_VAR_RE = re.compile(r"\$\{([^}]+)\}")
 
 
@@ -264,8 +266,13 @@ def _resolve_env(value: str) -> str:
     return _ENV_VAR_RE.sub(lambda m: os.environ.get(m.group(1), m.group(0)), value)
 
 
-def load_config(path: Path | None = None) -> AppConfig:
-    """加载配置,按优先级合并:~/.archcode → 项目 .archcode → local。
+def load_config(
+    path: Path | None = None,
+    *,
+    project_dir: Path | None = None,
+    app_data_dir: Path | None = None,
+) -> AppConfig:
+    """加载配置,按优先级合并:应用 .archcode → 项目 .archcode → local。
 
     合并策略:destructive(整个 mcp_servers 列表由后加载者覆盖,不按 name 合并)。
     """
@@ -274,10 +281,13 @@ def load_config(path: Path | None = None) -> AppConfig:
             raise ConfigError(f"Config not found: {path}")
         return _load_file(path)
 
+    project_root = (project_dir or Path.cwd()).resolve()
+    app_root = (app_data_dir or application_data_dir()).resolve()
+    project_data_root = project_data_dir(project_root)
     candidates = [
-        Path.home() / ".archcode" / "config.yaml",
-        Path.cwd() / ".archcode" / "config.yaml",
-        Path.cwd() / ".archcode" / "config.local.yaml",
+        app_root / "config.yaml",
+        project_data_root / "config.yaml",
+        project_data_root / "config.local.yaml",
     ]
 
     merged: AppConfig | None = None

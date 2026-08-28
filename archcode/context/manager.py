@@ -81,7 +81,7 @@ def ensure_session_dir(work_dir: Path | str) -> Path:
     落盘文件都进这里。ArchCode 启动时会调一次,后续 ``apply_tool_result_budget``
     用的就是这个目录。
     """
-    session_dir = Path(work_dir) / ".archcode" / "session" / TOOL_RESULTS_DIR
+    session_dir = project_data_dir(work_dir) / "session" / TOOL_RESULTS_DIR
     session_dir.mkdir(parents=True, exist_ok=True)
     return session_dir
 
@@ -405,3 +405,4 @@ def cleanup_tool_results(
             shutil.rmtree(entry, ignore_errors=True)
         else:
             entry.unlink(missing_ok=True)
+from archcode.paths import project_data_dir

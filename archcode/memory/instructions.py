@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
+from archcode.paths import application_data_dir
 
 _INCLUDE_RE = re.compile(r"^\s*@include\s+([^\s]+)\s*$")
 
@@ -82,15 +83,15 @@ class InstructionDocumentLoader:
 
     def __init__(
         self,
-        home_dir: Path | None = None,
+        app_data_dir: Path | None = None,
         limits: InstructionLimits | None = None,
     ) -> None:
-        self._home_dir = home_dir
+        self._app_data_dir = app_data_dir
         self._limits = limits or InstructionLimits()
 
     def load(self, project_root: Path) -> InstructionLoadResult:
         project_root = project_root.resolve()
-        home_dir = (self._home_dir or Path.home()).resolve()
+        app_data_root = (self._app_data_dir or application_data_dir()).resolve()
         candidates = (
             InstructionSource(
                 priority=1,
@@ -106,8 +107,8 @@ class InstructionDocumentLoader:
             ),
             InstructionSource(
                 priority=3,
-                path=home_dir / ".archcode" / "AGENTS.md",
-                allowed_root=home_dir / ".archcode",
+                path=app_data_root / "AGENTS.md",
+                allowed_root=app_data_root,
                 label="User instructions",
             ),
         )
