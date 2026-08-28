@@ -1,8 +1,32 @@
 from __future__ import annotations
 
+import json
+
 from archcode.conversation.manager import ConversationManager
 from archcode.conversation.models import ToolResultBlock, ToolUseBlock
 from archcode.memory.session import SessionManager
+
+
+def test_session_meta_indexes_list_data_without_jsonl_version(tmp_path) -> None:
+    manager = SessionManager(tmp_path)
+    session = manager.create()
+    conversation = ConversationManager()
+    session.bind(conversation)
+
+    conversation.add_user("a" * 60)
+    conversation.add_assistant("done", completes_user_turn=True)
+    session.close()
+
+    meta_path = session.path.with_suffix(".meta")
+    meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    first_record = json.loads(session.path.read_text(encoding="utf-8").splitlines()[0])
+
+    assert meta["id"] == session.id
+    assert meta["title"] == "a" * 50
+    assert meta["message_count"] == 2
+    assert meta["last_active_ms"] >= meta["created_at_ms"]
+    assert "v" not in first_record
+    assert manager.list_sessions()[0].id == session.id
 
 
 def test_bound_conversation_round_trips_messages_and_tool_results(tmp_path) -> None:

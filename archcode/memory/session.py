@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import secrets
+import tempfile
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -14,7 +15,6 @@ from archcode.conversation.models import Message, ToolResultBlock, ToolUseBlock
 from archcode.paths import project_data_dir
 
 
-FORMAT_VERSION = 1
 DEFAULT_RETENTION_DAYS = 30
 RECOVERY_TAIL_CHAR_LIMIT = 12_000
 RECOVERY_BOUNDARY_MESSAGE = (
@@ -82,7 +82,6 @@ def _records_from_message(message: Message) -> list[dict[str, Any]]:
     if message.tool_results:
         return [
             {
-                "v": FORMAT_VERSION,
                 "type": "tool_result",
                 "tool_use_id": result.tool_use_id,
                 "content": result.content,
@@ -94,7 +93,6 @@ def _records_from_message(message: Message) -> list[dict[str, Any]]:
     if message.role == "assistant":
         return [
             {
-                "v": FORMAT_VERSION,
                 "type": "assistant",
                 "content": message.content,
                 "tool_uses": [
@@ -111,7 +109,6 @@ def _records_from_message(message: Message) -> list[dict[str, Any]]:
         ]
     return [
         {
-            "v": FORMAT_VERSION,
             "type": "user",
             "content": message.content,
             "ts": _now_ms(),
@@ -164,10 +161,56 @@ class SessionRestore:
     warnings: list[str] = field(default_factory=list)
 
 
+@dataclass
+class SessionMeta:
+    """会话列表使用的轻量索引；JSONL 仍是对话内容的事实来源。"""
+
+    id: str
+    title: str = ""
+    message_count: int = 0
+    created_at_ms: int = field(default_factory=_now_ms)
+    last_active_ms: int = field(default_factory=_now_ms)
+
+    def save(self, path: Path) -> None:
+        payload = json.dumps(
+            {
+                "id": self.id,
+                "title": self.title,
+                "message_count": self.message_count,
+                "created_at_ms": self.created_at_ms,
+                "last_active_ms": self.last_active_ms,
+            },
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(
+            "w", encoding="utf-8", delete=False, dir=path.parent, suffix=".tmp"
+        ) as handle:
+            handle.write(payload)
+            temporary = Path(handle.name)
+        temporary.replace(path)
+
+    @classmethod
+    def load(cls, path: Path) -> "SessionMeta | None":
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            return cls(
+                id=str(data["id"]),
+                title=str(data.get("title", "")),
+                message_count=int(data.get("message_count", 0)),
+                created_at_ms=int(data["created_at_ms"]),
+                last_active_ms=int(data["last_active_ms"]),
+            )
+        except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError):
+            return None
+
+
 class Session:
-    def __init__(self, session_id: str, path: Path) -> None:
+    def __init__(self, session_id: str, path: Path, meta: SessionMeta) -> None:
         self.id = session_id
         self.path = path
+        self.meta = meta
 
     def bind(self, conversation: ConversationManager) -> None:
         conversation.bind_session(self)
@@ -181,6 +224,10 @@ class Session:
     def append_message(self, message: Message) -> None:
         for record in _records_from_message(message):
             self._append_record(record)
+        self.meta.message_count += 1
+        if not self.meta.title and message.role == "user" and message.content:
+            self.meta.title = message.content[:50]
+        self._touch_meta()
 
     def append_checkpoint(
         self,
@@ -191,7 +238,6 @@ class Session:
     ) -> None:
         self._append_record(
             {
-                "v": FORMAT_VERSION,
                 "type": "compact_checkpoint",
                 "summary": summary,
                 "keep_messages": [_message_to_data(message) for message in keep_messages],
@@ -199,6 +245,11 @@ class Session:
                 "ts": _now_ms(),
             }
         )
+        self._touch_meta()
+
+    def _touch_meta(self) -> None:
+        self.meta.last_active_ms = _now_ms()
+        self.meta.save(self.path.with_suffix(".meta"))
 
     def close(self) -> None:
         """追加模式不长期持有文件句柄；保留此接口供应用生命周期统一调用。"""
@@ -218,13 +269,19 @@ class SessionManager:
                     pass
             except FileExistsError:
                 continue
-            return Session(session_id, path)
+            meta = SessionMeta(id=session_id)
+            meta.save(path.with_suffix(".meta"))
+            return Session(session_id, path, meta)
 
-    def list_sessions(self) -> list[Session]:
-        return [
-            Session(path.stem, path)
-            for path in sorted(self.sessions_dir.glob("*.jsonl"), key=lambda item: item.stat().st_mtime, reverse=True)
+    def list_sessions(self) -> list[SessionMeta]:
+        """仅读取小型 .meta 索引，不扫描会话 JSONL 正文。"""
+        metas = [
+            meta
+            for path in self.sessions_dir.glob("*.meta")
+            if (meta := SessionMeta.load(path)) is not None
+            and (self.sessions_dir / f"{meta.id}.jsonl").is_file()
         ]
+        return sorted(metas, key=lambda meta: meta.last_active_ms, reverse=True)
 
     def open(self, session_id: str) -> SessionRestore | None:
         path = self.sessions_dir / f"{session_id}.jsonl"
@@ -342,23 +399,30 @@ class SessionManager:
         conversation = ConversationManager()
         conversation.history = history
         conversation.reset_usage_anchor()
-        session = Session(session_id, path)
+        meta = SessionMeta.load(path.with_suffix(".meta"))
+        if meta is None:
+            return None
+        session = Session(session_id, path, meta)
         session.bind(conversation)
         return SessionRestore(session=session, conversation=conversation, warnings=warnings)
 
     def delete(self, session_id: str) -> bool:
         path = self.sessions_dir / f"{session_id}.jsonl"
-        if not path.exists():
-            return False
-        path.unlink()
-        return True
+        meta_path = path.with_suffix(".meta")
+        deleted = False
+        for candidate in (path, meta_path):
+            if candidate.exists():
+                candidate.unlink()
+                deleted = True
+        return deleted
 
     def prune(self, max_age_days: int = DEFAULT_RETENTION_DAYS) -> int:
-        cutoff = datetime.now(timezone.utc) - timedelta(days=max_age_days)
+        cutoff_ms = int(
+            (datetime.now(timezone.utc) - timedelta(days=max_age_days)).timestamp() * 1000
+        )
         removed = 0
-        for session in self.list_sessions():
-            modified = datetime.fromtimestamp(session.path.stat().st_mtime, tz=timezone.utc)
-            if modified < cutoff:
-                session.path.unlink()
+        for meta in self.list_sessions():
+            if meta.last_active_ms < cutoff_ms:
+                self.delete(meta.id)
                 removed += 1
         return removed

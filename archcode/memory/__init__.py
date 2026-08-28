@@ -11,7 +11,7 @@ from archcode.memory.instructions import (
     InstructionSource,
     format_instruction_diagnostics,
 )
-from archcode.memory.session import Session, SessionManager, SessionRestore
+from archcode.memory.session import Session, SessionManager, SessionMeta, SessionRestore
 from archcode.memory.long_term import MemoryContext, MemoryHeader, MemoryManager
 
 __all__ = [
@@ -23,6 +23,7 @@ __all__ = [
     "format_instruction_diagnostics",
     "Session",
     "SessionManager",
+    "SessionMeta",
     "SessionRestore",
     "MemoryContext",
     "MemoryHeader",
