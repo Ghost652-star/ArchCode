@@ -23,7 +23,11 @@ from archcode.llm.events import (
 )
 from archcode.llm.serializer import build_anthropic_tools, build_openai_tools
 from archcode.permissions import Decision, PermissionChecker, PermissionMode
-from archcode.memory import InstructionDiagnostic, InstructionDocumentLoader
+from archcode.memory import (
+    InstructionDiagnostic,
+    InstructionDocumentLoader,
+    MemoryManager,
+)
 from archcode.prompts import append_project_instructions, build_plan_mode_reminder
 from archcode.paths import project_data_dir
 from archcode.tools.base import MAX_OUTPUT_CHARS, ToolResult
@@ -345,6 +349,10 @@ class Agent:
         )
         self._instruction_fingerprint: str | None = None
         self.last_instruction_diagnostics: tuple[InstructionDiagnostic, ...] = ()
+        self._memory_manager = (
+            MemoryManager(self._work_dir) if self._work_dir is not None else None
+        )
+        self._memory_tasks: set[asyncio.Task[None]] = set()
         self._client.set_max_output_tokens(max_output_tokens)
         if plan_mode:
             self.set_plan_mode(True)
@@ -433,6 +441,29 @@ class Agent:
         )
         self.last_instruction_diagnostics = result.diagnostics
         return result.diagnostics
+
+    def refresh_memory_context(self, conversation: ConversationManager) -> bool:
+        """在安全边界把两个长期记忆目录的索引注入当前对话。
+
+        只在新用户任务或压缩替换 history 后调用；目录 revision 未变化时，
+        ConversationManager 会原样保留已有上下文消息。
+        """
+        if self._memory_manager is None:
+            return False
+        context = self._memory_manager.load_context()
+        return conversation.refresh_memory_context(
+            context.content,
+            context.user_revision,
+            context.project_revision,
+        )
+
+    def _schedule_memory_extraction(self, conversation: ConversationManager) -> None:
+        """最终回复后后台提取记忆，绝不阻塞用户拿到结果。"""
+        if self._memory_manager is None:
+            return
+        task = asyncio.create_task(self._memory_manager.extract(self._client, conversation))
+        self._memory_tasks.add(task)
+        task.add_done_callback(self._memory_tasks.discard)
 
     async def _execute_tool(
         self, tc: ToolCallComplete
@@ -676,6 +707,7 @@ class Agent:
         if instruction_diagnostics:
             yield InstructionDiagnosticsEvent(diagnostics=instruction_diagnostics)
 
+        self.refresh_memory_context(conversation)
         conversation.add_user(user_input)
 
         iteration = 0
@@ -704,9 +736,9 @@ class Agent:
 
             # 每轮重新注入 plan mode reminder(对话历史可能会污染 LLM 判断)
             # ── 动态上下文注入点(扩展契约)────────────────────────────────
-            # 当前只注入 plan reminder。将来 memory / skills / hooks /
-            # CLAUDE.md 指令 等子系统落地时,就在这个 block 里 add 一个
-            # conversation.add_system_reminder(<那段内容>)。
+            # 当前只注入 plan reminder 与 MCP 延迟工具提示。长期记忆索引
+            # 已在新任务边界/压缩后通过 refresh_memory_context 注入，不能
+            # 在这里每个 ReAct iteration 重复追加。
             # 注意:不要动 self._system_prompt(那会破 Anthropic prompt cache),
             # 任何会变的内容都走 conversation.add_system_reminder 这条路。
             # 详细设计见 docs/prompts-design.md。
@@ -815,6 +847,7 @@ class Agent:
                             # 阈值过但 to_summarize 空 — Widget 没挂,啥也不发
                             pass
                         elif isinstance(event, CompactEvent):
+                            self.refresh_memory_context(conversation)
                             snippet = event.summary[:200].replace("\n", " ")
                             yield CompactFinished(
                                 success=True,
@@ -908,6 +941,7 @@ class Agent:
                                     total_chars=force_progress_chars[0],
                                 )
                         if isinstance(compact_event, CompactEvent):
+                            self.refresh_memory_context(conversation)
                             snippet = compact_event.summary[:200].replace("\n", " ")
                             if force_started_flag:
                                 yield CompactFinished(
@@ -1017,6 +1051,7 @@ class Agent:
                     result_collector.response.cache_read,
                     result_collector.response.cache_creation,
                 )
+                self._schedule_memory_extraction(conversation)
                 yield TurnComplete(turn=iteration)
                 yield LoopComplete(total_turns=iteration, text=final_text)
                 return

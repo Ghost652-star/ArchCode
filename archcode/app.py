@@ -661,6 +661,7 @@ class ArchCodeApp(App):
 
         self._hide_compact_progress()
         if isinstance(event, CompactEvent):
+            self._agent.refresh_memory_context(self._conversation)
             # 压缩成功:重置当前 token 显示(让下一轮 UsageEvent 重新锚定)
             self.current_tokens = 0
             self._update_status_bar()

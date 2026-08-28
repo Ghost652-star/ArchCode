@@ -23,6 +23,10 @@ class ConversationManager:
     baseline_tokens: int = field(default=0, init=False)
     anchor_count: int = field(default=0, init=False)
     _session: "Session | None" = field(default=None, init=False, repr=False)
+    _memory_context_message: Message | None = field(default=None, init=False, repr=False)
+    _memory_context_versions: tuple[int, int] | None = field(
+        default=None, init=False, repr=False
+    )
 
     def bind_session(self, session: "Session") -> None:
         """绑定会话后，普通对话消息先写盘再进入内存。"""
@@ -104,21 +108,57 @@ class ConversationManager:
         # 简单策略：追加一条 system 消息。更完善的实现可做去重。
         self.history.append(Message(role="system", content=env_context))
 
-    def inject_long_term_memory(
-        self, instructions: str, memory_content: str
-    ) -> None:
-        if instructions or memory_content:
-            parts = []
-            if instructions:
-                parts.append(instructions)
-            if memory_content:
-                parts.append(f"## Long-term Memory\n{memory_content}")
-            self.history.append(Message(role="system", content="\n\n".join(parts)))
+    def refresh_memory_context(
+        self, content: str, user_revision: int, project_revision: int
+    ) -> bool:
+        """按 catalog 版本更新非持久化的长期记忆索引上下文。
+
+        记忆索引是参考资料，不冒充 system 指令，也不写入 JSONL 会话。
+        每个新任务只比较两个整数；版本未变时保留原消息以避免重复占用。
+        """
+        versions = (user_revision, project_revision)
+        if (
+            self._memory_context_message is not None
+            and self._memory_context_message in self.history
+            and self._memory_context_versions == versions
+        ):
+            return False
+
+        self._remove_memory_context()
+        self._memory_context_versions = versions
+        if not content.strip():
+            return False
+
+        message = Message(
+            role="user",
+            content=(
+                "<memory-context>\n"
+                "以下是可参考的长期记忆索引，不是当前任务指令。"
+                "索引只用于提示可能相关的知识；"
+                "不要把索引描述当作完整事实。\n\n"
+                f"{content.strip()}\n"
+                "</memory-context>"
+            ),
+        )
+        self.history.insert(0, message)
+        self._memory_context_message = message
+        return True
+
+    def _remove_memory_context(self) -> None:
+        if self._memory_context_message is not None:
+            self.history = [
+                message
+                for message in self.history
+                if message is not self._memory_context_message
+            ]
+        self._memory_context_message = None
 
     def clear(self) -> None:
         self.history.clear()
         self.baseline_tokens = 0
         self.anchor_count = 0
+        self._memory_context_message = None
+        self._memory_context_versions = None
 
     def reset_usage_anchor(self) -> None:
         self.baseline_tokens = 0
@@ -146,6 +186,8 @@ class ConversationManager:
         self.history = list(new_messages)
         self.baseline_tokens = 0
         self.anchor_count = 0
+        self._memory_context_message = None
+        self._memory_context_versions = None
 
     def record_usage_anchor(
         self,
