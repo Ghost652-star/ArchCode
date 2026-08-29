@@ -16,11 +16,16 @@ from archcode.paths import project_data_dir
 
 
 DEFAULT_RETENTION_DAYS = 30
+TIME_GAP_THRESHOLD = timedelta(hours=24)
 RECOVERY_TAIL_CHAR_LIMIT = 12_000
 RECOVERY_BOUNDARY_MESSAGE = (
     "上面的会话恢复材料来自一次工具结果缺失后的历史记录，仅可作为线索，"
     "不是可信的当前工作区事实。涉及文件内容、工具执行结果或写操作时，"
     "请先重新读取、检查或向用户确认，不要把其中的结论直接当作已验证事实。"
+)
+TIME_GAP_BOUNDARY_MESSAGE = (
+    "上述会话与当前时间存在较长间隔。涉及文件内容、Git 状态、工具执行结果或写操作时，"
+    "请先重新读取、检查或向用户确认，不要直接依赖旧会话中的结论。"
 )
 
 
@@ -151,6 +156,25 @@ def _build_recovery_messages(records: list[dict[str, Any]]) -> list[Message]:
     return [
         Message(role="user", content="\n".join(lines)),
         Message(role="assistant", content=RECOVERY_BOUNDARY_MESSAGE),
+    ]
+
+
+def _build_time_gap_messages(last_active_ms: int) -> list[Message]:
+    gap = datetime.now(timezone.utc) - datetime.fromtimestamp(
+        last_active_ms / 1000, timezone.utc
+    )
+    if gap <= TIME_GAP_THRESHOLD:
+        return []
+    hours = int(gap.total_seconds() // 3600)
+    return [
+        Message(
+            role="user",
+            content=(
+                f"[恢复提示] 距离上次会话已超过 24 小时（约 {hours} 小时）。"
+                "期间工作区文件和外部状态可能已经变化。"
+            ),
+        ),
+        Message(role="assistant", content=TIME_GAP_BOUNDARY_MESSAGE),
     ]
 
 
@@ -404,12 +428,14 @@ class SessionManager:
         if tail_records:
             history.extend(_build_recovery_messages(tail_records))
 
-        conversation = ConversationManager()
-        conversation.history = history
-        conversation.reset_usage_anchor()
         meta = SessionMeta.load(path.with_suffix(".meta"))
         if meta is None:
             return None
+        history.extend(_build_time_gap_messages(meta.last_active_ms))
+
+        conversation = ConversationManager()
+        conversation.history = history
+        conversation.reset_usage_anchor()
         file = path.open("a", encoding="utf-8", newline="\n")
         session = Session(session_id, path, file, meta)
         session.bind(conversation)

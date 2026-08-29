@@ -124,6 +124,26 @@ def test_unmatched_tool_tail_becomes_recovery_material_not_tool_history(tmp_path
     assert "仅可作为线索" in restored.conversation.history[-1].content
 
 
+def test_restoring_a_session_idle_over_24_hours_adds_time_gap_reminder(tmp_path) -> None:
+    manager = SessionManager(tmp_path)
+    session = manager.create()
+    conversation = ConversationManager()
+    session.bind(conversation)
+    conversation.add_user("continue the work")
+    conversation.add_assistant("I will continue.", completes_user_turn=True)
+    session.close()
+    session.meta.last_active_ms = int(
+        (datetime.now(timezone.utc) - timedelta(hours=25)).timestamp() * 1000
+    )
+    session.meta.save(session.path.with_suffix(".meta"))
+
+    restored = manager.open(session.id)
+
+    assert restored is not None
+    assert "距离上次会话已超过 24 小时" in restored.conversation.history[-2].content
+    assert "重新读取、检查或向用户确认" in restored.conversation.history[-1].content
+
+
 def test_latest_checkpoint_replaces_compacted_prefix_on_restore(tmp_path) -> None:
     manager = SessionManager(tmp_path)
     session = manager.create()
