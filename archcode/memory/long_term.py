@@ -28,6 +28,27 @@ _REVISION_RE = re.compile(r"<!--\s*archcode-memory-index:\s*revision=(\d+)\s*-->
 _MAX_ENTRIES = 200
 _MAX_CATALOG_BYTES = 25 * 1024
 _MAX_DESCRIPTION_CHARS = 240
+_PLACEHOLDER_VALUES = frozenset(
+    {
+        "",
+        "-",
+        "--",
+        "...",
+        "…",
+        "无",
+        "暂无",
+        "没有",
+        "无内容",
+        "不适用",
+        "n/a",
+        "na",
+        "none",
+        "null",
+        "nil",
+        "not applicable",
+        "no content",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -148,7 +169,7 @@ class MemoryManager:
         body = self._clean_text(operation.get("content"), 8 * 1024)
         if memory_type not in _ALL_TYPES or not self._type_matches_scope(memory_type, scope):
             return False
-        if not name or not description or not body:
+        if any(self._is_placeholder(value) for value in (name, description, body)):
             return False
         root = self._scope_dir(scope)
         root.mkdir(parents=True, exist_ok=True)
@@ -175,7 +196,7 @@ class MemoryManager:
         body = self._clean_text(operation.get("content"), 8 * 1024)
         if memory_type not in _ALL_TYPES or not self._type_matches_scope(memory_type, scope):
             return False
-        if not name or not description or not body:
+        if any(self._is_placeholder(value) for value in (name, description, body)):
             return False
         self._atomic_write(path, self._render_memory(name, description, memory_type, body))
         return True
@@ -317,6 +338,10 @@ class MemoryManager:
         return " ".join(value.split())[:limit]
 
     @staticmethod
+    def _is_placeholder(value: str) -> bool:
+        return " ".join(value.split()).casefold() in _PLACEHOLDER_VALUES
+
+    @staticmethod
     def _slug(value: str) -> str:
         normalized = unicodedata.normalize("NFKD", value).encode("ascii", "ignore").decode()
         slug = re.sub(r"[^a-z0-9]+", "-", normalized.lower()).strip("-")
@@ -343,6 +368,8 @@ class MemoryManager:
             "Return JSON only: {\"operations\":[...]}. Each operation is create, update, delete, or noop. "
             "For update/delete, path must be an existing catalog relative path. "
             "Do not create a duplicate when a catalog entry already expresses the same fact.\n\n"
+            "If nothing is worth remembering, return an empty operations list. Do not use placeholder "
+            "values such as N/A, none, 暂无, 无, ..., or … for any memory field.\n\n"
             f"## Current catalogs\n{catalog or '(empty)'}\n\n"
             f"## Completed task\n{snapshot}"
         )

@@ -86,6 +86,42 @@ def test_memory_context_is_restored_after_history_replacement(tmp_path: Path) ->
     assert len(conversation.history) == 1
 
 
+@pytest.mark.asyncio
+async def test_memory_manager_ignores_placeholder_operations(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    manager = MemoryManager(project, app_data_dir=tmp_path / "app")
+
+    await manager.apply_operations(
+        [
+            {
+                "op": "create",
+                "scope": "project",
+                "type": "project",
+                "name": "N/A",
+                "description": "暂无",
+                "content": "...",
+            },
+            {
+                "op": "create",
+                "scope": "project",
+                "type": "project",
+                "name": "部署现状",
+                "description": "当前没有部署脚本，需要后续补充",
+                "content": "暂无部署脚本，后续需要补充。",
+            },
+        ]
+    )
+
+    memories = [
+        path
+        for path in manager.project_memory_dir.glob("*.md")
+        if path.name != "MEMORY.md"
+    ]
+
+    assert len(memories) == 1
+    assert "暂无部署脚本，后续需要补充" in memories[0].read_text(encoding="utf-8")
+
+
 class _FinalReplyClient(LLMClient):
     protocol = "anthropic"
 
