@@ -29,6 +29,17 @@ def test_session_meta_indexes_list_data_without_jsonl_version(tmp_path) -> None:
     assert manager.list_sessions()[0].id == session.id
 
 
+def test_session_reuses_its_append_handle_until_close(tmp_path) -> None:
+    session = SessionManager(tmp_path).create()
+
+    assert not session._file.closed
+
+    session.close()
+    session.close()
+
+    assert session._file.closed
+
+
 def test_bound_conversation_round_trips_messages_and_tool_results(tmp_path) -> None:
     manager = SessionManager(tmp_path)
     session = manager.create()

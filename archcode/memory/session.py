@@ -8,7 +8,7 @@ import tempfile
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any
+from typing import IO, Any
 
 from archcode.conversation.manager import ConversationManager
 from archcode.conversation.models import Message, ToolResultBlock, ToolUseBlock
@@ -207,9 +207,12 @@ class SessionMeta:
 
 
 class Session:
-    def __init__(self, session_id: str, path: Path, meta: SessionMeta) -> None:
+    def __init__(
+        self, session_id: str, path: Path, file: IO[str], meta: SessionMeta
+    ) -> None:
         self.id = session_id
         self.path = path
+        self._file = file
         self.meta = meta
 
     def bind(self, conversation: ConversationManager) -> None:
@@ -217,13 +220,12 @@ class Session:
 
     def _append_record(self, record: dict[str, Any]) -> None:
         payload = json.dumps(record, ensure_ascii=False, separators=(",", ":")) + "\n"
-        with self.path.open("a", encoding="utf-8", newline="\n") as handle:
-            handle.write(payload)
-            handle.flush()
+        self._file.write(payload)
 
     def append_message(self, message: Message) -> None:
         for record in _records_from_message(message):
             self._append_record(record)
+        self._file.flush()
         self.meta.message_count += 1
         if not self.meta.title and message.role == "user" and message.content:
             self.meta.title = message.content[:50]
@@ -245,6 +247,7 @@ class Session:
                 "ts": _now_ms(),
             }
         )
+        self._file.flush()
         self._touch_meta()
 
     def _touch_meta(self) -> None:
@@ -252,7 +255,10 @@ class Session:
         self.meta.save(self.path.with_suffix(".meta"))
 
     def close(self) -> None:
-        """追加模式不长期持有文件句柄；保留此接口供应用生命周期统一调用。"""
+        """关闭活跃会话句柄；重复调用安全。"""
+        if not self._file.closed:
+            self._file.flush()
+            self._file.close()
 
 
 class SessionManager:
@@ -271,7 +277,8 @@ class SessionManager:
                 continue
             meta = SessionMeta(id=session_id)
             meta.save(path.with_suffix(".meta"))
-            return Session(session_id, path, meta)
+            file = path.open("a", encoding="utf-8", newline="\n")
+            return Session(session_id, path, file, meta)
 
     def list_sessions(self) -> list[SessionMeta]:
         """仅读取小型 .meta 索引，不扫描会话 JSONL 正文。"""
@@ -402,7 +409,8 @@ class SessionManager:
         meta = SessionMeta.load(path.with_suffix(".meta"))
         if meta is None:
             return None
-        session = Session(session_id, path, meta)
+        file = path.open("a", encoding="utf-8", newline="\n")
+        session = Session(session_id, path, file, meta)
         session.bind(conversation)
         return SessionRestore(session=session, conversation=conversation, warnings=warnings)
 
