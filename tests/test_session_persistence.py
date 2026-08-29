@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timedelta, timezone
 
 from archcode.conversation.manager import ConversationManager
 from archcode.conversation.models import ToolResultBlock, ToolUseBlock
@@ -38,6 +39,23 @@ def test_session_reuses_its_append_handle_until_close(tmp_path) -> None:
     session.close()
 
     assert session._file.closed
+
+
+def test_creating_a_session_prunes_expired_sessions(tmp_path) -> None:
+    manager = SessionManager(tmp_path)
+    expired = manager.create()
+    expired.close()
+    expired.meta.last_active_ms = int(
+        (datetime.now(timezone.utc) - timedelta(days=31)).timestamp() * 1000
+    )
+    expired.meta.save(expired.path.with_suffix(".meta"))
+
+    current = manager.create()
+    current.close()
+
+    assert not expired.path.exists()
+    assert not expired.path.with_suffix(".meta").exists()
+    assert current.path.exists()
 
 
 def test_bound_conversation_round_trips_messages_and_tool_results(tmp_path) -> None:

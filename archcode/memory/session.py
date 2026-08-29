@@ -267,6 +267,7 @@ class SessionManager:
         self.sessions_dir.mkdir(parents=True, exist_ok=True)
 
     def create(self) -> Session:
+        self.prune()
         while True:
             session_id = datetime.now().strftime("%Y%m%d-%H%M%S-") + secrets.token_hex(4)
             path = self.sessions_dir / f"{session_id}.jsonl"
