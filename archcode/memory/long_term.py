@@ -117,6 +117,50 @@ class MemoryManager:
             return None
         return path
 
+    def list_entries(self, scope: MemoryScope) -> list[MemoryHeader]:
+        """Return the current lightweight index for one scope.
+
+        This is the public read surface for local commands; callers do not need
+        to know catalog filenames or invoke private header scanners.
+        """
+        return self._scan_headers(self._scope_dir(scope), scope)
+
+    async def add_manual(self, memory_type: MemoryType, content: str) -> bool:
+        """Create one user-authored memory using the same validation as extraction."""
+        text = self._clean_text(content, 8 * 1024)
+        first_line = next((line.strip() for line in text.splitlines() if line.strip()), "")
+        name = self._clean_metadata(first_line, 120)
+        description = self._clean_metadata(first_line, _MAX_DESCRIPTION_CHARS)
+        scope: MemoryScope = "user" if memory_type in _USER_TYPES else "project"
+        if memory_type not in _ALL_TYPES or any(
+            self._is_placeholder(value) for value in (name, description, text)
+        ):
+            return False
+        async with self._write_lock:
+            changed = self._create(
+                scope,
+                {
+                    "op": "create",
+                    "scope": scope,
+                    "type": memory_type,
+                    "name": name,
+                    "description": description,
+                    "content": text,
+                },
+            )
+            if changed:
+                self._rebuild_catalog(scope)
+            return changed
+
+    async def clear_scope(self, scope: MemoryScope) -> int:
+        """Delete all indexed entries in one explicit scope and rebuild its catalog."""
+        async with self._write_lock:
+            entries = self._scan_headers(self._scope_dir(scope), scope)
+            for entry in entries:
+                entry.path.unlink(missing_ok=True)
+            self._rebuild_catalog(scope)
+            return len(entries)
+
     async def extract(self, client: Any, conversation: ConversationManager) -> None:
         """后台提取当前已完成任务；LLM 只能返回提案，不能直接操作文件系统。"""
         snapshot = self._task_snapshot(conversation)

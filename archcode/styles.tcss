@@ -33,6 +33,17 @@ Screen {
     margin: 0 1;
 }
 
+#command-completion {
+    display: none;
+    height: auto;
+    max-height: 7;
+    margin: 0 1;
+    padding: 0 1;
+    color: $text-muted;
+    background: #202020;
+    border: solid #454545;
+}
+
 /* --- 用户消息:❯ 浅蓝前缀 + 白色文本 --- */
 
 .user-message {

@@ -360,6 +360,7 @@ async def _summarize(
     turn_groups: list[list[Message]],
     max_retries: int = MAX_SUMMARY_RETRIES,
     on_text_delta: Callable[[str], None] | None = None,
+    summary_focus: str = "",
 ) -> str | None:
     """调 LLM 生成摘要,带 drop-oldest 1/5 重试。
 
@@ -376,7 +377,14 @@ async def _summarize(
         summary_conv.history = _build_summary_messages(remaining_groups)
         try:
             llm_output = ""
-            async for event in client.stream(summary_conv, system=SUMMARY_PROMPT):
+            system_prompt = SUMMARY_PROMPT
+            if summary_focus.strip():
+                system_prompt += (
+                    "\n\n用户要求摘要时额外保留以下关注点；"
+                    "只在已有对话事实支持时记录，不要据此编造：\n"
+                    + summary_focus.strip()
+                )
+            async for event in client.stream(summary_conv, system=system_prompt):
                 if isinstance(event, TextDelta):
                     llm_output += event.text
                     if on_text_delta is not None:
@@ -456,6 +464,7 @@ async def auto_compact(
     max_retries: int = MAX_SUMMARY_RETRIES,
     on_text_delta: Callable[[str], None] | None = None,
     on_started: Callable[[], None] | None = None,
+    summary_focus: str = "",
 ) -> CompactEvent | str | None:
     """自动 / 手动压缩。
 
@@ -510,6 +519,7 @@ async def auto_compact(
     llm_output = await _summarize(
         client, turn_groups, max_retries=max_retries,
         on_text_delta=on_text_delta,
+        summary_focus=summary_focus,
     )
     summary = extract_summary(llm_output) if llm_output else None
     if summary is None:

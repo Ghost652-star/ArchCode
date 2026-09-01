@@ -402,6 +402,11 @@ class Agent:
                 self._permission_checker.mode = PermissionMode.DEFAULT
                 self._permission_checker.plan_file_path = ""
 
+    @property
+    def memory_manager(self) -> MemoryManager | None:
+        """Expose the long-term memory service without leaking its storage path."""
+        return self._memory_manager
+
     def _get_plan_path(self) -> Path:
         """生成 plan 文件路径 <work_dir>/.archcode/plans/{slug}.md。"""
         import datetime

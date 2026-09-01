@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import random
 import time
+from collections import deque
 from pathlib import Path
 from typing import Any
 
@@ -30,6 +31,8 @@ from archcode.agent import (
     UsageEvent,
 )
 from archcode.conversation.manager import ConversationManager
+from archcode.commands import CommandDispatcher, CommandRegistry
+from archcode.commands.handlers import built_in_command_specs
 from archcode.memory import SessionManager, format_instruction_diagnostics
 from archcode.permissions import PermissionMode
 from archcode.permission_modal import PermissionModal
@@ -98,6 +101,10 @@ class ChatInput(TextArea):
         Binding("enter", "submit", "Send", priority=True),
         Binding("shift+enter", "newline", "New line", priority=True),
         Binding("ctrl+j", "newline", "New line", priority=True),
+        Binding("tab", "complete", "Complete command", priority=True),
+        Binding("up", "completion_up", "Previous command", priority=True),
+        Binding("down", "completion_down", "Next command", priority=True),
+        Binding("escape", "completion_close", "Close completion", priority=True),
     ]
 
     class Submitted(TMessage):
@@ -105,11 +112,26 @@ class ChatInput(TextArea):
             super().__init__()
             self.text = text
 
+    class CompletionRequested(TMessage):
+        def __init__(self, text: str) -> None:
+            super().__init__()
+            self.text = text
+
+    class CompletionMoved(TMessage):
+        def __init__(self, delta: int) -> None:
+            super().__init__()
+            self.delta = delta
+
+    class CompletionClosed(TMessage):
+        pass
+
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self.cursor_blink = False
 
     def action_submit(self) -> None:
+        if getattr(self.app, "accept_completion_if_visible", lambda _input: False)(self):
+            return
         text = self.text.strip()
         if text:
             self.post_message(self.Submitted(text))
@@ -117,6 +139,29 @@ class ChatInput(TextArea):
 
     def action_newline(self) -> None:
         self.insert("\n")
+
+    def action_complete(self) -> None:
+        self.post_message(self.CompletionRequested(self.text))
+
+    def action_completion_up(self) -> None:
+        self.post_message(self.CompletionMoved(-1))
+
+    def action_completion_down(self) -> None:
+        self.post_message(self.CompletionMoved(1))
+
+    def action_completion_close(self) -> None:
+        self.post_message(self.CompletionClosed())
+
+
+class CommandCompletionPopup(Static):
+    """Keyboard-driven command candidates; never owns focus or executes input."""
+
+    def render_candidates(self, candidates: list[str], selected: int) -> None:
+        lines = [
+            f"{'›' if index == selected else ' '} /{name}"
+            for index, name in enumerate(candidates)
+        ]
+        self.update("\n".join(lines))
 
 
 class ArchCodeApp(App):
@@ -145,6 +190,12 @@ class ArchCodeApp(App):
         self._agent = agent
         self._model_name = model_name
         self._conversation = ConversationManager()
+        self._command_registry = CommandRegistry()
+        for command in built_in_command_specs():
+            self._command_registry.register(command)
+        self._command_dispatcher = CommandDispatcher(self._command_registry)
+        self._completion_candidates: list[str] = []
+        self._completion_selected = 0
         self._session_manager: SessionManager | None = None
         self._session = None
         work_dir = getattr(agent, "_work_dir", None)
@@ -154,6 +205,8 @@ class ArchCodeApp(App):
             self._session.bind(self._conversation)
         self._streaming = False
         self._agent_task: asyncio.Task[None] | None = None
+        self._submitted_inputs: deque[str] = deque()
+        self._input_queue_task: asyncio.Task[None] | None = None
         self._response_widget: Markdown | None = None
         self._response_buffer: list[str] = []
         self._pending_permission_future: asyncio.Future | None = None
@@ -175,6 +228,7 @@ class ArchCodeApp(App):
         # None 表示当前没在压缩
         self._compact_widget: Static | None = None
         self._compact_chars: int = 0
+        self._plan_previous_permission_mode: PermissionMode | None = None
         self._compact_mode: str = "auto"  # 记 Started 时的 mode,Progress 复用
         # AI 流式响应的加载点 ●(紫色, 单独 widget, 跟 Markdown 在同一 Horizontal)
         self._loading_dot: Static | None = None
@@ -194,6 +248,7 @@ class ArchCodeApp(App):
             id="input",
             placeholder="Send a message...",
         )
+        yield CommandCompletionPopup(id="command-completion")
         with Horizontal(id="status-bar"):
             yield Static("default", id="mode-label")
             yield Static("", id="ctx-label")
@@ -302,18 +357,30 @@ class ArchCodeApp(App):
             return f"{n // 1000}K"
         return f"{n / 1_000_000:.1f}M"
 
-    def _update_ctx_tokens(self, input_tokens: int, cache_read: int = 0, cache_creation: int = 0) -> None:
+    def _update_ctx_tokens(
+        self,
+        input_tokens: int,
+        output_tokens: int = 0,
+        cache_read: int = 0,
+        cache_creation: int = 0,
+    ) -> None:
         """更新状态栏的 current_tokens。UsageEvent 触发。
 
         用 set_reactive 强制刷新 —— 默认 reactive 相等值不触发 watch,
         但中转站/某些 provider 不返回 usage,input_tokens 一直 0,值不变就不会刷新。
         """
-        # 与 ConversationManager.baseline_tokens 一致:input + cache_read + cache_creation
-        new_total = max(
-            input_tokens + cache_read + cache_creation, self.current_tokens
-        )
+        # 与 ConversationManager 的 usage anchor 语义一致：这是最近一次
+        # 请求占用的上下文，不是历史峰值或累计 API 消耗。
+        new_total = input_tokens + output_tokens + cache_read + cache_creation
         # set_reactive 强制触发 watch,即使值未变也能重渲染
         self.set_reactive(ArchCodeApp.current_tokens, new_total)
+
+    def _sync_ctx_tokens_from_conversation(self) -> None:
+        """在历史发生本地替换后重算 Ctx（clear/resume/compact/回合结束）。"""
+        self.set_reactive(
+            ArchCodeApp.current_tokens,
+            self._conversation.current_tokens(),
+        )
 
     def _get_work_dir_label(self) -> str:
         """从 agent 读当前工作目录,显示在状态栏。"""
@@ -338,9 +405,15 @@ class ArchCodeApp(App):
         """任一 reactive 字段变化都触发,更新状态栏三栏各自文本。"""
         try:
             self.query_one("#mode-label", Static).update(
-                self.permission_mode_label
+                f"[{self.permission_mode_label.upper()}] · /help"
             )
-            self.query_one("#ctx-label", Static).update(self._ctx_label())
+            pct = (
+                self.current_tokens / self.context_window * 100
+                if self.context_window > 0 else 0
+            )
+            color = "green" if pct < 50 else "yellow" if pct < 75 else "dark_orange" if pct < 90 else "red"
+            label = RichText(self._ctx_label(), style=color)
+            self.query_one("#ctx-label", Static).update(label)
             # model-label 不变,无需 update
         except Exception:
             # widget 还没 mount 或已 detach,忽略 —— on_mount 后 watch 会再触发
@@ -355,6 +428,68 @@ class ArchCodeApp(App):
 
     def _input(self) -> ChatInput:
         return self.query_one("#input", ChatInput)
+
+    def _completion_popup(self) -> CommandCompletionPopup:
+        return self.query_one("#command-completion", CommandCompletionPopup)
+
+    def _hide_completion(self) -> None:
+        self._completion_candidates = []
+        self._completion_selected = 0
+        try:
+            self._completion_popup().display = False
+        except Exception:
+            pass
+
+    def _show_completion(self, candidates: list[str]) -> None:
+        self._completion_candidates = candidates
+        self._completion_selected = 0
+        popup = self._completion_popup()
+        popup.render_candidates(candidates, self._completion_selected)
+        popup.display = True
+
+    def accept_completion_if_visible(self, input_widget: ChatInput) -> bool:
+        """Called by ChatInput before Enter submits; returns True when it consumed Enter."""
+        if not self._completion_candidates:
+            return False
+        input_widget.text = f"/{self._completion_candidates[self._completion_selected]} "
+        self._hide_completion()
+        return True
+
+    def on_chat_input_completion_requested(
+        self, event: ChatInput.CompletionRequested
+    ) -> None:
+        raw = event.text.strip()
+        if not raw.startswith("/") or any(char.isspace() for char in raw[1:]):
+            self._hide_completion()
+            return
+        prefix = raw[1:].lower()
+        candidates = [
+            spec.name
+            for spec in self._command_registry.visible_commands()
+            if spec.name.startswith(prefix)
+        ]
+        if not candidates:
+            self._hide_completion()
+        elif len(candidates) == 1:
+            event.control.text = f"/{candidates[0]} "
+            self._hide_completion()
+        else:
+            self._show_completion(candidates)
+
+    def on_chat_input_completion_moved(
+        self, event: ChatInput.CompletionMoved
+    ) -> None:
+        if not self._completion_candidates:
+            return
+        self._completion_selected = (
+            self._completion_selected + event.delta
+        ) % len(self._completion_candidates)
+        self._completion_popup().render_candidates(
+            self._completion_candidates, self._completion_selected
+        )
+
+    def on_chat_input_completion_closed(self, _: ChatInput.CompletionClosed) -> None:
+        self._hide_completion()
 
     def _set_input_enabled(self, enabled: bool) -> None:
         self._input().disabled = not enabled
@@ -390,6 +525,10 @@ class ArchCodeApp(App):
 
     def _show_system(self, text: str) -> None:
         self._append_message(Static(text, classes="system-msg"))
+
+    def show_system(self, text: str) -> None:
+        """CommandUI implementation: local output only, never Conversation history."""
+        self._show_system(text)
 
     def _show_error(self, text: str) -> None:
         self._append_message(Static(text, classes="error-msg"))
@@ -524,9 +663,10 @@ class ArchCodeApp(App):
         self._append_message(Static(text, classes="thinking-msg", markup=False))
 
     def action_clear_chat(self) -> None:
-        self._conversation.clear()
-        self._chat().remove_children()
-        self._show_system("对话已清空。")
+        """Keyboard shortcut follows the same queued `/clear` command path."""
+        self._submitted_inputs.append("/clear")
+        if self._input_queue_task is None or self._input_queue_task.done():
+            self._input_queue_task = asyncio.create_task(self._drain_submitted_inputs())
 
     def action_abort_run(self) -> None:
         """Esc:中断当前正在跑的 agent 循环。
@@ -542,13 +682,21 @@ class ArchCodeApp(App):
             self._show_system("[abort] 当前没有正在执行的任务。")
 
     def _set_plan_mode(self, on: bool) -> None:
-        """切换 plan mode。开启时把 Agent 的 system prompt 注入 reminder,关闭时恢复。"""
+        """切换 Plan Mode，并在退出时恢复进入前的权限模式。"""
+        checker = getattr(self._agent, "_permission_checker", None)
+        if on and self._plan_previous_permission_mode is None and checker is not None:
+            self._plan_previous_permission_mode = checker.mode
         self._agent.set_plan_mode(on)
         if on:
             plan_path = getattr(self._agent, "_plan_path", None)
             label = str(plan_path) if plan_path else "(unknown)"
-            self._show_system(f"Plan mode ON. 只读工具可用,写操作请用 /exit-plan 退出。\n   Plan file: {label}")
+            self.permission_mode_label = PermissionMode.PLAN.value
+            self._show_system(f"Plan mode ON. 只读工具可用；再次输入 /plan 退出。\n   Plan file: {label}")
         else:
+            if checker is not None and self._plan_previous_permission_mode is not None:
+                checker.mode = self._plan_previous_permission_mode
+                self.permission_mode_label = checker.mode.value
+            self._plan_previous_permission_mode = None
             self._show_system("Plan mode OFF. 已恢复正常操作。")
         self._update_status_bar()
 
@@ -558,9 +706,9 @@ class ArchCodeApp(App):
         if checker is None:
             self._show_error("权限系统未初始化，无法切换模式。")
             return
-        # plan mode 只能通过 /plan /exit-plan 进入/退出，不能通过 /mode
+        # Plan Mode 只能通过 /plan 进入/退出。
         if mode == PermissionMode.PLAN:
-            self._show_system("Plan mode 请使用 /plan 或 /exit-plan 切换。")
+            self._show_system("Plan mode 请使用 /plan 切换。")
             return
         checker.mode = mode
         # 直接改 reactive —— watch_permission_mode_label 会重渲染
@@ -572,51 +720,154 @@ class ArchCodeApp(App):
         if not text:
             return
 
-        if text.lower() in ("/quit", "/exit"):
-            self.exit()
-            return
-        if text.lower() == "/clear":
-            self.action_clear_chat()
-            return
-        if text.lower() == "/plan":
-            self._set_plan_mode(True)
-            return
-        if text.lower() == "/exit-plan":
-            self._set_plan_mode(False)
-            return
-        if text.lower() == "/compact":
-            await self._handle_compact()
-            return
-        if text.lower().startswith("/mode"):
-            parts = text.split(maxsplit=1)
-            mode_str = parts[1].strip().lower() if len(parts) > 1 else ""
-            mode_map = {
-                "default": PermissionMode.DEFAULT,
-                "accept": PermissionMode.ACCEPT,
-                "bypass": PermissionMode.BYPASS,
-                "plan": PermissionMode.PLAN,
-            }
-            if mode_str in mode_map:
-                self._set_permission_mode(mode_map[mode_str])
-            else:
-                self._show_system(
-                    "用法: /mode <default|accept|bypass|plan>\n"
-                    f"  当前模式: {self.permission_mode_label}"
-                )
+        has_active_input = (
+            self._input_queue_task is not None
+            and not self._input_queue_task.done()
+        )
+        self._submitted_inputs.append(text)
+        if has_active_input:
+            self._show_system("[queued] 已加入队列，将在当前任务完成后执行。")
             return
 
-        if self._streaming:
+        self._input_queue_task = asyncio.create_task(self._drain_submitted_inputs())
+
+    async def _drain_submitted_inputs(self) -> None:
+        """按提交顺序处理输入，确保同一会话只有一个活跃任务。"""
+        try:
+            while self._submitted_inputs:
+                text = self._submitted_inputs.popleft()
+                await self._process_submitted_input(text)
+        finally:
+            self._input_queue_task = None
+
+    async def _process_submitted_input(self, text: str) -> None:
+        """处理一条已经轮到执行的原始用户输入。"""
+        handled = await self._command_dispatcher.dispatch(
+            text,
+            ui=self,
+            agent=self._agent,
+            conversation=self._conversation,
+            session=self._session,
+            session_manager=self._session_manager,
+            memory_manager=getattr(self._agent, "memory_manager", None),
+        )
+        if handled:
             return
 
-        # 照搬 MewCode（app.py:941）：agent 循环放独立 task，事件处理器立即返回。
-        # 若在 handler 里 await 整个 agent 运行，HITL 等待期间 handler 一直挂起，
-        # Textual 消息泵会阻塞，弹窗按键失去响应（设计文档 §8.7）。
+        await self.run_agent_task(text)
+
+    async def run_agent_task(self, text: str) -> None:
+        """CommandUI implementation: use the same current-session Agent path."""
         self._abort_event.clear()  # 新一轮:重置中断信号
         self._agent_task = asyncio.create_task(
             self._handle_user_message(text)
         )
+        await self._agent_task
 
-    async def _handle_compact(self) -> None:
+    async def run_manual_compact(self, focus: str) -> None:
+        """CommandUI implementation for /compact."""
+        if focus.strip():
+            await self._handle_compact(focus)
+        else:
+            await self._handle_compact()
+
+    async def clear_to_new_session(self) -> None:
+        """CommandUI implementation: preserve old session and switch atomically."""
+        if self._session_manager is None:
+            self._conversation.clear()
+            self._chat().remove_children()
+            self._sync_ctx_tokens_from_conversation()
+            self._show_system("对话已清空。")
+            return
+        old_session = self._session
+        new_conversation = ConversationManager()
+        new_session = self._session_manager.create()
+        new_session.bind(new_conversation)
+        self._session = new_session
+        self._conversation = new_conversation
+        if old_session is not None:
+            old_session.close()
+        self._chat().remove_children()
+        self._sync_ctx_tokens_from_conversation()
+        self._show_system(f"已新建会话：{new_session.session_id}")
+
+    async def resume_session(self, session_id: str) -> None:
+        """CommandUI implementation: replace session, conversation and visible chat together."""
+        if self._session_manager is None:
+            self._show_system("当前运行不支持会话持久化。")
+            return
+        restored = self._session_manager.open(session_id)
+        if restored is None:
+            self._show_system(f"未找到或无法恢复会话：{session_id}")
+            return
+        old_session = self._session
+        self._session = restored.session
+        self._conversation = restored.conversation
+        if old_session is not None:
+            old_session.close()
+        self._chat().remove_children()
+        for message in self._conversation.history:
+            if message.role == "user" and message.content:
+                self._append_message(Static(f"❯ {message.content}", classes="user-message"))
+            elif message.role == "assistant" and message.content:
+                self._append_message(Markdown(message.content, classes="assistant-msg"))
+        for warning in restored.warnings:
+            self._show_system(f"[session] {warning}")
+        self._sync_ctx_tokens_from_conversation()
+        self._show_system(f"已恢复会话：{session_id}")
+
+    async def toggle_plan_mode(self, task: str) -> None:
+        """CommandUI implementation for the only Plan Mode command."""
+        if getattr(self._agent, "_plan_mode", False):
+            if task.strip():
+                self._show_system("Plan mode 已开启；输入 /plan 退出后再发送任务。")
+                return
+            self._set_plan_mode(False)
+            return
+        self._set_plan_mode(True)
+        if task.strip():
+            await self.run_agent_task(task.strip())
+
+    async def configure_permission(self, raw_args: str) -> None:
+        """CommandUI implementation for existing permission modes."""
+        parts = raw_args.split(maxsplit=1)
+        if not parts:
+            self._show_system(
+                f"当前权限模式：{self.permission_mode_label}\n"
+                "用法：/permission mode <default|accept|bypass>"
+            )
+            return
+        if len(parts) != 2 or parts[0].lower() != "mode":
+            self._show_system("用法：/permission mode <default|accept|bypass>")
+            return
+        mode_map = {
+            "default": PermissionMode.DEFAULT,
+            "accept": PermissionMode.ACCEPT,
+            "bypass": PermissionMode.BYPASS,
+        }
+        mode = mode_map.get(parts[1].strip().lower())
+        if mode is None:
+            self._show_system("用法：/permission mode <default|accept|bypass>")
+            return
+        self._set_permission_mode(mode)
+
+    def status_text(self) -> str:
+        """CommandUI implementation for `/status`."""
+        tools = getattr(getattr(self._agent, "_tool_registry", None), "tools", {})
+        tool_count = len(tools) if hasattr(tools, "__len__") else 0
+        return "\n".join(
+            [
+                "ArchCode 状态",
+                "────────────",
+                f"模式: {self.permission_mode_label}",
+                f"Ctx: {self._ctx_label()}",
+                f"工具: {tool_count} 个已启用",
+                f"工作目录: {self._get_work_dir_label()}",
+                f"模型: {self._model_name}",
+            ]
+        )
+
+    async def _handle_compact(self, focus: str = "") -> None:
         """手动 /compact: 走 auto_compact(manual=True),不受阈值限制。"""
         compression = getattr(self._agent, "_compression", None)
         if compression is None or not compression.enabled:
@@ -653,6 +904,7 @@ class ArchCodeApp(App):
                 recovery_skills_budget=compression.recovery_skills_budget,
                 recovery_tokens_per_skill=compression.recovery_tokens_per_skill,
                 on_text_delta=_on_progress,
+                summary_focus=focus,
             )
         except Exception as e:
             self._hide_compact_progress()
@@ -661,9 +913,10 @@ class ArchCodeApp(App):
 
         self._hide_compact_progress()
         if isinstance(event, CompactEvent):
-            self._agent.refresh_memory_context(self._conversation)
-            # 压缩成功:重置当前 token 显示(让下一轮 UsageEvent 重新锚定)
-            self.current_tokens = 0
+            refresh_memory = getattr(self._agent, "refresh_memory_context", None)
+            if callable(refresh_memory):
+                refresh_memory(self._conversation)
+            self._sync_ctx_tokens_from_conversation()
             self._update_status_bar()
             snippet = event.summary[:200].replace("\n", " ")
             self._show_system(
@@ -688,7 +941,6 @@ class ArchCodeApp(App):
         self._response_widget = None  # 懒创建:第一次 StreamText 时才挂 Markdown
 
         self._streaming = True
-        self._set_input_enabled(False)
         self._thinking_widget = None  # 初始化（首次 StreamText 时创建）
 
         try:
@@ -799,6 +1051,7 @@ class ArchCodeApp(App):
                     # 更新状态栏的 ctx 占用
                     self._update_ctx_tokens(
                         event.input_tokens,
+                        event.output_tokens,
                         event.cache_read,
                         event.cache_creation,
                     )
@@ -832,6 +1085,7 @@ class ArchCodeApp(App):
                             pass
                         self._loading_dot = None
                     self._response_row = None
+                    self._sync_ctx_tokens_from_conversation()
         except Exception as e:
             self._show_error(f"Error: {e}")
         finally:
