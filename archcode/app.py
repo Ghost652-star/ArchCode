@@ -156,10 +156,10 @@ class ChatInput(TextArea):
 class CommandCompletionPopup(Static):
     """Keyboard-driven command candidates; never owns focus or executes input."""
 
-    def render_candidates(self, candidates: list[str], selected: int) -> None:
+    def render_candidates(self, candidates: list[tuple[str, str]], selected: int) -> None:
         lines = [
-            f"{'›' if index == selected else ' '} /{name}"
-            for index, name in enumerate(candidates)
+            f"{'›' if index == selected else ' '} /{name:<16} {description}"
+            for index, (name, description) in enumerate(candidates)
         ]
         self.update("\n".join(lines))
 
@@ -194,7 +194,7 @@ class ArchCodeApp(App):
         for command in built_in_command_specs():
             self._command_registry.register(command)
         self._command_dispatcher = CommandDispatcher(self._command_registry)
-        self._completion_candidates: list[str] = []
+        self._completion_candidates: list[tuple[str, str]] = []
         self._completion_selected = 0
         self._session_manager: SessionManager | None = None
         self._session = None
@@ -440,7 +440,7 @@ class ArchCodeApp(App):
         except Exception:
             pass
 
-    def _show_completion(self, candidates: list[str]) -> None:
+    def _show_completion(self, candidates: list[tuple[str, str]]) -> None:
         self._completion_candidates = candidates
         self._completion_selected = 0
         popup = self._completion_popup()
@@ -451,7 +451,8 @@ class ArchCodeApp(App):
         """Called by ChatInput before Enter submits; returns True when it consumed Enter."""
         if not self._completion_candidates:
             return False
-        input_widget.text = f"/{self._completion_candidates[self._completion_selected]} "
+        name, _ = self._completion_candidates[self._completion_selected]
+        input_widget.text = f"/{name} "
         self._hide_completion()
         return True
 
@@ -464,14 +465,14 @@ class ArchCodeApp(App):
             return
         prefix = raw[1:].lower()
         candidates = [
-            spec.name
+            (spec.name, spec.description)
             for spec in self._command_registry.visible_commands()
             if spec.name.startswith(prefix)
         ]
         if not candidates:
             self._hide_completion()
         elif len(candidates) == 1:
-            event.control.text = f"/{candidates[0]} "
+            self._input().text = f"/{candidates[0][0]} "
             self._hide_completion()
         else:
             self._show_completion(candidates)

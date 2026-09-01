@@ -36,12 +36,14 @@ Screen {
 #command-completion {
     display: none;
     height: auto;
-    max-height: 7;
+    max-height: 9;
     margin: 0 1;
     padding: 0 1;
     color: $text-muted;
     background: #202020;
     border: solid #454545;
+    overflow-y: auto;
+    scrollbar-gutter: stable;
 }
 
 /* --- 用户消息:❯ 浅蓝前缀 + 白色文本 --- */
