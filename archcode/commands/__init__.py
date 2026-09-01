@@ -10,9 +10,11 @@ from archcode.commands.core import (
     ParsedCommand,
     parse_command,
 )
+from archcode.commands.completion import CommandCompletion, complete_commands
 
 __all__ = [
     "CommandContext",
+    "CommandCompletion",
     "CommandDispatcher",
     "CommandHandler",
     "CommandRegistry",
@@ -20,4 +22,5 @@ __all__ = [
     "CommandUI",
     "ParsedCommand",
     "parse_command",
+    "complete_commands",
 ]

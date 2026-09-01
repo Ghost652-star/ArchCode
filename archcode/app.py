@@ -31,7 +31,12 @@ from archcode.agent import (
     UsageEvent,
 )
 from archcode.conversation.manager import ConversationManager
-from archcode.commands import CommandDispatcher, CommandRegistry
+from archcode.commands import (
+    CommandCompletion,
+    CommandDispatcher,
+    CommandRegistry,
+    complete_commands,
+)
 from archcode.commands.handlers import built_in_command_specs
 from archcode.memory import SessionManager, format_instruction_diagnostics
 from archcode.permissions import PermissionMode
@@ -156,10 +161,13 @@ class ChatInput(TextArea):
 class CommandCompletionPopup(Static):
     """Keyboard-driven command candidates; never owns focus or executes input."""
 
-    def render_candidates(self, candidates: list[tuple[str, str]], selected: int) -> None:
+    def render_candidates(
+        self, candidates: list[CommandCompletion], selected: int
+    ) -> None:
         lines = [
-            f"{'›' if index == selected else ' '} /{name:<16} {description}"
-            for index, (name, description) in enumerate(candidates)
+            f"{'›' if index == selected else ' '} /{candidate.name:<16} "
+            f"{candidate.description}"
+            for index, candidate in enumerate(candidates)
         ]
         self.update("\n".join(lines))
 
@@ -194,7 +202,7 @@ class ArchCodeApp(App):
         for command in built_in_command_specs():
             self._command_registry.register(command)
         self._command_dispatcher = CommandDispatcher(self._command_registry)
-        self._completion_candidates: list[tuple[str, str]] = []
+        self._completion_candidates: list[CommandCompletion] = []
         self._completion_selected = 0
         self._session_manager: SessionManager | None = None
         self._session = None
@@ -440,7 +448,7 @@ class ArchCodeApp(App):
         except Exception:
             pass
 
-    def _show_completion(self, candidates: list[tuple[str, str]]) -> None:
+    def _show_completion(self, candidates: list[CommandCompletion]) -> None:
         self._completion_candidates = candidates
         self._completion_selected = 0
         popup = self._completion_popup()
@@ -451,28 +459,19 @@ class ArchCodeApp(App):
         """Called by ChatInput before Enter submits; returns True when it consumed Enter."""
         if not self._completion_candidates:
             return False
-        name, _ = self._completion_candidates[self._completion_selected]
-        input_widget.text = f"/{name} "
+        candidate = self._completion_candidates[self._completion_selected]
+        input_widget.text = f"/{candidate.name} "
         self._hide_completion()
         return True
 
     def on_chat_input_completion_requested(
         self, event: ChatInput.CompletionRequested
     ) -> None:
-        raw = event.text.strip()
-        if not raw.startswith("/") or any(char.isspace() for char in raw[1:]):
-            self._hide_completion()
-            return
-        prefix = raw[1:].lower()
-        candidates = [
-            (spec.name, spec.description)
-            for spec in self._command_registry.visible_commands()
-            if spec.name.startswith(prefix)
-        ]
+        candidates = complete_commands(self._command_registry, event.text)
         if not candidates:
             self._hide_completion()
         elif len(candidates) == 1:
-            self._input().text = f"/{candidates[0][0]} "
+            self._input().text = f"/{candidates[0].name} "
             self._hide_completion()
         else:
             self._show_completion(candidates)
