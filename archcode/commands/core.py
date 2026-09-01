@@ -18,6 +18,9 @@ class CommandUI(Protocol):
     def show_system(self, text: str) -> None:
         """Render a local system result without adding a conversation Message."""
 
+    def show_error(self, text: str) -> None:
+        """Render a local command failure without ending the input queue."""
+
     def status_text(self) -> str:
         """Return a local diagnostic summary."""
 
@@ -93,16 +96,9 @@ def parse_command(text: str) -> ParsedCommand:
     if not body:
         return ParsedCommand(is_command=True)
 
-    name, separator, raw_args = body.partition(" ")
-    if not separator:
-        # Support tabs and other whitespace without altering the argument text.
-        parts = body.split(maxsplit=1)
-        if len(parts) == 2:
-            name, raw_args = parts
-        else:
-            name, raw_args = parts[0], ""
-    else:
-        raw_args = raw_args.lstrip()
+    parts = body.split(None, 1)
+    name = parts[0]
+    raw_args = parts[1] if len(parts) == 2 else ""
     return ParsedCommand(is_command=True, name=name.lower(), raw_args=raw_args)
 
 
@@ -171,18 +167,21 @@ class CommandDispatcher:
             ui.show_system(spec.argument_hint)
             return True
 
-        await spec.handler(
-            CommandContext(
-                raw_args=parsed.raw_args,
-                ui=ui,
-                registry=self._registry,
-                agent=agent,
-                conversation=conversation,
-                session=session,
-                session_manager=session_manager,
-                memory_manager=memory_manager,
+        try:
+            await spec.handler(
+                CommandContext(
+                    raw_args=parsed.raw_args,
+                    ui=ui,
+                    registry=self._registry,
+                    agent=agent,
+                    conversation=conversation,
+                    session=session,
+                    session_manager=session_manager,
+                    memory_manager=memory_manager,
+                )
             )
-        )
+        except Exception as exc:
+            ui.show_error(f"命令执行失败: {type(exc).__name__}: {exc}")
         return True
 
     def _format_help(self) -> str:

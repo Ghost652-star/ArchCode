@@ -117,19 +117,6 @@ class ChatInput(TextArea):
             super().__init__()
             self.text = text
 
-    class CompletionRequested(TMessage):
-        def __init__(self, text: str) -> None:
-            super().__init__()
-            self.text = text
-
-    class CompletionMoved(TMessage):
-        def __init__(self, delta: int) -> None:
-            super().__init__()
-            self.delta = delta
-
-    class CompletionClosed(TMessage):
-        pass
-
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self.cursor_blink = False
@@ -146,16 +133,29 @@ class ChatInput(TextArea):
         self.insert("\n")
 
     def action_complete(self) -> None:
-        self.post_message(self.CompletionRequested(self.text))
+        if getattr(self.app, "accept_unique_completion_if_visible", lambda _input: False)(self):
+            return
+        getattr(self.app, "refresh_command_completion", lambda _text, **_kwargs: None)(
+            self.text, accept_single=True
+        )
 
     def action_completion_up(self) -> None:
-        self.post_message(self.CompletionMoved(-1))
+        if not getattr(self.app, "move_completion", lambda _delta: False)(-1):
+            self.action_cursor_up()
 
     def action_completion_down(self) -> None:
-        self.post_message(self.CompletionMoved(1))
+        if not getattr(self.app, "move_completion", lambda _delta: False)(1):
+            self.action_cursor_down()
 
     def action_completion_close(self) -> None:
-        self.post_message(self.CompletionClosed())
+        if not getattr(self.app, "dismiss_completion", lambda: False)():
+            getattr(self.app, "action_abort_run", lambda: None)()
+
+    def on_text_area_changed(self, _: TextArea.Changed) -> None:
+        """Update the Slash menu while typing; this never executes a command."""
+        getattr(self.app, "refresh_command_completion", lambda _text, **_kwargs: None)(
+            self.text, accept_single=False
+        )
 
 
 class CommandCompletionPopup(Static):
@@ -170,6 +170,9 @@ class CommandCompletionPopup(Static):
             for index, candidate in enumerate(candidates)
         ]
         self.update("\n".join(lines))
+
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__("", markup=False, **kwargs)
 
 
 class ArchCodeApp(App):
@@ -460,36 +463,47 @@ class ArchCodeApp(App):
         if not self._completion_candidates:
             return False
         candidate = self._completion_candidates[self._completion_selected]
+        if input_widget.text.strip().lower() == f"/{candidate.name}":
+            return False
         input_widget.text = f"/{candidate.name} "
         self._hide_completion()
         return True
 
-    def on_chat_input_completion_requested(
-        self, event: ChatInput.CompletionRequested
-    ) -> None:
-        candidates = complete_commands(self._command_registry, event.text)
+    def accept_unique_completion_if_visible(self, input_widget: ChatInput) -> bool:
+        """Let Tab fill only an unambiguous command; Enter confirms list choices."""
+        if len(self._completion_candidates) != 1:
+            return False
+        return self.accept_completion_if_visible(input_widget)
+
+    def refresh_command_completion(self, text: str, *, accept_single: bool) -> None:
+        """Refresh the local candidate panel without adding work to the input FIFO."""
+        candidates = complete_commands(self._command_registry, text)
         if not candidates:
             self._hide_completion()
-        elif len(candidates) == 1:
+        elif len(candidates) == 1 and accept_single:
             self._input().text = f"/{candidates[0].name} "
             self._hide_completion()
         else:
             self._show_completion(candidates)
 
-    def on_chat_input_completion_moved(
-        self, event: ChatInput.CompletionMoved
-    ) -> None:
+    def move_completion(self, delta: int) -> bool:
+        """Move the completion cursor, returning False when no menu is active."""
         if not self._completion_candidates:
-            return
+            return False
         self._completion_selected = (
-            self._completion_selected + event.delta
+            self._completion_selected + delta
         ) % len(self._completion_candidates)
         self._completion_popup().render_candidates(
             self._completion_candidates, self._completion_selected
         )
+        return True
 
-    def on_chat_input_completion_closed(self, _: ChatInput.CompletionClosed) -> None:
+    def dismiss_completion(self) -> bool:
+        """Close an active menu; return False so Esc can retain its abort role."""
+        if not self._completion_candidates:
+            return False
         self._hide_completion()
+        return True
 
     def _set_input_enabled(self, enabled: bool) -> None:
         self._input().disabled = not enabled
@@ -532,6 +546,10 @@ class ArchCodeApp(App):
 
     def _show_error(self, text: str) -> None:
         self._append_message(Static(text, classes="error-msg"))
+
+    def show_error(self, text: str) -> None:
+        """CommandUI implementation: report a failure but leave the queue alive."""
+        self._show_error(text)
 
     def _show_compact_progress(self, mode: str, chars: int) -> None:
         """挂载 / 更新压缩进度 widget(MewCode 风格的 loading row)。
