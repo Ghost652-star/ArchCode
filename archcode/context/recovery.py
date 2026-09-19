@@ -32,9 +32,18 @@ class FileReadRecord:
 
 @dataclass
 class SkillInvocationRecord:
+    """一次 Skill 激活的恢复记录(skills-design.md 5.5)。
+
+    inline / fork 统一记录渲染后 prompt;mode / child_task_id 区分执行方式,
+    压缩后 recovery attachment 据此恢复「当时真实发生了什么」。
+    """
+
     name: str
     body: str
     timestamp: float
+    mode: str = "inline"  # "inline" | "fork"
+    child_task_id: str | None = None
+    template_hash: str | None = None
 
 
 class RecoveryState:
@@ -62,18 +71,28 @@ class RecoveryState:
                 timestamp=time.time(),
             )
 
-    def record_skill_invocation(self, name: str, body: str) -> None:
-        """记录一次 skill 激活。ArchCode 当前无调用方,接口预留。
+    def record_skill_invocation(
+        self,
+        name: str,
+        body: str,
+        *,
+        mode: str = "inline",
+        child_task_id: str | None = None,
+        template_hash: str | None = None,
+    ) -> None:
+        """记录一次 skill 激活(SkillExecutor 的激活事务调用,见 0.2 伪代码)。
 
-        TODO(skills):由 SkillExecutor 的 inline / fork 执行路径调用。``body``
-        应为参数替换后的实际指令；SkillInvocationRecord 后续应扩展执行模式与
-        可选 child task / conversation id，避免压缩后只知道模板而不知道实际目标。
+        ``body`` 是参数替换后的实际渲染 prompt(inline / fork 统一,不记模板);
+        mode / child_task_id 区分执行方式,供压缩后恢复工作现场。
         """
         with self._lock:
             self._skills[name] = SkillInvocationRecord(
                 name=name,
                 body=body,
                 timestamp=time.time(),
+                mode=mode,
+                child_task_id=child_task_id,
+                template_hash=template_hash,
             )
 
     # ── 读取 ────────────────────────────────────────────────────────

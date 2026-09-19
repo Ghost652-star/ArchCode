@@ -19,8 +19,31 @@ from archcode.memory import (
 from archcode.permissions import PermissionChecker, PermissionMode, PathSandbox
 from archcode.paths import project_data_dir
 from archcode.prompts import build_system_prompt
+from archcode.skills import SkillExecutor, SkillLoader
 from archcode.tools import create_default_registry
 from archcode.tools.tool_search import ToolSearchTool
+
+
+def _wire_skills(agent: Agent, tool_registry, work_dir: Path) -> SkillExecutor:
+    """创建 SkillLoader / SkillExecutor 并接线(skills-design.md 7)。
+
+    - loader 扫描三层目录,诊断打 stderr(遮蔽/解析失败);
+    - LoadSkill 工具经 set_executor 接线(注册发生在 create_default_registry);
+    - agent._skill_loader 供 Task 边界刷新 catalog。
+    """
+    loader = SkillLoader(work_dir=work_dir)
+    executor = SkillExecutor(
+        agent=agent,
+        loader=loader,
+        recovery=getattr(agent, "_recovery_state", None),
+    )
+    agent._skill_loader = loader
+    tool = tool_registry.get("LoadSkill")
+    if tool is not None and hasattr(tool, "set_executor"):
+        tool.set_executor(executor)
+    for diagnostic in loader.diagnostics:
+        print(diagnostic, file=sys.stderr)
+    return executor
 
 
 async def _build_runtime(config, work_dir, protocol):
@@ -140,6 +163,7 @@ def main() -> None:
                 for err in mcp_errors:
                     print(f"[MCP] ✗ {err}", file=sys.stderr)
                 agent = _build_agent_sync(config, work_dir, tool_registry)
+                _wire_skills(agent, tool_registry, work_dir)
                 await _run_prompt(agent, args.p, mcp_manager, work_dir)
 
             asyncio.run(_oneshot())
@@ -157,11 +181,13 @@ def main() -> None:
             )
 
             agent = _build_agent_sync(config, work_dir, tool_registry)
+            skill_executor = _wire_skills(agent, tool_registry, work_dir)
 
             app = ArchCodeApp(
                 agent=agent,
                 model_name=provider.model,
                 driver_class=NoAltScreenDriver,
+                skill_executor=skill_executor,
             )
             # 把 mcp_servers 配置传给 app,它在 on_mount 里 background task 启动
             app._mcp_server_configs = config.mcp_servers

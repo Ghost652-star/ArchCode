@@ -27,6 +27,7 @@ class ConversationManager:
     _memory_context_versions: tuple[int, int] | None = field(
         default=None, init=False, repr=False
     )
+    _active_skills_message: Message | None = field(default=None, init=False, repr=False)
 
     def bind_session(self, session: "Session") -> None:
         """绑定会话后，普通对话消息先写盘再进入内存。"""
@@ -153,12 +154,65 @@ class ConversationManager:
             ]
         self._memory_context_message = None
 
+    def refresh_active_skills_pin(self, sops: dict[str, str]) -> bool:
+        """按激活集合更新非持久化的 <active-skills> 钉住消息(skills-design.md 5.2)。
+
+        事件式重钉:激活/卸载/任务边界/压缩后由 Agent 调用;两次事件之间内容
+        字节稳定(cache 前缀不破坏)。sops 为空 → 摘除钉住消息。
+        返回是否有变更。
+        """
+        if not sops:
+            return self._remove_active_skills_pin()
+
+        parts = [
+            f"### Skill: {name}\n\n{sop.strip()}" for name, sop in sops.items()
+        ]
+        content = (
+            "<active-skills>\n"
+            "以下是当前激活 Skill 的执行说明(SOP),在整个任务期间持续生效:\n\n"
+            + "\n\n".join(parts)
+            + "\n</active-skills>"
+        )
+        if (
+            self._active_skills_message is not None
+            and self._active_skills_message in self.history
+            and self._active_skills_message.content == content
+        ):
+            return False
+
+        self._remove_active_skills_pin()
+        message = Message(role="user", content=content)
+        self.history.insert(self._active_skills_insert_index(), message)
+        self._active_skills_message = message
+        return True
+
+    def _remove_active_skills_pin(self) -> bool:
+        if self._active_skills_message is not None:
+            self.history = [
+                message
+                for message in self.history
+                if message is not self._active_skills_message
+            ]
+            self._active_skills_message = None
+            return True
+        return False
+
+    def _active_skills_insert_index(self) -> int:
+        """固定槽位:插在 memory-context 之后(若在),否则最顶——防顺序漂移。"""
+        if self._memory_context_message is not None:
+            try:
+                return self.history.index(self._memory_context_message) + 1
+            except ValueError:
+                pass
+        return 0
+
     def clear(self) -> None:
         self.history.clear()
         self.baseline_tokens = 0
         self.anchor_count = 0
         self._memory_context_message = None
         self._memory_context_versions = None
+        self._active_skills_message = None
 
     def reset_usage_anchor(self) -> None:
         self.baseline_tokens = 0
@@ -188,6 +242,7 @@ class ConversationManager:
         self.anchor_count = 0
         self._memory_context_message = None
         self._memory_context_versions = None
+        self._active_skills_message = None
 
     def record_usage_anchor(
         self,

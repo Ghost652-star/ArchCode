@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import random
+import sys
 import time
 from collections import deque
 from pathlib import Path
@@ -37,7 +38,7 @@ from archcode.commands import (
     CommandRegistry,
     complete_commands,
 )
-from archcode.commands.handlers import built_in_command_specs
+from archcode.commands.handlers import built_in_command_specs, create_skill_command
 from archcode.memory import SessionManager, format_instruction_diagnostics
 from archcode.permissions import PermissionMode
 from archcode.permission_modal import PermissionModal
@@ -196,14 +197,26 @@ class ArchCodeApp(App):
         model_name: str,
         *,
         driver_class: type | None = None,
+        skill_executor=None,
     ) -> None:
         super().__init__(driver_class=driver_class)
         self._agent = agent
         self._model_name = model_name
+        self._skill_executor = skill_executor
         self._conversation = ConversationManager()
         self._command_registry = CommandRegistry()
         for command in built_in_command_specs():
             self._command_registry.register(command)
+        if skill_executor is not None:
+            # 静态注册:单文件阶段全部 Skill 启动即发现(skills-design.md 7);
+            # 闭包工厂(§4)——禁止循环内直接 def handler;重名拒绝并诊断(§3)
+            for name, manifest in sorted(skill_executor.loader.manifests().items()):
+                try:
+                    self._command_registry.register(
+                        create_skill_command(skill_executor, name, manifest.description)
+                    )
+                except ValueError as exc:
+                    print(f"[skills] {exc}", file=sys.stderr)
         self._command_dispatcher = CommandDispatcher(self._command_registry)
         self._completion_candidates: list[CommandCompletion] = []
         self._completion_selected = 0
@@ -768,6 +781,7 @@ class ArchCodeApp(App):
             session=self._session,
             session_manager=self._session_manager,
             memory_manager=getattr(self._agent, "memory_manager", None),
+            skill_executor=self._skill_executor,
         )
         if handled:
             return
@@ -791,6 +805,9 @@ class ArchCodeApp(App):
 
     async def clear_to_new_session(self) -> None:
         """CommandUI implementation: preserve old session and switch atomically."""
+        # 0.4 对齐:Agent 实例存活、active_skills 字典不会自动清——必须显式清,
+        # 否则新对话会被 refresh 用旧 SOP 重钉污染(钉住消息不落盘,极难排查)
+        self._agent.clear_active_skills()
         if self._session_manager is None:
             self._conversation.clear()
             self._chat().remove_children()
@@ -821,6 +838,8 @@ class ArchCodeApp(App):
         old_session = self._session
         self._session = restored.session
         self._conversation = restored.conversation
+        # 0.4:激活状态不持久化——恢复会话后激活集合从零开始
+        self._agent.clear_active_skills()
         if old_session is not None:
             old_session.close()
         self._chat().remove_children()

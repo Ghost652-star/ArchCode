@@ -357,6 +357,11 @@ class Agent:
         if plan_mode:
             self.set_plan_mode(True)
 
+        # ── Skills 子系统(skills-design.md 5.2) ─────────────
+        self.active_skills: dict[str, str] = {}      # name → 渲染后 SOP(激活集合)
+        self._skill_loader = None                    # SkillLoader,启动接线时设置
+        self._current_conversation: ConversationManager | None = None
+
         # ── 压缩子系统(可选) ───────────────────────────────
         # 当 compression is None 或 enabled=False 时,所有 hook 都不执行,
         # Agent 行为退化为「原样发请求」。
@@ -420,7 +425,12 @@ class Agent:
         return plans_dir / f"{slug}.md"
 
     def _tool_schemas(self) -> list[dict[str, Any]] | None:
-        """根据 client protocol 返回对应格式的工具 schema 列表。"""
+        """根据 client protocol 返回对应格式的工具 schema 列表。
+
+        有激活 Skill 声明 allowedTools 时做 schema 收窄(建议性层,0.6):
+        集合外工具对模型不可见;强制力由 _execute_tool 的守卫保证。
+        系统工具(LoadSkill 等)豁免,始终可见。
+        """
         if self._tool_registry is None:
             return None
         protocol = self._client.protocol
@@ -428,7 +438,30 @@ class Agent:
             schemas = build_openai_tools(self._tool_registry.list_tools())
         else:
             schemas = build_anthropic_tools(self._tool_registry.list_tools())
+        effective = self._effective_allowed_tools()
+        if effective is not None and schemas:
+            schemas = [
+                s
+                for s in schemas
+                if s.get("name") in effective
+                or getattr(
+                    self._tool_registry.get(s.get("name", "")), "is_system_tool", False
+                )
+            ]
         return schemas or None
+
+    def _effective_allowed_tools(self) -> set[str] | None:
+        """激活 Skill 声明的 allowedTools 交集(0.6);全部未声明 → None(不收窄)。"""
+        if self._skill_loader is None or not self.active_skills:
+            return None
+        declared: list[set[str]] = []
+        for name in self.active_skills:
+            manifest = self._skill_loader.get(name)
+            if manifest is not None and manifest.allowed_tools:
+                declared.append(set(manifest.allowed_tools))
+        if not declared:
+            return None
+        return set.intersection(*declared)
 
     def _refresh_project_instructions(self) -> tuple[InstructionDiagnostic, ...]:
         """在一个新用户任务开始前冻结该任务使用的稳定指令前缀。"""
@@ -461,6 +494,62 @@ class Agent:
             context.user_revision,
             context.project_revision,
         )
+
+    # ── Skills 子系统(skills-design.md 0.2 / 0.6 / 5.2) ─────────
+
+    def _refresh_skill_catalog(self) -> None:
+        """Task 边界刷新 system prompt 中的 Skill 目录 section(0.2)。
+
+        在 _refresh_project_instructions 之后调用:指令重建会重置 system
+        prompt,目录随后重新追加。目录内容未变时 block 已在 prompt 中,
+        直接返回——不产生任何字节变化(cache 前缀稳定)。
+        """
+        if self._skill_loader is None:
+            return
+        catalog = self._skill_loader.get_catalog_text()
+        block = f"<skill-catalog>\n{catalog}\n</skill-catalog>" if catalog else ""
+        prompt = self._system_prompt
+        if block and block in prompt:
+            return
+        start = prompt.find("<skill-catalog>")
+        if start != -1:
+            end = prompt.find("</skill-catalog>", start)
+            if end != -1:
+                prompt = (
+                    prompt[:start] + prompt[end + len("</skill-catalog>") :]
+                ).strip()
+        if block:
+            prompt = f"{prompt}\n\n{block}" if prompt else block
+        self._system_prompt = prompt
+
+    def refresh_active_skills_pin(self, conversation: ConversationManager) -> bool:
+        """任务边界/压缩后重钉 <active-skills> 消息(事件式重钉的例行刷新点)。"""
+        return conversation.refresh_active_skills_pin(self.active_skills)
+
+    def activate_skill(
+        self,
+        name: str,
+        rendered: str,
+        conversation: ConversationManager | None = None,
+    ) -> None:
+        """写入激活集合并事件式重钉。conversation 缺省用当前会话。"""
+        self.active_skills[name] = rendered
+        conv = conversation or self._current_conversation
+        if conv is not None:
+            conv.refresh_active_skills_pin(self.active_skills)
+
+    def clear_active_skills(
+        self, conversation: ConversationManager | None = None
+    ) -> None:
+        """/clear 与 resume 的对齐点(0.4):清空激活集合并摘除钉住消息;
+        目录型 Skill 的专属工具按所有权一并注销(0.5)。"""
+        if self._tool_registry is not None:
+            for name in list(self.active_skills):
+                self._tool_registry.unregister_owner(f"skill:{name}")
+        self.active_skills.clear()
+        conv = conversation or self._current_conversation
+        if conv is not None:
+            conv.refresh_active_skills_pin(self.active_skills)
 
     def _schedule_memory_extraction(self, conversation: ConversationManager) -> None:
         """最终回复后后台提取记忆，绝不阻塞用户拿到结果。"""
@@ -508,13 +597,46 @@ class Agent:
             )
             return
 
-        # ── 权限判定：5 层检查
-        if self._permission_checker is not None:
-            decision = self._permission_checker.check(
-                tool_name=tc.tool_name,
-                category=getattr(tool, "category", "read"),
-                arguments=tc.arguments,
+        # ── Skill 工具边界守卫(0.6 执行层强制):激活 Skill 声明了 allowedTools 时,
+        # 集合外的工具直接拒绝(系统工具豁免)。守卫排在权限之前——边界属于能力可见性。
+        effective = self._effective_allowed_tools()
+        if (
+            effective is not None
+            and tc.tool_name not in effective
+            and not getattr(tool, "is_system_tool", False)
+        ):
+            yield (
+                ToolResult(
+                    output=(
+                        f"Error: '{tc.tool_name}' 不在当前激活 Skill 的工具边界内"
+                        f"(边界: {', '.join(sorted(effective))})"
+                    ),
+                    is_error=True,
+                ),
+                time.monotonic() - start,
+                False,
             )
+            return
+
+        # ── 权限判定：5 层检查;Skill 专属工具走专用路径(0.5)
+        if self._permission_checker is not None:
+            if getattr(tool, "is_skill_tool", False):
+                if self._permission_checker.mode == PermissionMode.PLAN:
+                    decision = Decision(
+                        effect="ask",
+                        reason="Skill 专属工具在 Plan 模式下需要确认(保持只读契约)",
+                    )
+                else:
+                    decision = Decision(
+                        effect="allow",
+                        reason="Skill 专属工具(激活该 Skill 即已同意)",
+                    )
+            else:
+                decision = self._permission_checker.check(
+                    tool_name=tc.tool_name,
+                    category=getattr(tool, "category", "read"),
+                    arguments=tc.arguments,
+                )
             if decision.effect == "deny":
                 yield (
                     ToolResult(
@@ -601,7 +723,8 @@ class Agent:
 
         File reads are recorded only for ``category == "read"`` tools (matches the
         safety model: Bash / Write don't get recorded as context to recover).
-        Skill invocations are a no-op until ``skills/`` ships its loader.
+        Skill invocations are recorded for ``recovery_kind == "skill"`` tools
+        (LoadSkill), using the rendered prompt from the activation set.
 
         Failures (network, validation) are NOT recorded — the recovery attachment
         only shows what the model successfully saw.
@@ -615,10 +738,14 @@ class Agent:
         args = tc.arguments or {}
         if category == "read" and isinstance(args.get("path"), str):
             self._recovery_state.record_file_read(args["path"], result.output)
-        # TODO(skills):SkillExecutor 上线后，不要只在 Tool 执行尾部猜测 skill。
-        # inline / fork 两条执行路径都必须在“Skill 已实际激活”后调用
-        # RecoveryState.record_skill_invocation()；记录渲染后的 prompt、执行模式，
-        # fork 时还应记录 child task / conversation 标识，供压缩后恢复工作现场。
+        recovery_kind = getattr(tool_def, "recovery_kind", None)
+        recovery_key = getattr(tool_def, "recovery_key_arg", None)
+        if recovery_kind == "skill" and isinstance(args.get(recovery_key or ""), str):
+            skill_name = args[recovery_key]
+            rendered = self.active_skills.get(skill_name) or result.output
+            self._recovery_state.record_skill_invocation(
+                skill_name, rendered, mode="inline"
+            )
 
     @staticmethod
     def _truncate_tool_result(result: ToolResult) -> ToolResult:
@@ -713,6 +840,10 @@ class Agent:
             yield InstructionDiagnosticsEvent(diagnostics=instruction_diagnostics)
 
         self.refresh_memory_context(conversation)
+        # Skills:保存当前会话引用(供工具触达重钉)+ Task 边界刷新目录与钉住消息
+        self._current_conversation = conversation
+        self._refresh_skill_catalog()
+        self.refresh_active_skills_pin(conversation)
         conversation.add_user(user_input)
 
         iteration = 0
@@ -853,6 +984,7 @@ class Agent:
                             pass
                         elif isinstance(event, CompactEvent):
                             self.refresh_memory_context(conversation)
+                            self.refresh_active_skills_pin(conversation)
                             snippet = event.summary[:200].replace("\n", " ")
                             yield CompactFinished(
                                 success=True,
@@ -947,6 +1079,7 @@ class Agent:
                                 )
                         if isinstance(compact_event, CompactEvent):
                             self.refresh_memory_context(conversation)
+                            self.refresh_active_skills_pin(conversation)
                             snippet = compact_event.summary[:200].replace("\n", " ")
                             if force_started_flag:
                                 yield CompactFinished(

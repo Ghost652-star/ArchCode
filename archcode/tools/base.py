@@ -41,6 +41,9 @@ class Tool(ABC):
     - is_concurrency_safe:能否并发执行,默认 False
     - is_system_tool:是否系统级基础设施,默认 False(v0.2 不消费,留给 v0.3+)
     - should_defer:是否延迟加载,默认 False(MCP 工具设为 True)
+    - recovery_kind / recovery_key_arg:recovery 附件分类标记(18.7),
+      "file" → record_file_read(args[key])、"skill" → record_skill_invocation(args[key]);
+      None → 不参与 recovery 登记
     """
 
     name: str
@@ -50,6 +53,8 @@ class Tool(ABC):
     is_concurrency_safe: bool = False
     is_system_tool: bool = False  # v0.2 保留,框架暂不消费
     should_defer: bool = False  # MCP 工具延迟加载标记
+    recovery_kind: str | None = None  # "file" | "skill" | None——recovery 附件分类标记
+    recovery_key_arg: str | None = None  # 从 arguments 里取哪个字段作为 recovery 记录键
 
     @property
     def is_read_only(self) -> bool:

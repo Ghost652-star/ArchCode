@@ -46,11 +46,14 @@ __all__ = [
 
 
 def create_default_registry(work_dir) -> ToolRegistry:
-    """创建默认工具注册中心,包含 7 个基础工具。
+    """创建默认工具注册中心,包含基础工具 + LoadSkill。
 
     Args:
         work_dir: 工作目录(传给文件类工具用于路径解析,Bash 用作 subprocess cwd)。
     """
+    # 局部导入:skills.tools 依赖本包的 base,顶层导入会循环
+    from archcode.skills.tools import LoadSkillTool
+
     registry = ToolRegistry()
     registry.register(ReadFile(work_dir=work_dir))
     registry.register(WriteFile(work_dir=work_dir))
@@ -59,4 +62,6 @@ def create_default_registry(work_dir) -> ToolRegistry:
     registry.register(Glob(work_dir=work_dir))
     registry.register(Grep(work_dir=work_dir))
     registry.register(AskUserQuestion())
+    # LoadSkill 的 executor 由 __main__/app 在 Agent 创建后经 set_executor 接线
+    registry.register(LoadSkillTool())
     return registry

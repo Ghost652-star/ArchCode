@@ -64,6 +64,7 @@ class CommandContext:
     session: Any = None
     session_manager: Any = None
     memory_manager: Any = None
+    skill_executor: Any = None
 
 
 CommandHandler = Callable[[CommandContext], Awaitable[None]]
@@ -151,6 +152,7 @@ class CommandDispatcher:
         session: Any = None,
         session_manager: Any = None,
         memory_manager: Any = None,
+        skill_executor: Any = None,
     ) -> bool:
         parsed = parse_command(text)
         if not parsed.is_command:
@@ -178,6 +180,7 @@ class CommandDispatcher:
                     session=session,
                     session_manager=session_manager,
                     memory_manager=memory_manager,
+                    skill_executor=skill_executor,
                 )
             )
         except Exception as exc:

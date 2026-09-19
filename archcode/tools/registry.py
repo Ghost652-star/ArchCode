@@ -25,10 +25,39 @@ class ToolRegistry:
         self._tools: dict[str, Tool] = {}
         self._disabled: set[str] = set()
         self._discovered: set[str] = set()
+        self._owners: dict[str, str] = {}  # tool_name → owner(skills-design.md 0.5)
 
-    def register(self, tool: Tool) -> None:
-        """注册一个 Tool 实例。同名工具会被覆盖。"""
+    def register(self, tool: Tool, owner: str | None = None) -> None:
+        """注册一个 Tool 实例。同名工具会被覆盖。
+
+        owner(可选):所有权标记(如 "skill:interview"),用于
+        unregister_owner 整体注销与重名冲突诊断(skills-design.md 0.5)。
+        """
         self._tools[tool.name] = tool
+        self._owners.pop(tool.name, None)  # 覆盖时清掉旧所有权
+        if owner is not None:
+            self._owners[tool.name] = owner
+
+    def owner_of(self, name: str) -> str | None:
+        """返回工具的注册所有者;未登记返回 None。"""
+        return self._owners.get(name)
+
+    def unregister(self, name: str) -> bool:
+        """注销一个工具(所有权治理用)。返回是否确实移除了。"""
+        if name in self._tools:
+            del self._tools[name]
+            self._disabled.discard(name)
+            self._discovered.discard(name)
+            self._owners.pop(name, None)
+            return True
+        return False
+
+    def unregister_owner(self, owner: str) -> list[str]:
+        """注销某个 owner 注册的所有工具,返回被移除的名字列表。"""
+        names = [n for n, o in self._owners.items() if o == owner]
+        for name in names:
+            self.unregister(name)
+        return names
 
     def get(self, name: str) -> Tool | None:
         """按名字取 Tool 实例。未注册返回 None。"""

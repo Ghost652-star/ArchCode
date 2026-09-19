@@ -164,6 +164,87 @@ async def handle_memory(context: CommandContext) -> None:
     )
 
 
+def create_skill_command(executor, skill_name: str, description: str) -> CommandSpec:
+    """为已发现的 Skill 创建同名 Slash 命令(skills-design.md §4 闭包工厂)。
+
+    禁止在循环体内直接 def handler——闭包捕获陷阱;工厂每次调用开新作用域。
+    语义为 PROMPT 型:本地激活 Skill,再把用户参数作为任务文本交给 Agent。
+    """
+
+    async def handle_skill_command(context: CommandContext) -> None:
+        message = executor.activate(
+            skill_name, context.raw_args, conversation=context.conversation
+        )
+        if message.startswith("Error"):
+            context.ui.show_system(message)
+            return
+        context.ui.show_system(message)
+        trigger = context.raw_args.strip() or skill_name
+        await context.ui.run_agent_task(trigger)
+
+    return CommandSpec(
+        name=skill_name,
+        description=f"[skill] {description}",
+        usage=f"/{skill_name} [参数]",
+        handler=handle_skill_command,
+    )
+
+
+async def handle_skill(context: CommandContext) -> None:
+    """管理入口:/skill list | info <name> | reload(skills-design.md 0.4)。"""
+    executor = context.skill_executor
+    if executor is None:
+        context.ui.show_system("当前运行未启用 Skills。")
+        return
+    parts = context.raw_args.split(maxsplit=1)
+    sub = parts[0].lower() if parts else "list"
+
+    if sub == "list":
+        manifests = executor.loader.manifests()
+        if not manifests:
+            context.ui.show_system(
+                "未发现任何 Skill。检查三层目录:\n"
+                "  <work_dir>/.archcode/skills/\n"
+                "  <源码根>/.archcode/skills/\n"
+                "  archcode/skills/builtin/"
+            )
+            return
+        lines = ["已发现的 Skill:"]
+        for name, manifest in sorted(manifests.items()):
+            lines.append(
+                f"  {name}  [{manifest.source}]  {manifest.description}"
+            )
+        context.ui.show_system("\n".join(lines))
+        return
+
+    if sub == "info":
+        if len(parts) != 2:
+            context.ui.show_system("用法:/skill info <name>")
+            return
+        name = parts[1].strip().lower()
+        manifest = executor.loader.get(name)
+        if manifest is None:
+            context.ui.show_system(f"未找到 skill: {name}")
+            return
+        context.ui.show_system(
+            f"name: {manifest.name}\n"
+            f"source: {manifest.source}\n"
+            f"path: {manifest.path}\n"
+            f"checksum: {manifest.checksum[:16]}…\n"
+            f"description: {manifest.description}"
+        )
+        return
+
+    if sub == "reload":
+        executor.loader.scan()
+        context.ui.show_system(
+            "已重新扫描 Skill 目录。目录变更将在下一个任务生效(命令集不变)。"
+        )
+        return
+
+    context.ui.show_system("用法:/skill [list|info <name>|reload]")
+
+
 def built_in_command_specs() -> list[CommandSpec]:
     """Return the startup registry for commands implemented in this scope."""
 
@@ -176,5 +257,6 @@ def built_in_command_specs() -> list[CommandSpec]:
         CommandSpec("permission", "查看或切换权限模式。", "/permission [mode <模式>]", handle_permission),
         CommandSpec("session", "管理持久化会话。", "/session [子命令]", handle_session),
         CommandSpec("memory", "查看和管理长期记忆。", "/memory [子命令]", handle_memory),
+        CommandSpec("skill", "查看和管理 Skill。", "/skill [list|info <name>|reload]", handle_skill),
         CommandSpec("review", "审查当前代码变更。", "/review [额外关注点]", handle_review),
     ]

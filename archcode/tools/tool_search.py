@@ -39,6 +39,7 @@ class ToolSearchTool(Tool):
     category = "read"
     should_defer = False  # 自身始终可见
     is_concurrency_safe = True
+    is_system_tool = True  # 系统工具:豁免 allowedTools 边界(0.6),始终可见/可调
 
     def __init__(self, registry: Any, protocol: str = "anthropic") -> None:
         super().__init__()
