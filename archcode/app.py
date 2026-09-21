@@ -298,6 +298,17 @@ class ArchCodeApp(App):
         t.append(work_label, style="color(242)")
         return t
 
+    def _fire_session_hook(self, event: str, reason: str) -> None:
+        """触发 session_start / session_end hook(hooks-design §3,app 层挂载)。
+
+        fire-and-forget:创建 task 后不等待(app 生命周期回调里不能 block)。
+        """
+        engine = getattr(self._agent, "_hook_engine", None)
+        if engine is None:
+            return
+        ctx = self._agent._build_hook_context(event, "", {}, message=reason)
+        asyncio.ensure_future(engine.observe(event, ctx))
+
     async def on_mount(self) -> None:
         """App 挂载后:在 TUI 的 event loop 里 background task 启动 MCP。
 
@@ -305,6 +316,7 @@ class ArchCodeApp(App):
         的 task group 跨 event loop,会死锁。这里用 create_task 让 MCP
         跟 TUI 同一个 loop。
         """
+        self._fire_session_hook("session_start", "startup")
         if self._mcp_server_configs:
             self._mcp_init_task = asyncio.create_task(self._init_mcp())
 
@@ -349,6 +361,7 @@ class ArchCodeApp(App):
 
     async def on_unmount(self) -> None:
         """App 退出:关 MCP manager。"""
+        self._fire_session_hook("session_end", "exit")
         if self._session is not None:
             self._session.close()
         if self._mcp_manager is not None:
@@ -825,6 +838,7 @@ class ArchCodeApp(App):
         self._chat().remove_children()
         self._sync_ctx_tokens_from_conversation()
         self._show_system(f"已新建会话：{new_session.session_id}")
+        self._fire_session_hook("session_start", "clear")
 
     async def resume_session(self, session_id: str) -> None:
         """CommandUI implementation: replace session, conversation and visible chat together."""
@@ -852,6 +866,7 @@ class ArchCodeApp(App):
             self._show_system(f"[session] {warning}")
         self._sync_ctx_tokens_from_conversation()
         self._show_system(f"已恢复会话：{session_id}")
+        self._fire_session_hook("session_start", "resume")
 
     async def toggle_plan_mode(self, task: str) -> None:
         """CommandUI implementation for the only Plan Mode command."""

@@ -148,6 +148,7 @@ class AppConfig:
     system_prompt: str = ""
     mcp_servers: list[MCPServerConfig] = field(default_factory=list)
     compression: CompressionConfig = field(default_factory=CompressionConfig)
+    hooks: list[dict] = field(default_factory=list)
 
 
 def _parse_provider(raw: dict) -> ProviderConfig:
@@ -190,6 +191,17 @@ def _parse_mcp_server(raw: dict) -> MCPServerConfig:
     )
 
 
+def _parse_hooks(raw) -> list[dict]:
+    """解析 hooks 顶层键:收集原始映射列表(透传,解析/校验归 engine.from_config)。
+
+    仅做最小形态检查:必须是 dict 列表,非 dict 元素丢弃;来源层标记由
+    load_config 在合并时补(hooks-design §1.3)。
+    """
+    if not isinstance(raw, list):
+        return []
+    return [dict(h) for h in raw if isinstance(h, dict)]
+
+
 def _load_file(path: Path) -> AppConfig:
     try:
         raw = yaml.safe_load(path.read_text(encoding="utf-8"))
@@ -199,19 +211,17 @@ def _load_file(path: Path) -> AppConfig:
     if not isinstance(raw, dict):
         raise ConfigError(f"Config root must be a mapping: {path}")
 
-    providers_raw = raw.get("providers")
-    if not providers_raw:
-        raise ConfigError("Config must have at least one provider")
-
-    providers = [_parse_provider(p) for p in providers_raw]
+    providers = [_parse_provider(p) for p in (raw.get("providers") or [])]
     mcp_servers = [_parse_mcp_server(s) for s in raw.get("mcp_servers", [])]
     compression = _parse_compression(raw.get("compression", {}))
+    hooks = _parse_hooks(raw.get("hooks") or [])
 
     return AppConfig(
         providers=providers,
         system_prompt=str(raw.get("system_prompt", "")),
         mcp_servers=mcp_servers,
         compression=compression,
+        hooks=hooks,
     )
 
 
@@ -274,7 +284,9 @@ def load_config(
 ) -> AppConfig:
     """加载配置,按优先级合并:应用 .archcode → 项目 .archcode → local。
 
-    合并策略:destructive(整个 mcp_servers 列表由后加载者覆盖,不按 name 合并)。
+    合并策略:其余键 destructive(整个 mcp_servers / providers 列表由后层覆盖);
+    hooks 例外——按 应用级 → 项目级 → local **追加拼接**(各层 hook 叠加生效,
+    hooks-design §1.3)。
     """
     if path is not None:
         if not path.exists():
@@ -285,18 +297,25 @@ def load_config(
     app_root = (app_data_dir or application_data_dir()).resolve()
     project_data_root = project_data_dir(project_root)
     candidates = [
-        app_root / "config.yaml",
-        project_data_root / "config.yaml",
-        project_data_root / "config.local.yaml",
+        (app_root / "config.yaml", "app"),
+        (project_data_root / "config.yaml", "project"),
+        (project_data_root / "config.local.yaml", "local"),
     ]
 
     merged: AppConfig | None = None
-    for candidate in candidates:
+    for candidate, layer_name in candidates:
         if not candidate.exists():
             continue
         layer = _load_file(candidate)
+        # 标记来源层(定位诊断用,hooks-design §1.3)
+        tagged_hooks: list[dict] = []
+        for h in layer.hooks:
+            nh = dict(h)
+            nh.setdefault("__source__", layer_name)
+            tagged_hooks.append(nh)
         if merged is None:
             merged = layer
+            merged.hooks = tagged_hooks
         else:
             if layer.providers:
                 merged.providers = layer.providers
@@ -306,10 +325,13 @@ def load_config(
                 merged.mcp_servers = layer.mcp_servers
             if layer.compression:
                 merged.compression = layer.compression
+            merged.hooks = merged.hooks + tagged_hooks  # 追加合并,后层排后
 
     if merged is None:
         raise ConfigError(
             "No config found. Copy .archcode/config.yaml.example to "
             ".archcode/config.yaml and set your API key."
         )
+    if not merged.providers:
+        raise ConfigError("Config must have at least one provider across all layers.")
     return merged

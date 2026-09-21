@@ -28,3 +28,12 @@ def project_skills_dir(work_dir: str | Path) -> Path:
 def application_skills_dir() -> Path:
     """用户级 Skill 目录(个人跨项目;本地学习项目,不落 C 盘)。"""
     return application_data_dir() / "skills"
+
+
+def debug_log_path(work_dir: str | Path) -> Path:
+    """项目级调试日志文件(日志最小集,deferred-designs #4)。
+
+    落在 `<work_dir>/.archcode/debug.log`——按路径纪律是项目级数据,绝不进源码根。
+    目录已存在(project_data_dir 会 mkdir),此处只给路径。
+    """
+    return project_data_dir(work_dir) / "debug.log"

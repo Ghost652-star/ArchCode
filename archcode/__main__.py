@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import logging
 import os
 import sys
 from pathlib import Path
@@ -16,12 +17,23 @@ from archcode.memory import (
     SessionManager,
     format_instruction_diagnostics,
 )
+from archcode.hooks import HookEngine
 from archcode.permissions import PermissionChecker, PermissionMode, PathSandbox
-from archcode.paths import project_data_dir
+from archcode.paths import debug_log_path, project_data_dir
 from archcode.prompts import build_system_prompt
 from archcode.skills import SkillExecutor, SkillLoader
 from archcode.tools import create_default_registry
 from archcode.tools.tool_search import ToolSearchTool
+
+
+def _wire_hooks(config, work_dir: Path, agent: Agent) -> None:
+    """创建 HookEngine 并接线(hooks-design §8)。诊断打 stderr。"""
+    engine, diagnostics = HookEngine.from_config(
+        config.hooks, work_dir=work_dir,
+    )
+    agent._hook_engine = engine
+    for diagnostic in diagnostics:
+        print(diagnostic, file=sys.stderr)
 
 
 def _wire_skills(agent: Agent, tool_registry, work_dir: Path) -> SkillExecutor:
@@ -111,6 +123,19 @@ def _build_agent_sync(config, work_dir, tool_registry):
     )
 
 
+def _setup_logging(work_dir: Path) -> None:
+    """日志最小集(deferred-designs #4):INFO 起步,写项目级 debug.log,追加模式。
+
+    存量三处 getLogger(compactor / mcp.client / mcp.manager)与 hooks 引擎自动接入。
+    """
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(name)s %(message)s",
+        filename=str(debug_log_path(work_dir)),
+        filemode="a",
+    )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         prog="archcode",
@@ -142,6 +167,7 @@ def main() -> None:
 
     work_dir = Path(args.work_dir).resolve() if args.work_dir else Path(os.getcwd())
     project_data_dir(work_dir).mkdir(parents=True, exist_ok=True)
+    _setup_logging(work_dir)
 
     try:
         config_path = Path(args.config) if args.config else None
@@ -163,6 +189,7 @@ def main() -> None:
                 for err in mcp_errors:
                     print(f"[MCP] ✗ {err}", file=sys.stderr)
                 agent = _build_agent_sync(config, work_dir, tool_registry)
+                _wire_hooks(config, work_dir, agent)
                 _wire_skills(agent, tool_registry, work_dir)
                 await _run_prompt(agent, args.p, mcp_manager, work_dir)
 
@@ -181,6 +208,7 @@ def main() -> None:
             )
 
             agent = _build_agent_sync(config, work_dir, tool_registry)
+            _wire_hooks(config, work_dir, agent)
             skill_executor = _wire_skills(agent, tool_registry, work_dir)
 
             app = ArchCodeApp(

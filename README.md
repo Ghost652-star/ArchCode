@@ -1,6 +1,6 @@
 # ArchCode
 
-ArchCode 是一个终端 AI 编程助手，基于 Textual 构建 TUI 界面。支持流式对话、对话历史管理、5 层权限系统、HITL 权限弹窗、可插拔工具、计划模式（Plan Mode）、上下文自动压缩，以及通过 MCP 协议接入任意外部工具 server。
+ArchCode 是一个终端 AI 编程助手，基于 Textual 构建 TUI 界面。支持流式对话、对话历史管理、5 层权限系统、HITL 权限弹窗、可插拔工具、计划模式（Plan Mode）、上下文自动压缩、MCP 协议接入任意外部工具 server、项目指令文档（AGENTS.md）、Skill 系统（单文件 + 目录型 + 专属工具 + allowedTools），以及 Hook 系统（事件 + 条件 + 动作的生命周期钩子）。
 
 ## 快速开始
 
@@ -44,6 +44,10 @@ uv run archcode -p "用 Python 写一个快速排序"
 | `/plan` | 进入 Plan 模式（只读工具 + 写计划文件） |
 | `/exit-plan` | 退出 Plan 模式 |
 | `/mode <default\|accept\|bypass>` | 切换权限模式（`default` 写操作需确认，`bypass` 全部放行） |
+| `/skill list` | 列出已加载的 Skill（三层来源 + 描述） |
+| `/skill info <name>` | 显示指定 Skill 的 frontmatter 与文件路径 |
+| `/skill reload` | 重新扫描 Skill 目录（下一 Task 生效） |
+| `/skill-name [args]` | 激活指定 Skill（`$ARGUMENTS` 替换后钉入对话） |
 
 ### 权限/提问弹窗（HITL）
 
@@ -106,6 +110,55 @@ ArchCode 通过 MCP（Model Context Protocol）接入任意外部工具 server�
 - 部分 server 失败不影响其他
 
 配置示例见下方「配置」章节。
+
+### Skill 系统
+
+通过 SKILL.md 向 Agent 注入领域知识与操作流程。放在项目级 `<work_dir>/.archcode/skills/` 或用户级 `<archcode-root>/.archcode/skills/`，启动时扫描建目录、按需激活。
+
+```text
+skills/
+├── review.md              # 单文件型:frontmatter(name/description) + 正文(SOP 模板)
+└── deploy/                # 目录型:可附带 tool.json 声明专属工具
+    ├── SKILL.md
+    └── tools.json
+```
+
+- **激活方式**：模型调 `LoadSkill` 工具，或用户 `/skill-name args` 命令
+- **激活后**：正文渲染 `$ARGUMENTS` 后钉入对话顶部 `<active-skills>` 消息；目录型的专属工具注册到 ToolRegistry（所有权归属该 Skill）
+- **allowedTools**（可选 frontmatter）：激活期间只允许声明内的工具（模型看不见 + 硬调进不去）
+- **生命周期**：`/clear` 清激活集合 + 注销专属工具；`/session resume` 激活集合从零开始
+- 三层优先级（project > user > builtin），同名遮蔽 + 诊断
+
+### Hook 系统
+
+在 Agent 生命周期的关键节点上声明式配置自动化动作。放在 `<work_dir>/.archcode/config.yaml` 的 `hooks:` 键（或用户级 config.yaml，追加合并）。
+
+```yaml
+hooks:
+  # 写 .py 后自动格式化
+  - id: auto-format
+    event: post_tool_use
+    if: 'tool == "WriteFile" && args.path ~= "*.py"'
+    action:
+      type: command
+      command: "black $FILE_PATH"
+
+  # 禁止修改 vendor 目录
+  - id: block-vendor
+    event: pre_tool_use
+    if: 'tool == "WriteFile" && args.path ~= "vendor/**"'
+    action:
+      type: command
+      command: "echo 'vendor 目录由包管理工具管理，请勿手动修改'"
+    reject: true
+```
+
+- **8 个事件**：session_start / turn_start / pre_tool_use / permission_request / post_tool_use / post_tool_use_failure / turn_end / session_end
+- **条件**（`if`，可选）：`==` `!=` 精确/反向，`=~` 正则，`~=` glob（同 .gitignore）；`&&` / `||` 组合（不可混用）
+- **四种执行器**：command（shell 命令）、prompt（注入提示词）、http（发请求）、agent（子 Agent，预留）
+- **占位符**：`$EVENT` `$TOOL_NAME` `$FILE_PATH` `$MESSAGE` `$ERROR` `$TOOL_ARGS.<key>`
+- **执行控制**：`reject: true`（拦截工具调用）、`once: true`（仅首次触发）、`async: true`（后台执行不等待）
+- **三层追加合并**：应用级 + 项目级 + local 的 hooks 叠加生效
 
 ### 上下文压缩
 
@@ -231,15 +284,20 @@ compression:
 
 ```text
 <archcode-root>/.archcode/        # ArchCode 自己的应用级数据
-├─ config.yaml                    # 本机 API / Provider 配置
-├─ AGENTS.md                      # 用户级指令文档（实现后使用）
+├─ config.yaml                    # 本机 API / Provider / hooks 配置
+├─ AGENTS.md                      # 用户级指令文档（已实现，分支 codex/project-instructions）
+├─ skills/                        # 用户级 Skill（跨项目通用）
 └─ memory/                        # 用户级长期记忆（实现后使用）
 
 <work_dir>/.archcode/             # 当前工作项目的数据
+├─ config.yaml                    # 项目级配置（可含 hooks）
+├─ config.local.yaml              # 本地覆盖（不进 Git）
 ├─ AGENTS.md                      # 项目私有指令文档
+├─ skills/                        # 项目级 Skill
 ├─ sessions/                      # 当前项目的会话 JSONL
 ├─ session/tool-results/          # 上下文压缩时的临时工具结果
 ├─ plans/                         # 当前项目的计划文件
+├─ debug.log                      # 日志（追加模式）
 └─ memory/                        # 项目级长期记忆（实现后使用）
 ```
 

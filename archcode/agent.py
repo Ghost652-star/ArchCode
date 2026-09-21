@@ -23,6 +23,8 @@ from archcode.llm.events import (
 )
 from archcode.llm.serializer import build_anthropic_tools, build_openai_tools
 from archcode.permissions import Decision, PermissionChecker, PermissionMode
+from archcode.permissions.checker import extract_content
+from archcode.hooks.models import HookContext, ToolRejectedError
 from archcode.memory import (
     InstructionDiagnostic,
     InstructionDocumentLoader,
@@ -362,6 +364,9 @@ class Agent:
         self._skill_loader = None                    # SkillLoader,启动接线时设置
         self._current_conversation: ConversationManager | None = None
 
+        # ── Hook 子系统(hooks-design §6.1) ─────────────────
+        self._hook_engine = None                     # HookEngine,启动接线时设置
+
         # ── 压缩子系统(可选) ───────────────────────────────
         # 当 compression is None 或 enabled=False 时,所有 hook 都不执行,
         # Agent 行为退化为「原样发请求」。
@@ -559,10 +564,29 @@ class Agent:
         self._memory_tasks.add(task)
         task.add_done_callback(self._memory_tasks.discard)
 
+    def _build_hook_context(
+        self, event_name: str, tool_name: str, tool_args: dict[str, Any] | None,
+        message: str = "", error: str = "",
+    ) -> HookContext:
+        """构造 HookContext 实况快照(hooks-design §6:参数推入,引擎零反向依赖)。
+
+        file_path 复用 permissions/checker.py 的 extract_content(即 _CONTENT_FIELDS
+        映射)做预提取——Bash→command、WriteFile→file_path 等。
+        """
+        args = tool_args or {}
+        return HookContext(
+            event_name=event_name,
+            tool_name=tool_name,
+            tool_args=args,
+            file_path=extract_content(tool_name, args),
+            message=message,
+            error=error,
+        )
+
     async def _execute_tool(
         self, tc: ToolCallComplete
     ) -> AsyncIterator[tuple[ToolResult | PermissionRequest, float, bool]]:
-        """执行单个工具调用——async generator（照搬 MewCode）。
+        """执行单个工具调用——async generator(照搬 MewCode)。
 
         yield 三种之一：
         1. PermissionRequest — HITL 暂停等用户
@@ -618,7 +642,19 @@ class Agent:
             )
             return
 
-        # ── 权限判定：5 层检查;Skill 专属工具走专用路径(0.5)
+        # ── §18.8 重排:Pydantic 校验提前到权限之前,保证权限/日志看到结构正确参数 ──
+        try:
+            params = tool.params_model.model_validate(tc.arguments)
+        except ValidationError as e:
+            yield (
+                ToolResult(output=f"Error: invalid arguments: {e}", is_error=True),
+                time.monotonic() - start,
+                False,
+            )
+            return
+        normalized_args = params.model_dump(exclude_none=True)
+
+        # ── 权限判定：5 层检查;Skill 专属工具走专用路径(0.5);用 normalized_args ──
         if self._permission_checker is not None:
             if getattr(tool, "is_skill_tool", False):
                 if self._permission_checker.mode == PermissionMode.PLAN:
@@ -635,7 +671,7 @@ class Agent:
                 decision = self._permission_checker.check(
                     tool_name=tc.tool_name,
                     category=getattr(tool, "category", "read"),
-                    arguments=tc.arguments,
+                    arguments=normalized_args,
                 )
             if decision.effect == "deny":
                 yield (
@@ -650,6 +686,28 @@ class Agent:
                     False,
                 )
                 return
+
+        # ── Gate hooks: pre_tool_use(§18.8 步骤 8;只能把 allow 收紧为 deny) ──
+        if self._hook_engine is not None:
+            gate_ctx = self._build_hook_context(
+                "pre_tool_use", tc.tool_name, normalized_args,
+            )
+            rejection = await self._hook_engine.gate(gate_ctx)
+            if rejection is not None:
+                yield (
+                    ToolResult(
+                        output=(
+                            f"Hook '{rejection.hook_id}' 拦截: {rejection.reason}"
+                        ),
+                        is_error=True,
+                    ),
+                    time.monotonic() - start,
+                    False,
+                )
+                return
+
+        # ── HITL ask(§18.8 步骤 9) ──
+        if self._permission_checker is not None and decision is not None:
             if decision.effect == "ask":
                 # HITL：yield PermissionRequest 出去，等用户回填 future
                 future: asyncio.Future = asyncio.Future()
@@ -657,7 +715,7 @@ class Agent:
                 options = None
                 multi_select = False
                 if tc.tool_name == "AskUserQuestion":
-                    args = tc.arguments or {}
+                    args = normalized_args or {}
                     question = args.get("question")
                     options = args.get("options")
                     multi_select = bool(args.get("multi_select", False))
@@ -699,13 +757,24 @@ class Agent:
                         return
                     # 允许 → 继续执行工具（透传到下面）
 
+        # ── 执行工具(§18.8 步骤 11) ──
         try:
-            params = tool.params_model.model_validate(tc.arguments)
             result = await tool.execute(params)
         except ValidationError as e:
             result = ToolResult(output=f"Error: invalid arguments: {e}", is_error=True)
         except Exception as e:
             result = ToolResult(output=f"Tool execution error: {e}", is_error=True)
+
+        # ── observe: post_tool_use / post_tool_use_failure(§18.8 步骤 13) ──
+        if self._hook_engine is not None:
+            hook_event = (
+                "post_tool_use" if not result.is_error else "post_tool_use_failure"
+            )
+            hook_ctx = self._build_hook_context(
+                hook_event, tc.tool_name, normalized_args,
+                error=result.output if result.is_error else "",
+            )
+            await self._hook_engine.observe(hook_event, hook_ctx)
 
         # 截断/落盘:先落盘(>50K 全文存磁盘可恢复),再硬截断(>10K 有损)
         # 顺序关键 —— 落盘必须在截断之前,>50K 的全文才能完整存下来
@@ -845,6 +914,11 @@ class Agent:
         self._refresh_skill_catalog()
         self.refresh_active_skills_pin(conversation)
         conversation.add_user(user_input)
+
+        # ── observe: turn_start(hooks-design §3,每 Task 一次) ──
+        if self._hook_engine is not None:
+            hook_ctx = self._build_hook_context("turn_start", "", {}, message=user_input)
+            await self._hook_engine.observe("turn_start", hook_ctx)
 
         iteration = 0
         consecutive_unknown = 0
@@ -1190,6 +1264,12 @@ class Agent:
                     result_collector.response.cache_creation,
                 )
                 self._schedule_memory_extraction(conversation)
+                # ── observe: turn_end(hooks-design §3,每 Task 一次) ──
+                if self._hook_engine is not None:
+                    hook_ctx = self._build_hook_context(
+                        "turn_end", "", {}, message=final_text,
+                    )
+                    await self._hook_engine.observe("turn_end", hook_ctx)
                 yield TurnComplete(turn=iteration)
                 yield LoopComplete(total_turns=iteration, text=final_text)
                 return
