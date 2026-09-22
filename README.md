@@ -287,7 +287,7 @@ compression:
 ├─ config.yaml                    # 本机 API / Provider / hooks 配置
 ├─ AGENTS.md                      # 用户级指令文档（已实现，分支 codex/project-instructions）
 ├─ skills/                        # 用户级 Skill（跨项目通用）
-└─ memory/                        # 用户级长期记忆（实现后使用）
+└─ memory/                        # 用户级长期记忆
 
 <work_dir>/.archcode/             # 当前工作项目的数据
 ├─ config.yaml                    # 项目级配置（可含 hooks）
@@ -298,7 +298,7 @@ compression:
 ├─ session/tool-results/          # 上下文压缩时的临时工具结果
 ├─ plans/                         # 当前项目的计划文件
 ├─ debug.log                      # 日志（追加模式）
-└─ memory/                        # 项目级长期记忆（实现后使用）
+└─ memory/                        # 项目级长期记忆
 ```
 
 其中，`sessions/` 用于恢复某个具体对话，`session/tool-results/` 是可在压缩后清理的临时文件，`plans/` 保存项目工作计划，两个 `memory/` 分别保存用户级与项目级长期知识。实际运行时目录会随着工作项目和本机配置产生，不属于源码，也不应提交。
