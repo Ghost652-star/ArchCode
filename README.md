@@ -160,6 +160,22 @@ hooks:
 - **执行控制**：`reject: true`（拦截工具调用）、`once: true`（仅首次触发）、`async: true`（后台执行不等待）
 - **三层追加合并**：应用级 + 项目级 + local 的 hooks 叠加生效
 
+### 子 Agent(SubAgent)
+
+主 Agent 通过统一的 `Agent` 工具把子任务派发给专门的子 Agent(独立上下文 + 收窄工具集),像调用普通工具一样自然。两种派发模式,按任务性质选:
+
+```
+任务类型?
+├─ 固定角色、可限制工具 → 指定 subagent_type → 定义式(独立上下文、可选模型)
+│   项目级 .archcode/agents/*.md > 用户级 > 内置(Explore / Plan / general-purpose)
+└─ 临时任务、需要对话上下文 → subagent_type 留空 → Fork(继承父对话、命中缓存)
+```
+
+- **定义式**:一个 agent 类型 = 一个 Markdown 定义文件(YAML frontmatter + 正文系统提示)。`tools` / `disallowedTools` 白黑名单裁剪能力;`permissionMode` 定权限基调;`maxTurns` 限轮次。在项目里新建定义文件,下次调用即可用。
+- **Fork**:继承父 Agent 完整对话,拿到任务从头跑到尾,**始终后台运行**,结果经 `<task-notification>` 异步回传,主 Agent 不阻塞。
+- **四道防线**工具过滤:全局禁止(不能 spawn / 不能问用户 / 不能调度)+ 自定义收紧 + 后台白名单 + 定义黑白名单。
+- 定义式子 agent 默认前台同步执行(`run_in_background: true` 或定义 `background: true` 可转后台);用 `TaskList` / `TaskGet` 查后台任务。
+
 ### 上下文压缩
 
 长对话接近模型窗口上限时自动压缩，`archcode/context/` 分两层：

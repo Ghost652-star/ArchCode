@@ -20,6 +20,7 @@ from archcode.paths import application_data_dir, project_data_dir
 from archcode.skills.models import SkillManifest
 
 _NAME_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+
 VALID_MODES = {"inline", "fork"}
 VALID_CONTEXTS = {"full", "recent", "none"}
 
@@ -201,20 +202,18 @@ class SkillLoader:
                 f"[skills] mode 非法(只允许 inline/fork),已跳过 {path}: {mode!r}"
             )
             return None
+
         context = str(meta.get("context", "recent")).strip().lower()
         if context not in VALID_CONTEXTS:
             self.diagnostics.append(
                 f"[skills] context 非法(只允许 full/recent/none),已跳过 {path}: {context!r}"
             )
             return None
-        model = meta.get("model")
-        model = str(model).strip() if model is not None else None
 
         return SkillManifest(
+            name=name,
             mode=mode,
             context=context,
-            model=model or None,
-            name=name,
             description=description,
             path=path,
             source=source,
@@ -233,7 +232,7 @@ class SkillLoader:
         即拿到新版本,无需重启。容错语义与 scan 的失败兜底一致:
 
         - 重读解析失败(改坏)→ 沿用内存中上次成功的 manifest,绝不返回 None
-          让已知 Skill 消失(教程版此处漏捕 OSError,文件被删会直接炸出);
+          让已知 Skill 消失(此处需捕获 OSError,文件被删不能炸出);
         - frontmatter 的 name 被改名 → 沿用旧 manifest(目录/命令按旧名注册)。
         """
         skill = self._manifests.get(name)

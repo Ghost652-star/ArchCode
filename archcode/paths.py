@@ -30,6 +30,16 @@ def application_skills_dir() -> Path:
     return application_data_dir() / "skills"
 
 
+def project_agents_dir(work_dir: str | Path) -> Path:
+    """项目级 agent 定义目录(优先级最高,随 Git 共享;sub-agent-design §4.2)。"""
+    return project_data_dir(work_dir) / "agents"
+
+
+def application_agents_dir() -> Path:
+    """用户级 agent 定义目录(个人跨项目;本地学习项目不落 C 盘,§4.2)。"""
+    return application_data_dir() / "agents"
+
+
 def debug_log_path(work_dir: str | Path) -> Path:
     """项目级调试日志文件(日志最小集,deferred-designs #4)。
 

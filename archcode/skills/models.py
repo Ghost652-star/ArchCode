@@ -16,12 +16,11 @@ class SkillManifest:
 
     name: str          # ^[a-z0-9]+(-[a-z0-9]+)*$,同时是 /命令 名
     description: str   # 目录/补全里展示的一句话
-    path: Path         # SKILL.md 文件路径(= MewCode 的 source_path:激活时从盘上现读,改了无需重启)
+    path: Path         # SKILL.md 文件路径(激活时从盘上现读,改了无需重启)
     source: str        # "project" | "user" | "builtin"(三层来源,0.1)
     checksum: str      # sha256(SKILL.md 字节),RecoveryState 登记与变更检测用
     allowed_tools: tuple[str, ...] = ()  # 可选的可见性收窄声明(0.6);缺省 = 不收窄
     is_directory: bool = False           # 目录型(SKILL.md + tool.json + references/)
     skill_dir: Path | None = None        # 目录型时的 Skill 根目录(tool.json 所在)
-    mode: str = "inline"    # "inline"(注入主对话) | "fork"(独立子会话,随 agents/ 落地,5.3)
-    context: str = "recent"  # fork 携带上下文档位:"full" | "recent"(默认) | "none"(5.4)
-    model: str | None = None  # Skill 指定模型;解析保留,生效随 agents/(5.3)
+    mode: str = "inline"  # "inline"(钉 SOP 进主对话) | "fork"(创建一个子 agent 执行该 skill,随 agents/ 落地)
+    context: str = "recent"  # fork 携带父上下文档位:"full" | "recent"(默认) | "none"(仅 fork 生效,inline 忽略)

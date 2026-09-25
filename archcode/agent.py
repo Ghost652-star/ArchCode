@@ -364,6 +364,12 @@ class Agent:
         self._skill_loader = None                    # SkillLoader,启动接线时设置
         self._current_conversation: ConversationManager | None = None
 
+        # ── 子 agent 系统(sub-agent-design §10/§11 接线位)──
+        self._agent_loader = None                    # AgentLoader,启动接线时设置(§2.5 catalog)
+        self._background_notifier = None             # 后台通知 drain 回调,接线时设置(§9.2)
+        self.is_fork: bool = False                   # 防递归标记:fork 产生的子 agent 为 True(§5.5)
+        self.parent_id: str | None = None            # 父 agent 标识(caller 判定/诊断,§5.5)
+
         # ── Hook 子系统(hooks-design §6.1) ─────────────────
         self._hook_engine = None                     # HookEngine,启动接线时设置
 
@@ -527,6 +533,28 @@ class Agent:
             prompt = f"{prompt}\n\n{block}" if prompt else block
         self._system_prompt = prompt
 
+    def _refresh_agent_catalog(self) -> None:
+        """Task 边界刷新 system prompt 中的 agent catalog section(§2.5)。
+
+        在 _refresh_skill_catalog 之后调用;目录内容未变时 block 已在
+        prompt 中,直接返回——不产生任何字节变化(cache 前缀稳定)。
+        """
+        if self._agent_loader is None:
+            return
+        catalog = self._agent_loader.get_catalog_text()
+        block = f"<agent-catalog>\n{catalog}\n</agent-catalog>" if catalog else ""
+        prompt = self._system_prompt
+        if block and block in prompt:
+            return
+        start = prompt.find("<agent-catalog>")
+        if start != -1:
+            end = prompt.find("</agent-catalog>", start)
+            if end != -1:
+                prompt = (prompt[:start] + prompt[end + len("</agent-catalog>") :]).strip()
+        if block:
+            prompt = f"{prompt}\n\n{block}" if prompt else block
+        self._system_prompt = prompt
+
     def refresh_active_skills_pin(self, conversation: ConversationManager) -> bool:
         """任务边界/压缩后重钉 <active-skills> 消息(事件式重钉的例行刷新点)。"""
         return conversation.refresh_active_skills_pin(self.active_skills)
@@ -586,7 +614,7 @@ class Agent:
     async def _execute_tool(
         self, tc: ToolCallComplete
     ) -> AsyncIterator[tuple[ToolResult | PermissionRequest, float, bool]]:
-        """执行单个工具调用——async generator(照搬 MewCode)。
+        """执行单个工具调用——async generator。
 
         yield 三种之一：
         1. PermissionRequest — HITL 暂停等用户
@@ -813,7 +841,7 @@ class Agent:
             skill_name = args[recovery_key]
             rendered = self.active_skills.get(skill_name) or result.output
             self._recovery_state.record_skill_invocation(
-                skill_name, rendered, mode="inline"
+                skill_name, rendered
             )
 
     @staticmethod
@@ -838,7 +866,7 @@ class Agent:
     def _maybe_persist_or_truncate(
         self, tool_use_id: str, result: ToolResult
     ) -> ToolResult:
-        """工具结果先落盘、再硬截断 —— 照搬 MewCode 的顺序。
+        """工具结果先落盘、再硬截断 的顺序。
 
         - len > SINGLE_RESULT_CHAR_LIMIT (50K) → 全文写磁盘,inline 换 preview,
           可恢复。落盘检查在截断之前,所以 >50K 的全文能完整存下来。
@@ -912,6 +940,7 @@ class Agent:
         # Skills:保存当前会话引用(供工具触达重钉)+ Task 边界刷新目录与钉住消息
         self._current_conversation = conversation
         self._refresh_skill_catalog()
+        self._refresh_agent_catalog()
         self.refresh_active_skills_pin(conversation)
         conversation.add_user(user_input)
 
@@ -972,6 +1001,13 @@ class Agent:
                         + '\n用法:ToolSearch(query="select:name1,name2") 或 '
                         + 'ToolSearch(query="关键词")'
                     )
+
+            # ── 后台任务通知注入(§9.2:fork/后台子 agent 完成回传) ──
+            # 每轮 drain TaskManager 通知队列,以 user 消息注入 <task-notification>
+            # ——不破坏 tool-pair 配对;经 _background_notifier 回调接线,agent
+            # 不反向依赖 agents/ 包(§11)。
+            if self._background_notifier is not None:
+                self._background_notifier(conversation)
 
             # ── 上下文压缩:Layer 1 (单条预算) + Layer 2 (累积阈值) ──
             # 顺序:先轻量(per-message budget),再昂贵(LLM 摘要)

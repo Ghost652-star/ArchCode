@@ -58,6 +58,39 @@ def _wire_skills(agent: Agent, tool_registry, work_dir: Path) -> SkillExecutor:
     return executor
 
 
+def _wire_agents(agent: Agent, tool_registry, work_dir: Path, skill_executor=None) -> None:
+    """创建 AgentLoader / TaskManager / AgentTool 并接线(sub-agent-design §11/§13)。
+
+    - loader 扫描三层 agent 定义,诊断打 stderr;
+    - AgentTool / TaskList / TaskGet 注册进主注册表;
+    - agent._background_notifier 接后台通知 drain(§9.2),agent._agent_loader 供
+      Task 边界刷新 <agent-catalog>(§2.5);
+    - skill_executor.task_manager 供 skill fork 后台启动(§13)。
+    """
+    from archcode.agents.loader import AgentLoader
+    from archcode.agents.notification import make_background_notifier
+    from archcode.agents.task_manager import TaskManager
+    from archcode.tools.agent_tool import AgentTool
+    from archcode.tools.task_tools import register_task_tools
+
+    loader = AgentLoader(work_dir=work_dir)
+    loader.load_all()
+    for diagnostic in loader.diagnostics:
+        print(diagnostic, file=sys.stderr)
+
+    task_manager = TaskManager()
+    agent_tool = AgentTool(
+        agent_loader=loader, task_manager=task_manager, parent_agent=agent
+    )
+    tool_registry.register(agent_tool)
+    register_task_tools(tool_registry, task_manager)
+
+    agent._agent_loader = loader
+    agent._background_notifier = make_background_notifier(task_manager)
+    if skill_executor is not None:
+        skill_executor.task_manager = task_manager
+
+
 async def _build_runtime(config, work_dir, protocol):
     """异步初始化:建默认 registry + 注册 ToolSearch + 连 MCP server。
 
@@ -190,7 +223,8 @@ def main() -> None:
                     print(f"[MCP] ✗ {err}", file=sys.stderr)
                 agent = _build_agent_sync(config, work_dir, tool_registry)
                 _wire_hooks(config, work_dir, agent)
-                _wire_skills(agent, tool_registry, work_dir)
+                skill_executor = _wire_skills(agent, tool_registry, work_dir)
+                _wire_agents(agent, tool_registry, work_dir, skill_executor)
                 await _run_prompt(agent, args.p, mcp_manager, work_dir)
 
             asyncio.run(_oneshot())
@@ -210,6 +244,7 @@ def main() -> None:
             agent = _build_agent_sync(config, work_dir, tool_registry)
             _wire_hooks(config, work_dir, agent)
             skill_executor = _wire_skills(agent, tool_registry, work_dir)
+            _wire_agents(agent, tool_registry, work_dir, skill_executor)
 
             app = ArchCodeApp(
                 agent=agent,

@@ -1,10 +1,11 @@
 """ArchCode 的权限模式定义。
 
-4 个 mode:
+5 个 mode:
   default  - 写和 bash 都要问
   accept   - 写自动过,bash 仍问
   bypass   - 写和 bash 都自动过
   plan     - 只读 + 写 plan 文件,bash 拒绝
+  dontAsk  - 全部自动过(子 agent 专用,§10:危险命令与沙箱层仍在前)
 
 mode 切换**不注入提示词**(跟 plan_mode 不同)——LLM 不需要知道
 当前 mode,模式只是执行层决策,改 LLM 工具调用的过不过。
@@ -24,6 +25,7 @@ class PermissionMode(str, Enum):
     PLAN = "plan"
     ACCEPT = "accept"
     BYPASS = "bypass"
+    DONT_ASK = "dontAsk"  # 子 agent 专用(§10):不弹 HITL;危险命令与沙箱层仍生效
 
 
 # 4 mode × 3 category 的判定矩阵
@@ -39,6 +41,13 @@ _MATRIX: dict[PermissionMode, dict[str, DecisionEffect]] = {
         "command": "ask",
     },
     PermissionMode.BYPASS: {
+        "read": "allow",
+        "write": "allow",
+        "command": "allow",
+    },
+    # DONT_ASK 与 bypass 矩阵相同——区别在适用对象:它是子 agent 定义声明的
+    # 权限基调(§4.6/§10),安全性由四道防线的工具收窄保证(能力锁死+权限放开)
+    PermissionMode.DONT_ASK: {
         "read": "allow",
         "write": "allow",
         "command": "allow",
