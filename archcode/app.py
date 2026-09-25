@@ -44,7 +44,7 @@ from archcode.permissions import PermissionMode
 from archcode.permission_modal import PermissionModal
 
 
-# 思考状态显示（参考 MewCode）
+# 思考状态显示
 SPINNER_FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 THINKING_VERBS = [
     "Accomplishing", "Architecting", "Baking", "Beboppin'", "Befuddling",
@@ -92,7 +92,7 @@ THINKING_VERBS = [
 ]
 
 
-# 简单过去式转换（实际 MewCode 用 _to_past_tense，更复杂）
+# 简单过去式转换
 def _to_past_tense(verb: str) -> str:
     """简易过去式：去 e + ed 或直接 + ed"""
     if verb.endswith("e"):
@@ -279,7 +279,7 @@ class ArchCodeApp(App):
             yield Static(self._model_name, id="model-label")
 
     def _make_banner(self) -> RichText:
-        """顶栏 ASCII logo + 标题(模仿 MewCode 的 3 行布局)。
+        """顶栏 ASCII logo + 标题(3 行布局)。
 
         左列紫色 ASCII 字符,右列灰字信息(version / model / work_dir)。
         RichText 保证 markdown 标签不被 Static 解析。
@@ -539,7 +539,7 @@ class ArchCodeApp(App):
     ) -> None:
         """权限/提问弹窗用户做出选择 → 回填 future、移除弹窗、恢复输入框。
 
-        照搬 MewCode on_inline_permission_widget_responded：
+        内联权限弹窗的响应处理：
         - future.set_result 让 agent 的 _execute_tool 继续
         - 移除弹窗，避免再次接收按键
         - 重新启用输入框并聚焦
@@ -578,7 +578,7 @@ class ArchCodeApp(App):
         self._show_error(text)
 
     def _show_compact_progress(self, mode: str, chars: int) -> None:
-        """挂载 / 更新压缩进度 widget(MewCode 风格的 loading row)。
+        """挂载 / 更新压缩进度 widget(loading row 风格)。
 
         首次调用时新挂一个 Static,后续只 update 文本,不重新挂。
         文本格式:[compact] 正在压缩… 收到 1,234 chars
@@ -628,7 +628,7 @@ class ArchCodeApp(App):
     def _tool_title(tool_name: str, arguments: dict) -> str:
         """按工具名生成简短标题(只显示 basename + 行数,不展示正文)。
 
-        仿照 MewCode app.py:310-330。Args dict 永远不进 UI 标题,
+        Args dict 永远不进 UI 标题,
         避免 WriteFile(content=...) 整段刷屏。
         """
         import os
@@ -981,7 +981,7 @@ class ArchCodeApp(App):
             self._show_system("[compact] 无可压缩内容(history 为空或全在保留窗口内)。")
 
     async def _handle_user_message(self, text: str) -> None:
-        # 用户消息:❯ 浅蓝前缀 + 白色文本(模仿 MewCode send_user_message)
+        # 用户消息:❯ 浅蓝前缀 + 白色文本
         user_rich = RichText()
         user_rich.append("❯ ", style="bold color(80)")
         user_rich.append(text, style="bold color(255)")
@@ -1059,7 +1059,7 @@ class ArchCodeApp(App):
                 elif isinstance(event, ToolResultEvent):
                     self._show_tool_result(event)
                 elif isinstance(event, PermissionRequest):
-                    # HITL: 挂载内联弹窗（MewCode 风格）。结果通过
+                    # HITL: 挂载内联弹窗。结果通过
                     # PermissionModal.Responded 消息冒泡 → on_permission_modal_responded。
                     self._pending_permission_future = event.future
                     # 清理旧 modal —— PermissionModal 内部 id="perm-inline" 写死,
@@ -1078,11 +1078,11 @@ class ArchCodeApp(App):
                         multi_select=event.multi_select,
                     )
                     await self._chat().mount(modal)
-                    # 弹窗期间禁用输入框（照搬 MewCode）
+                    # 弹窗期间禁用输入框
                     self._set_input_enabled(False)
                 elif isinstance(event, ErrorEvent):
                     # 中断场景:已有 partial text → 追加 *[cancelled]* 脚注
-                    # (仿 MewCode app.py:1439-1448,partial text + "\n\n*[cancelled]*")
+                    # (partial text + "\n\n*[cancelled]*")
                     if (
                         "[aborted]" in event.message
                         and self._response_widget is not None

@@ -1,4 +1,4 @@
-"""PermissionModal —— 聊天流内嵌选择器（照搬 MewCode InlinePermissionWidget / InlineAskUserWidget）。
+"""PermissionModal —— 聊天流内嵌选择器。
 
 统一处理两种场景：
 - 权限询问（options 为空）：Yes / No
@@ -112,7 +112,7 @@ class PermissionModal(Vertical, can_focus=True):
         lines.append("")
 
         if self._question:
-            # 近似 MewCode 的 color(99)（ANSI 256 #6633ff），Textual 用 hex 才能解析
+            # ANSI 256 #6633ff 的近似色，Textual 用 hex 才能解析
             lines.append(f" [bold #9d7bff]{escape(self._question)}[/]\n")
         else:
             lines.append(f" [bold yellow]⚠ {escape(self._tool_name)}[/bold yellow]\n")

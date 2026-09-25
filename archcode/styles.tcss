@@ -1,4 +1,4 @@
-/* ArchCode 极简样式 —— 对照 mewcode/styles.tcss
+/* ArchCode 极简样式
    - 无粗边框:输入框 border:none,聊天区无边框
    - 只用细分割线(border-top: solid #303030)分隔区域
    - 弹窗完全内嵌,无盒子,靠 RichText 颜色区分
@@ -129,7 +129,7 @@ Screen {
     color: $error;
 }
 
-/* --- 内嵌权限/提问弹窗(无盒子,照搬 mewcode #perm-inline) --- */
+/* --- 内嵌权限/提问弹窗(无盒子) --- */
 
 .perm-modal {
     height: auto;

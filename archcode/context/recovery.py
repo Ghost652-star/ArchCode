@@ -5,8 +5,8 @@
 作为摘要消息的 boundary attachment —— 让模型知道这些内容仍存在,
 需要原文用 ``ReadFile`` / ``Skill`` 重新读取。
 
-设计参照 MewCode 的 ``RecoveryState``,但 ArchCode 的 ``skills/`` 是空包,
-所以小节 (2) 自然 skip。接口仍完整保留,等 skills 子系统上线时直接接。
+记录本会话读过的文件与激活过的 skills,渲染成 files / skills / tools / hint
+四小节 Markdown(空小节跳过)。
 """
 
 from __future__ import annotations
@@ -34,15 +34,12 @@ class FileReadRecord:
 class SkillInvocationRecord:
     """一次 Skill 激活的恢复记录(skills-design.md 5.5)。
 
-    inline / fork 统一记录渲染后 prompt;mode / child_task_id 区分执行方式,
-    压缩后 recovery attachment 据此恢复「当时真实发生了什么」。
+    记录渲染后 prompt,压缩后 recovery attachment 据此恢复「当时真实发生了什么」。
     """
 
     name: str
     body: str
     timestamp: float
-    mode: str = "inline"  # "inline" | "fork"
-    child_task_id: str | None = None
     template_hash: str | None = None
 
 
@@ -76,22 +73,17 @@ class RecoveryState:
         name: str,
         body: str,
         *,
-        mode: str = "inline",
-        child_task_id: str | None = None,
         template_hash: str | None = None,
     ) -> None:
         """记录一次 skill 激活(SkillExecutor 的激活事务调用,见 0.2 伪代码)。
 
-        ``body`` 是参数替换后的实际渲染 prompt(inline / fork 统一,不记模板);
-        mode / child_task_id 区分执行方式,供压缩后恢复工作现场。
+        ``body`` 是参数替换后的实际渲染 prompt(不记模板)。
         """
         with self._lock:
             self._skills[name] = SkillInvocationRecord(
                 name=name,
                 body=body,
                 timestamp=time.time(),
-                mode=mode,
-                child_task_id=child_task_id,
                 template_hash=template_hash,
             )
 

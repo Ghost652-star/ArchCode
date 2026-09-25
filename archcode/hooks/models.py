@@ -3,7 +3,7 @@
 - ``Action`` / ``Hook``:YAML 配置解析后的条目(hook 级 vs action 级字段归属见 §2)。
 - ``HookContext``:触发时由调用方(agent/app)现场构造的实况快照,一个对象两个
   取数接口——``get_field`` 供 if 条件求值,``expand`` 供占位符替换(§5)。
-- ``ToolRejectedError``:gate 通道的拒绝哨兵(作返回,不作 raise,MewCode 同款)。
+- ``ToolRejectedError``:gate 通道的拒绝哨兵(作返回哨兵,不作 raise)。
 """
 
 from __future__ import annotations
@@ -155,7 +155,7 @@ class HookNotification:
 
 
 class ToolRejectedError(Exception):
-    """gate 通道的拒绝结果(MewCode 同款:作返回哨兵,不作 raise)。
+    """gate 通道的拒绝结果(作返回哨兵,不作 raise)。
 
     引擎 gate() 返回它表示该工具调用被拒;调用方 agent 捕获后把 reason 作为错误
     tool_result 回给 LLM,并跳过该次执行。

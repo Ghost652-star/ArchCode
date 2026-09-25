@@ -105,7 +105,7 @@ class SummaryProviderConfig:
 class CompressionConfig:
     """上下文压缩总配置。
 
-    所有阈值跟 MewCode 一致,详见 ``archcode/context/compactor.py``。
+    所有阈值详见 ``archcode/context/compactor.py``。
     字段含义:
     - single_char_limit / aggregate_char_limit:Layer 1 单条 + 单消息聚合阈值
     - summary_output_reserve / auto_safety_margin / manual_safety_margin:Layer 2 阈值

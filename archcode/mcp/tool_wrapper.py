@@ -1,6 +1,6 @@
 """MCPToolWrapper:把 MCP server 提供的工具包装为 ArchCode 的 Tool 接口。
 
-工具命名规则: mcp_{server_name}_{tool_def.name}(单下划线,避免 MewCode 双下划线 bug)
+工具命名规则: mcp_{server_name}_{tool_def.name}(单下划线)
 should_defer=True 让 LLM 通过 ToolSearch 按需加载 schema。
 """
 
