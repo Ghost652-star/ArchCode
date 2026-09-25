@@ -175,6 +175,7 @@ hooks:
 - **Fork**:继承父 Agent 完整对话,拿到任务从头跑到尾,**始终后台运行**,结果经 `<task-notification>` 异步回传,主 Agent 不阻塞。
 - **四道防线**工具过滤:全局禁止(不能 spawn / 不能问用户 / 不能调度)+ 自定义收紧 + 后台白名单 + 定义黑白名单。
 - 定义式子 agent 默认前台同步执行(`run_in_background: true` 或定义 `background: true` 可转后台);用 `TaskList` / `TaskGet` 查后台任务。
+- **Skill 联动**:skill 的 `mode: fork` 会创建后台子 agent 执行该 skill(按 `context` 档位携带父对话、按 `allowedTools` 过滤工具集);`mode: inline` 维持钉 SOP 进主对话。
 
 ### 上下文压缩
 

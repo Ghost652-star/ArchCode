@@ -75,11 +75,28 @@ class SkillExecutor:
             SkillDependencyError,
             filter_registry_by_allowlist,
         )
+
+        # 目录型 skill:先注册 tool.json 专属工具(§4.7 序列第 1 步)——
+        # allowedTools 可引用它们;随后过滤。失败回滚,与 inline 同款事务(0.5)。
+        owned: list[str] = []
+        registry = agent._tool_registry
+        owner = f"skill:{manifest.name}"
+        if manifest.is_directory and manifest.skill_dir is not None and registry is not None:
+            from archcode.skills.directory import register_skill_tools
+
+            owned, diagnostics = register_skill_tools(
+                manifest.skill_dir, registry, owner=owner
+            )
+            if diagnostics:
+                self.loader.diagnostics.extend(diagnostics)
+
         try:
             filtered_registry = filter_registry_by_allowlist(
-                agent._tool_registry, list(manifest.allowed_tools)
+                registry, list(manifest.allowed_tools)
             )
         except SkillDependencyError as exc:
+            if owned and registry is not None:
+                registry.unregister_owner(owner)  # 原子事务:回滚已注册的专属工具
             return f"Error: skill '{manifest.name}' 声明的工具不存在: {exc}。激活已取消。"
 
         fork_conv = self._build_fork_context(manifest.context, parent_conv)
