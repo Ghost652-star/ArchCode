@@ -1,6 +1,6 @@
 # ArchCode
 
-ArchCode 是一个终端 AI 编程助手，基于 Textual 构建 TUI 界面。支持流式对话、对话历史管理、5 层权限系统、HITL 权限弹窗、可插拔工具、计划模式（Plan Mode）、上下文自动压缩、MCP 协议接入任意外部工具 server、项目指令文档（AGENTS.md）、Skill 系统（单文件 + 目录型 + 专属工具 + allowedTools），以及 Hook 系统（事件 + 条件 + 动作的生命周期钩子）。
+ArchCode 是一个 AI 编程助手，提供 **Textual TUI** 与 **Web** 两种界面。支持流式对话、对话历史管理、5 层权限系统、HITL 权限弹窗、可插拔工具、计划模式（Plan Mode）、上下文自动压缩、MCP 协议接入任意外部工具 server、项目指令文档（AGENTS.md）、Skill 系统（单文件 + 目录型 + 专属工具 + allowedTools）、Hook 系统（事件 + 条件 + 动作的生命周期钩子），以及子 Agent 系统（定义式 + Fork 双模式、四道防线工具过滤、后台任务与 `<task-notification>` 回传）。
 
 ## 快速开始
 
@@ -21,6 +21,10 @@ uv run archcode -w F:/myproject
 
 # 单次提问（纯文本输出，无 TUI）
 uv run archcode -p "用 Python 写一个快速排序"
+
+# 启动 Web 界面（首次需先构建前端，见「Web 界面」章节）
+uv run archcode --web                 # http://localhost:8000
+uv run archcode --web --port 9000     # 指定端口
 ```
 
 ## 交互界面
@@ -65,12 +69,34 @@ uv run archcode -p "用 Python 写一个快速排序"
 - **权限询问**：Yes / No 二选一
 - **AskUserQuestion**：LLM 提问的多项选择题，支持多选
 
+## Web 界面
+
+同一套 Agent 与事件流（`AgentEvent`）换一个浏览器端的壳——后端 `archcode/webui/server.py`（FastAPI + SSE 桥 + HITL future 注册表），前端 `web/`（Vite + React 18 + TypeScript + CSS Modules，无组件库）。
+
+```bash
+# 首次使用：构建前端（需 Node.js）
+cd web && npm install && npm run build && cd ..
+
+# 启动（默认 http://localhost:8000，仅监听本机）
+uv run archcode --web
+uv run archcode --web --port 9000 -w F:/myproject
+```
+
+- **项目 / 会话树**：左侧浏览工作区会话，新建 / 恢复（复用 SessionManager）
+- **对话流**：流式回复、推理过程与工具调用分行展示、Markdown 渲染
+- **HITL**：权限弹窗与 AskUserQuestion 走 SSE 往返，交互与 TUI 一致
+- **输入卡**：`/` 指令与技能菜单、权限模式切换、上下文占用、模型名与切换、发送 ⇄ 停止
+- **设置面板**：模型 / MCP / hooks / 权限 / 外观（写回配置文件后提示重启生效）
+
+前端开发模式：终端 A 跑 `uv run archcode --web`（后端 8000），终端 B 跑 `cd web && npm run dev`（Vite 5173，`/api` 已代理到后端）。
+
 ## 架构
 
 ArchCode 采用严格分层设计：
 
 ```
 Presentation    app.py / driver.py / styles.tcss       # Textual TUI，渲染 AgentEvent
+                webui/server.py + web/                  # FastAPI + React Web 界面（同一 AgentEvent 流的另一消费者）
        │
 Orchestration  agent.py                              # 用户消息 → LLM 流 → AgentEvent → 工具执行
        │
@@ -339,7 +365,7 @@ uv run pytest -k conversation           # 按名字过滤
 
 - Python >= 3.11
 - [uv](https://docs.astral.sh/uv/) 包管理器
-- （可选）Node.js + npx，用于 stdio 类型的 MCP server
+- （可选）Node.js：构建 Web 界面前端（`web/`）；stdio 类型的 MCP server 也需要 npx
 
 ## 详细目录结构与开发状态
 
