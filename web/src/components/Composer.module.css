@@ -1,4 +1,5 @@
 .root {
+  position: relative; /* 锚定 absolute 弹出菜单(缺失时菜单跑到视口外) */
   display: flex;
   flex-direction: column;
   padding: 8px 10px;
