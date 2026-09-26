@@ -1,0 +1,131 @@
+/* 全局:布局骨架 + 共享控件(按钮胶囊、输入、菜单)。 */
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  font-family: var(--ac-font-family);
+  font-size: var(--ac-font-size);
+  line-height: var(--ac-line-height);
+  font-weight: 400;
+  color: var(--ac-label-primary);
+  background: var(--ac-bg-base);
+  -webkit-font-smoothing: antialiased;
+}
+
+button {
+  font-family: inherit;
+  font-size: inherit;
+  color: inherit;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+}
+
+button:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+input,
+textarea {
+  font-family: inherit;
+  font-size: inherit;
+  color: var(--ac-label-primary);
+  background: none;
+  border: none;
+  outline: none;
+}
+
+textarea::placeholder,
+input::placeholder {
+  color: var(--ac-label-caption);
+}
+
+/* 应用骨架:侧栏 + 主列 */
+.frame {
+  display: flex;
+  height: 100%;
+  min-width: 0;
+}
+
+.mainColumn {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  position: relative;
+}
+
+/* 内容列:clamp 居中(§4 比例) */
+.contentColumn {
+  width: 100%;
+  max-width: var(--ac-content-width);
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+/* 通用胶囊按钮(主行动) */
+.primaryBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 32px;
+  height: 32px;
+  border-radius: 16px;
+  background: var(--ac-label-primary);
+  color: var(--ac-bg-base);
+  transition: background var(--ac-dur-fast) var(--ac-ease);
+}
+
+.primaryBtn:hover:not(:disabled) {
+  background: var(--ac-label-secondary);
+}
+
+.primaryBtn:disabled {
+  opacity: 0.35;
+}
+
+/* 通用行 hover 底 */
+.hoverRow:hover {
+  background: var(--ac-bg-hover);
+}
+
+/* 0.5px 发丝分隔 */
+.hairline {
+  border: 0;
+  border-top: 0.5px solid var(--ac-border-l2);
+  margin: 0;
+}
+
+/* 滚动条(细) */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-thumb {
+  border-radius: 4px;
+  background: var(--ac-border-l3);
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--ac-label-caption);
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}

@@ -196,6 +196,18 @@ def main() -> None:
             "默认是启动 agent 时的当前目录。"
         ),
     )
+    parser.add_argument(
+        "--web",
+        action="store_true",
+        default=False,
+        help="以 Web 界面启动(FastAPI 服务 + 浏览器)代替 TUI",
+    )
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=8000,
+        help="Web 模式服务端口(默认 8000)",
+    )
     args = parser.parse_args()
 
     work_dir = Path(args.work_dir).resolve() if args.work_dir else Path(os.getcwd())
@@ -228,6 +240,20 @@ def main() -> None:
                 await _run_prompt(agent, args.p, mcp_manager, work_dir)
 
             asyncio.run(_oneshot())
+        elif args.web:
+            # Web 路径:装配同 TUI(一套 _build_agent_sync + wiring),MCP 在
+            # FastAPI startup 里连(同 uvicorn loop,镜像 app.on_mount 模式)。
+            from archcode.webui.server import run_web
+
+            provider = config.providers[0]
+            tool_registry = create_default_registry(work_dir=work_dir)
+            tool_registry.register(
+                ToolSearchTool(tool_registry, protocol=provider.protocol)
+            )
+            agent = _build_agent_sync(config, work_dir, tool_registry)
+            _wire_hooks(config, work_dir, agent)
+            _wire_skills(agent, tool_registry, work_dir)
+            run_web(agent, work_dir, args.port, config.mcp_servers)
         else:
             # TUI 路径:build 同步做(create_default_registry 不需要 await),
             # MCP 连接放到 background task,在 TUI 的 event loop 里跑。

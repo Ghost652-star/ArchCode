@@ -1,0 +1,363 @@
+/* 对话条目:用户气泡 / 助手 Markdown / 思考行 / 工具行 / 错误行。 */
+
+/* ── 用户气泡(§4:r22、70.2% 上限、右对齐)────────────────── */
+.userRow {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  padding: 2px 0;
+}
+
+.bubble {
+  max-width: min(var(--ac-bubble-max), 82%);
+  background: var(--ac-bg-bubble);
+  border-radius: 22px;
+  padding: 10px 16px;
+  font-size: var(--ac-font-size);
+  line-height: var(--ac-line-height);
+  color: var(--ac-label-primary);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* ── 助手 Markdown(全宽,无气泡)──────────────────────────── */
+.assistant {
+  padding: 2px 0;
+  min-width: 0;
+}
+
+.markdown {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.markdown > :first-child {
+  margin-top: 0;
+}
+
+.markdown > :last-child {
+  margin-bottom: 0;
+}
+
+.markdown p {
+  margin: 8px 0;
+}
+
+.markdown pre {
+  overflow-x: auto;
+  margin: 10px 0;
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: var(--ac-bg-code);
+  border: 0.5px solid var(--ac-border-l1);
+  font-family: var(--ac-font-code);
+  font-size: var(--ac-font-size-secondary);
+  line-height: var(--ac-line-height-secondary);
+}
+
+.markdown code {
+  font-family: var(--ac-font-code);
+  font-size: 0.92em;
+  background: var(--ac-bg-code);
+  border-radius: 5px;
+  padding: 1px 5px;
+}
+
+.markdown pre code {
+  background: none;
+  padding: 0;
+}
+
+.markdown table {
+  border-collapse: collapse;
+  margin: 10px 0;
+  font-size: var(--ac-font-size-secondary);
+}
+
+.markdown th,
+.markdown td {
+  border: 0.5px solid var(--ac-border-l2);
+  padding: 5px 10px;
+  text-align: left;
+}
+
+.markdown blockquote {
+  margin: 8px 0;
+  padding: 2px 0 2px 12px;
+  border-left: 2px solid var(--ac-border-l3);
+  color: var(--ac-label-secondary);
+}
+
+.markdown a {
+  color: var(--ac-state-brand);
+}
+
+.markdown h1,
+.markdown h2,
+.markdown h3,
+.markdown h4 {
+  margin: 16px 0 8px;
+  font-weight: 500;
+}
+
+/* ── 思考行(§5:折叠 24px + 扫描线 + 渐隐摘要)────────────── */
+.reasoningRoot {
+  display: flex;
+  flex-direction: column;
+  padding: 2px 0;
+  min-width: 0;
+}
+
+.reasoningRoot:not([data-expanded]) {
+  contain: size layout;
+  height: calc(28px + 4px);
+}
+
+.reasoningRow {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  height: 28px;
+  min-width: 0;
+  padding: 0 4px;
+  border-radius: 6px;
+  overflow: hidden;
+  text-align: left;
+  color: var(--ac-label-tertiary);
+  transition: color var(--ac-dur-fast) var(--ac-ease);
+}
+
+.reasoningRow:hover {
+  color: var(--ac-label-secondary);
+}
+
+.reasoningRow[data-state='running']::after {
+  content: '';
+  position: absolute;
+  inset-block: 0;
+  left: 0;
+  width: 300px;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    color-mix(in srgb, var(--ac-bg-base) 60%, transparent) 55%,
+    transparent 100%
+  );
+  animation: ac-reasoning-sweep 2.6s ease-out infinite;
+  pointer-events: none;
+}
+
+@keyframes ac-reasoning-sweep {
+  0% {
+    left: -300px;
+  }
+
+  90%,
+  100% {
+    left: 100%;
+  }
+}
+
+.reasoningIcon {
+  flex: none;
+}
+
+.reasoningTitle {
+  flex: none;
+  font-size: var(--ac-font-size-secondary);
+  font-weight: 400;
+}
+
+.reasoningChevron {
+  flex: none;
+  color: var(--ac-label-caption);
+  transition: transform var(--ac-dur-fast) var(--ac-ease);
+}
+
+.reasoningChevron[data-open] {
+  transform: rotate(180deg);
+}
+
+.separator {
+  flex: none;
+  width: 2px;
+  height: 2px;
+  margin: 0 8px;
+  border-radius: 1px;
+  background: var(--ac-label-caption);
+}
+
+.reasoningSummary {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  font-size: var(--ac-font-size-secondary);
+  line-height: var(--ac-line-height-secondary);
+  white-space: nowrap;
+}
+
+.reasoningSummary[data-streaming] {
+  mask-image: linear-gradient(to right, black calc(100% - 48px), transparent);
+}
+
+.reasoningSummaryText {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.reasoningSummary[data-streaming] .reasoningSummaryText {
+  overflow: visible;
+  text-overflow: clip;
+}
+
+.reasoningBody {
+  padding: 4px 0 4px 24px;
+  min-width: 0;
+  color: var(--ac-label-tertiary);
+  font-size: var(--ac-font-size-secondary);
+  line-height: var(--ac-line-height-secondary);
+}
+
+.reasoningBody :global(p) {
+  margin: 6px 0;
+}
+
+/* ── 工具行(§6:33px 折叠 + 0.5px 底线 + 计时)────────────── */
+.toolRoot {
+  padding: 1px 0;
+  min-width: 0;
+}
+
+.toolRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  height: 33px;
+  min-width: 0;
+  padding: 0 4px 8px;
+  border: none;
+  border-bottom: 0.5px solid var(--ac-border-l2);
+  background: none;
+  color: var(--ac-label-tertiary);
+  text-align: left;
+  transition: color var(--ac-dur-fast) var(--ac-ease);
+}
+
+.toolRow:hover {
+  color: var(--ac-label-primary);
+}
+
+.toolName {
+  flex: none;
+  font-size: var(--ac-font-size-secondary);
+  font-weight: 500;
+}
+
+.toolSpinner {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 4px;
+  border: 1.5px solid var(--ac-border-l3);
+  border-top-color: var(--ac-label-tertiary);
+  animation: ac-spin 0.8s linear infinite;
+}
+
+@keyframes ac-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.toolArgs {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--ac-font-size-secondary);
+}
+
+.toolElapsed {
+  flex: none;
+  font-size: var(--ac-font-size-caption);
+  font-variant-numeric: tabular-nums;
+}
+
+.toolErrorDot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 4px;
+  background: var(--ac-state-error);
+}
+
+.toolChevron {
+  flex: none;
+  color: var(--ac-label-caption);
+}
+
+.toolBody {
+  padding: 6px 0 10px 12px;
+  min-width: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.toolPre {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--ac-bg-code);
+  border: 0.5px solid var(--ac-border-l1);
+  font-family: var(--ac-font-code);
+  font-size: var(--ac-font-size-caption);
+  line-height: var(--ac-line-height-secondary);
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--ac-label-secondary);
+}
+
+/* ── 错误行 ───────────────────────────────────────────────── */
+.errorRow {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 4px 0;
+  font-size: var(--ac-font-size-secondary);
+}
+
+.errorDot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  margin-top: 6px;
+  border-radius: 4px;
+  background: var(--ac-state-error);
+}
+
+.errorText {
+  color: var(--ac-state-error);
+  overflow-wrap: anywhere;
+}
+
+/* ── 无障碍 ───────────────────────────────────────────────── */
+.visuallyHidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .reasoningRow[data-state='running']::after,
+  .toolSpinner {
+    animation: none;
+  }
+}

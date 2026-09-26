@@ -20,3 +20,7 @@ learning.md
 workstatus/
 .worktrees/
 AGENTS.md
+
+# WebUI 前端
+web/node_modules/
+web/dist/

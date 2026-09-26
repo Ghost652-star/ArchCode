@@ -1,0 +1,176 @@
+.root {
+  display: flex;
+  flex-direction: column;
+  padding: 8px 10px;
+  border: 0.5px solid var(--ac-border-l2);
+  border-radius: 22px;
+  background: var(--ac-bg-layer-1);
+  transition: border-color var(--ac-dur-fast) var(--ac-ease);
+}
+
+.root:focus-within {
+  border-color: var(--ac-border-l3);
+}
+
+.editor textarea {
+  width: 100%;
+  resize: none;
+  overflow-y: auto;
+  font-size: var(--ac-font-size);
+  line-height: var(--ac-line-height);
+  color: var(--ac-label-primary);
+  caret-color: var(--ac-label-primary);
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.tools {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+.menuAnchor {
+  position: relative;
+}
+
+.toolBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 8px;
+  border: 0.5px solid var(--ac-border-l2);
+  font-size: 15px;
+  color: var(--ac-label-secondary);
+  transition: background var(--ac-dur-fast) var(--ac-ease);
+}
+
+.toolBtn:hover {
+  background: var(--ac-bg-hover);
+  color: var(--ac-label-primary);
+}
+
+.menu {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 0;
+  z-index: 20;
+  width: 320px;
+  max-height: 320px;
+  overflow-y: auto;
+  padding: 6px;
+  border-radius: 12px;
+  background: var(--ac-bg-menu);
+  backdrop-filter: blur(12px);
+  box-shadow: var(--ac-shadow-prominent);
+}
+
+.menuLabel {
+  padding: 6px 8px 2px;
+  font-size: var(--ac-font-size-caption);
+  color: var(--ac-label-caption);
+}
+
+.menuEmpty {
+  padding: 4px 8px 6px;
+  font-size: var(--ac-font-size-caption);
+  color: var(--ac-label-caption);
+}
+
+.menuItem {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 8px;
+  border-radius: 8px;
+  text-align: left;
+  transition: background var(--ac-dur-fast) var(--ac-ease);
+}
+
+.menuItem:hover {
+  background: var(--ac-bg-hover);
+}
+
+.menuSkillName {
+  flex: none;
+  font-size: var(--ac-font-size-secondary);
+  font-weight: 500;
+  color: var(--ac-label-primary);
+}
+
+.menuSkillDesc {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--ac-font-size-caption);
+  color: var(--ac-label-tertiary);
+}
+
+.modeSelect {
+  padding: 4px 6px;
+  border-radius: 8px;
+  border: none;
+  background: transparent;
+  font-size: var(--ac-font-size-caption);
+  color: var(--ac-label-tertiary);
+  cursor: pointer;
+}
+
+.modeSelect:hover {
+  background: var(--ac-bg-hover);
+}
+
+.trailing {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+}
+
+.usage {
+  font-size: var(--ac-font-size-caption);
+  font-variant-numeric: tabular-nums;
+  color: var(--ac-label-caption);
+  white-space: nowrap;
+}
+
+.primaryBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 15px;
+  background: var(--ac-label-primary);
+  color: var(--ac-bg-base);
+  transition: background var(--ac-dur-fast) var(--ac-ease), opacity var(--ac-dur-fast) var(--ac-ease);
+}
+
+.primaryBtn:hover:not(:disabled) {
+  background: var(--ac-label-secondary);
+}
+
+.primaryBtn:disabled {
+  opacity: 0.3;
+}
+
+.stopBtn {
+  background: var(--ac-state-error);
+  color: #fff;
+}
+
+.stopBtn:hover:not(:disabled) {
+  background: var(--ac-state-error);
+  opacity: 0.85;
+}

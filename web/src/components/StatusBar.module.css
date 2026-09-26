@@ -1,0 +1,54 @@
+.root {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+  height: 32px;
+  padding: 0 16px;
+  border-top: 0.5px solid var(--ac-border-l1);
+  font-size: var(--ac-font-size-caption);
+  color: var(--ac-label-caption);
+  background: var(--ac-bg-base);
+}
+
+.dot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 4px;
+  background: var(--ac-border-l3);
+}
+
+.dot[data-running] {
+  background: var(--ac-state-success);
+  animation: ac-status-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes ac-status-pulse {
+  50% {
+    opacity: 0.4;
+  }
+}
+
+.model {
+  color: var(--ac-label-secondary);
+  font-weight: 500;
+}
+
+.sep {
+  color: var(--ac-border-l3);
+}
+
+.workDir {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.spacer {
+  flex: 1;
+}
+
+.status {
+  flex: none;
+}

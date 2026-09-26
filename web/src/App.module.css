@@ -1,0 +1,79 @@
+.frame {
+  display: flex;
+  height: 100%;
+}
+
+.mainColumn {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  position: relative;
+}
+
+.scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+  /* 两侧 = 输入卡留白 + 16(§4:同轴规则) */
+  padding: 16px calc((100% - min(var(--ac-content-width), 100%)) / 2 + 16px);
+}
+
+.composerSeat {
+  flex: none;
+  padding: 8px calc((100% - min(var(--ac-content-width), 100%)) / 2 - 16px + 8px) 12px;
+  display: flex;
+  justify-content: center;
+}
+
+.composerSeat > * {
+  width: 100%;
+  max-width: calc(var(--ac-content-width) + 32px);
+}
+
+/* ── Hero 态(§10.2)────────────────────────────── */
+.hero {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  padding: 0 24px;
+}
+
+.heroStack {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+  width: 100%;
+  max-width: var(--ac-content-width);
+}
+
+.heroHeadline {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 26px;
+  line-height: 32px;
+  font-weight: 500;
+  color: var(--ac-label-primary);
+}
+
+.heroChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 28px;
+  padding: 0 10px;
+  border-radius: 16px;
+  color: var(--ac-label-primary);
+  font-size: var(--ac-font-size-secondary);
+  font-weight: 500;
+  transition: background var(--ac-dur-fast) var(--ac-ease);
+}
+
+.heroChip:hover {
+  background: var(--ac-bg-hover);
+}

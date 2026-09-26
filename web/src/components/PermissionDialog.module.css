@@ -1,0 +1,132 @@
+.overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  padding: 24px;
+  background: var(--ac-bg-active);
+}
+
+.card {
+  width: min(420px, calc(100vw - 48px));
+  margin-bottom: 96px;
+  padding: 16px;
+  border-radius: 16px;
+  background: var(--ac-bg-menu);
+  backdrop-filter: blur(12px);
+  box-shadow: var(--ac-shadow-prominent);
+  animation: ac-dialog-in var(--ac-dur) var(--ac-ease);
+}
+
+@keyframes ac-dialog-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.badge {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 4px;
+  background: var(--ac-state-warn);
+}
+
+.badge[data-kind='question'] {
+  background: var(--ac-state-brand);
+}
+
+.tool {
+  font-size: var(--ac-font-size-secondary);
+  font-weight: 500;
+  color: var(--ac-label-primary);
+}
+
+.reason {
+  margin: 10px 0 4px;
+  font-size: var(--ac-font-size-secondary);
+  line-height: var(--ac-line-height-secondary);
+  color: var(--ac-label-secondary);
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.question {
+  margin: 10px 0 4px;
+  font-size: var(--ac-font-size);
+  color: var(--ac-label-primary);
+}
+
+.options {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 8px;
+}
+
+.option {
+  padding: 8px 12px;
+  border-radius: 10px;
+  border: 0.5px solid var(--ac-border-l2);
+  text-align: left;
+  font-size: var(--ac-font-size-secondary);
+  color: var(--ac-label-primary);
+  transition: background var(--ac-dur-fast) var(--ac-ease);
+}
+
+.option:hover {
+  background: var(--ac-bg-hover);
+}
+
+.optionChecked {
+  border-color: var(--ac-state-brand);
+  background: var(--ac-bg-active);
+}
+
+.actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.confirmBtn {
+  padding: 7px 18px;
+  border-radius: 16px;
+  background: var(--ac-label-primary);
+  color: var(--ac-bg-base);
+  font-size: var(--ac-font-size-secondary);
+  font-weight: 500;
+  transition: opacity var(--ac-dur-fast) var(--ac-ease);
+}
+
+.confirmBtn:hover {
+  opacity: 0.85;
+}
+
+.denyBtn {
+  padding: 7px 18px;
+  border-radius: 16px;
+  border: 0.5px solid var(--ac-border-l2);
+  font-size: var(--ac-font-size-secondary);
+  color: var(--ac-label-secondary);
+  transition: background var(--ac-dur-fast) var(--ac-ease);
+}
+
+.denyBtn:hover {
+  background: var(--ac-bg-hover);
+}

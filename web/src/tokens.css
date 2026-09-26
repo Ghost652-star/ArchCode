@@ -1,0 +1,127 @@
+/* ArchCode Web — 双层 Design Token(hooks-design 研读 §2/§3:DSH 同构)
+   static 层:原始色板。alias 层:语义别名,组件只准引用 alias,禁止写死颜色。 */
+
+:root {
+  /* ── static:中性灰阶(偏蓝,DSH 同款 21 级)── */
+  --ac-neutral-00: rgb(255, 255, 255);
+  --ac-neutral-50: rgb(249, 250, 251);
+  --ac-neutral-60: rgb(245, 246, 247);
+  --ac-neutral-75: rgb(241, 243, 245);
+  --ac-neutral-100: rgb(235, 238, 242);
+  --ac-neutral-200: rgb(225, 229, 238);
+  --ac-neutral-300: rgb(207, 211, 214);
+  --ac-neutral-400: rgb(173, 178, 184);
+  --ac-neutral-500: rgb(151, 157, 166);
+  --ac-neutral-600: rgb(129, 133, 140);
+  --ac-neutral-700: rgb(97, 102, 107);
+  --ac-neutral-750: rgb(67, 69, 74);
+  --ac-neutral-800: rgb(53, 54, 56);
+  --ac-neutral-850: rgb(44, 44, 46);
+  --ac-neutral-875: rgb(35, 35, 36);
+  --ac-neutral-900: rgb(27, 27, 28);
+  --ac-neutral-950: rgb(21, 21, 23);
+  --ac-neutral-1000: rgb(15, 17, 21);
+
+  /* ── static:brand(蓝)+ 语义色 ── */
+  --ac-brand-50: rgb(237, 243, 254);
+  --ac-brand-100: rgb(228, 237, 253);
+  --ac-brand-200: rgb(211, 226, 255);
+  --ac-brand-300: rgb(183, 200, 254);
+  --ac-brand-400: rgb(122, 170, 255);
+  --ac-brand-450: rgb(86, 134, 254);
+  --ac-brand-500: rgb(65, 118, 230);
+  --ac-brand-900: rgb(40, 49, 66);
+  --ac-green-400: rgb(78, 209, 126);
+  --ac-green-500: rgb(34, 197, 94);
+  --ac-red-400: rgb(242, 90, 90);
+  --ac-red-500: rgb(239, 68, 68);
+  --ac-amber-400: rgb(247, 173, 49);
+  --ac-amber-500: rgb(245, 158, 11);
+  --ac-violet-400: rgb(167, 139, 250);
+
+  /* ── static:字体 / 动效 ── */
+  --ac-font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC',
+    'Hiragino Sans GB', 'Microsoft YaHei', 'Helvetica Neue', Helvetica, Arial, sans-serif;
+  --ac-font-code: 'SF Mono', 'JetBrains Mono', 'Fira Code', Consolas,
+    'Liberation Mono', Menlo, Courier, 'PingFang SC', 'Microsoft YaHei';
+  --ac-ease: cubic-bezier(0.4, 0, 0.2, 1);
+  --ac-dur-fast: 0.1s;
+  --ac-dur: 0.2s;
+  --ac-dur-slow: 0.3s;
+}
+
+:root {
+  /* ── alias:浅色主题(默认)── */
+  --ac-bg-base: var(--ac-neutral-00);
+  --ac-bg-layer-1: var(--ac-neutral-00);
+  --ac-bg-layer-2: var(--ac-neutral-50);
+  --ac-bg-layer-3: var(--ac-neutral-75);
+  --ac-bg-hover: rgba(38, 49, 72, 0.06);
+  --ac-bg-active: rgba(38, 49, 72, 0.1);
+  --ac-bg-skeleton: rgba(0, 0, 0, 0.04);
+  --ac-bg-bubble: var(--ac-brand-50, rgb(237, 243, 254));
+  --ac-bg-code: var(--ac-neutral-50);
+  --ac-bg-menu: rgba(248, 249, 250, 0.92);
+  --ac-bg-sidebar: var(--ac-neutral-50);
+
+  --ac-label-primary: var(--ac-neutral-1000);
+  --ac-label-secondary: var(--ac-neutral-700);
+  --ac-label-tertiary: var(--ac-neutral-600);
+  --ac-label-caption: var(--ac-neutral-400);
+  --ac-label-dimmed: var(--ac-neutral-200);
+
+  --ac-border-l1: rgba(0, 0, 0, 0.04);
+  --ac-border-l2: rgba(0, 0, 0, 0.1);
+  --ac-border-l3: rgba(0, 0, 0, 0.14);
+
+  --ac-state-error: var(--ac-red-500);
+  --ac-state-warn: var(--ac-amber-500);
+  --ac-state-success: var(--ac-green-500);
+  --ac-state-brand: var(--ac-brand-500);
+
+  --ac-shadow-prominent: 0 8px 32px rgba(15, 17, 21, 0.16), 0 0 0 0.5px var(--ac-border-l1);
+}
+
+:root[data-theme='dark'] {
+  --ac-bg-base: var(--ac-neutral-950);
+  --ac-bg-layer-1: var(--ac-neutral-875);
+  --ac-bg-layer-2: var(--ac-neutral-850);
+  --ac-bg-layer-3: var(--ac-neutral-800);
+  --ac-bg-hover: rgba(255, 255, 255, 0.08);
+  --ac-bg-active: rgba(255, 255, 255, 0.14);
+  --ac-bg-skeleton: rgba(255, 255, 255, 0.08);
+  --ac-bg-bubble: var(--ac-neutral-850);
+  --ac-bg-code: var(--ac-neutral-900);
+  --ac-bg-menu: rgba(48, 49, 54, 0.96);
+  --ac-bg-sidebar: var(--ac-neutral-900);
+
+  --ac-label-primary: var(--ac-neutral-50);
+  --ac-label-secondary: var(--ac-neutral-300);
+  --ac-label-tertiary: var(--ac-neutral-400);
+  --ac-label-caption: var(--ac-neutral-600);
+  --ac-label-dimmed: var(--ac-neutral-750);
+
+  --ac-border-l1: rgba(255, 255, 255, 0.06);
+  --ac-border-l2: rgba(255, 255, 255, 0.12);
+  --ac-border-l3: rgba(255, 255, 255, 0.16);
+
+  --ac-state-error: var(--ac-red-400);
+  --ac-state-warn: var(--ac-amber-400);
+  --ac-state-success: var(--ac-green-400);
+  --ac-state-brand: var(--ac-brand-400);
+
+  --ac-shadow-prominent: 0 8px 32px rgba(0, 0, 0, 0.5), 0 0 0 0.5px var(--ac-border-l1);
+}
+
+/* ── 全局布局常量(§4 比例)── */
+:root {
+  --ac-content-width: clamp(680px, 64vw, 920px);
+  --ac-bubble-max: calc(var(--ac-content-width) * 0.702);
+  --ac-sidebar-width: 260px;
+  --ac-font-size: 14px;
+  --ac-line-height: 22px;
+  --ac-font-size-secondary: 13px;
+  --ac-line-height-secondary: 20px;
+  --ac-font-size-caption: 12px;
+  --ac-line-height-caption: 18px;
+}
