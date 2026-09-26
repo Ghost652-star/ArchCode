@@ -35,10 +35,10 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 28px;
-  height: 28px;
-  border-radius: 8px;
-  font-size: 14px;
+  width: 32px;
+  height: 32px;
+  border-radius: 9px;
+  font-size: 16px;
   color: var(--ac-label-tertiary);
   transition: background var(--ac-dur-fast) var(--ac-ease);
 }
@@ -50,7 +50,7 @@
 
 .newBtn {
   margin: 4px 12px 8px;
-  padding: 9px 12px;
+  padding: 11px 14px;
   font-size: var(--ac-font-size);
   border-radius: 10px;
   border: 0.5px solid var(--ac-border-l2);
@@ -227,10 +227,11 @@
 
 .settingsBtn {
   width: 100%;
-  padding: 8px 10px;
-  border-radius: 10px;
+  padding: 11px 12px;
+  border-radius: 12px;
   text-align: left;
   font-size: var(--ac-font-size);
+  font-weight: 500;
   color: var(--ac-label-secondary);
   transition: background var(--ac-dur-fast) var(--ac-ease);
 }
