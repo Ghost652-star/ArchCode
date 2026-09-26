@@ -46,9 +46,10 @@ log = logging.getLogger(__name__)
 class ServerState:
     """服务端持有的运行时:agent、会话、HITL 注册表、任务锁。"""
 
-    def __init__(self, agent: Agent, work_dir: Path) -> None:
+    def __init__(self, agent: Agent, work_dir: Path, providers: list | None = None) -> None:
         self.agent = agent
         self.work_dir = work_dir
+        self.providers = providers or []  # ProviderConfig 列表(模型选择器用)
         self.session_manager = SessionManager(work_dir)
         self.conversation = ConversationManager()
         self._session = self.session_manager.create()
@@ -212,9 +213,55 @@ def api_state():
 
 
 @app.get("/api/sessions")
-def api_sessions():
+def api_sessions(workspace: str | None = None):
+    """会话清单;`?workspace=<path>` 可列出其他工作区的会话(只读,v1 不切换 agent)。"""
     assert STATE is not None
+    if workspace:
+        from archcode.memory import SessionManager as _SM
+
+        ws = Path(workspace)
+        if not ws.exists() or ws.resolve() == STATE.work_dir.resolve():
+            return STATE.list_sessions()
+        other = _SM(ws)
+        return [
+            {"id": s.id, "created": str(getattr(s, "created_at", "")),
+             "current": False, "running": False, "workspace": str(ws)}
+            for s in other.list_sessions()
+        ]
     return STATE.list_sessions()
+
+
+# ── 模型选择器(§9.1 ModelsSection 模式:当前 + 已配置清单)──────────────
+
+
+@app.get("/api/model")
+def api_model():
+    assert STATE is not None
+    client = getattr(STATE.agent, "_client", None)
+    return {
+        "current": getattr(client, "model_name", ""),
+        "providers": [
+            {"name": p.name, "model": p.model, "protocol": p.protocol}
+            for p in STATE.providers
+        ],
+    }
+
+
+@app.post("/api/model")
+def api_model_switch(body: dict):
+    """切换模型:按名称重建 agent._client(运行中拒绝)。"""
+    assert STATE is not None
+    if STATE._run_lock.locked():
+        raise HTTPException(409, "cannot switch model while a run is active")
+    name = (body or {}).get("name", "")
+    provider = next((p for p in STATE.providers if p.name == name), None)
+    if provider is None:
+        raise HTTPException(404, f"provider not found: {name}")
+    from archcode.llm.client import create_client
+
+    STATE.agent._client = create_client(provider)
+    STATE.agent._client.set_max_output_tokens(provider.max_output_tokens)
+    return {"ok": True, "model": provider.model}
 
 
 @app.post("/api/sessions")
@@ -257,6 +304,23 @@ async def api_chat(body: dict):
     STATE.agent._abort_event.clear()  # 新一轮重置中断(同 app.py:806)
 
     async def stream():
+        # Web 端斜杠命令:目前只接 /plan(直接调 agent 现成方法),其余提示不支持
+        if text.startswith("/"):
+            async with STATE._run_lock:
+                if text == "/plan":
+                    on = not getattr(STATE.agent, "_plan_mode", False)
+                    STATE.agent.set_plan_mode(on)
+                    yield _sse({
+                        "type": "notice",
+                        "text": f"Plan 模式已{'开启' if on else '关闭'}",
+                    })
+                else:
+                    yield _sse({
+                        "type": "notice",
+                        "text": f"Web 端暂不支持斜杠命令 {text.split()[0]}(可在 TUI 使用)",
+                    })
+                yield _sse({"type": "done"})
+            return
         async with STATE._run_lock:
             try:
                 async for event in STATE.agent.run(text, STATE.conversation):
@@ -392,11 +456,14 @@ _DIST = Path(__file__).resolve().parents[2] / "web" / "dist"
 
 
 def create_web_server(
-    agent: Agent, work_dir: Path, mcp_server_configs: list | None = None
+    agent: Agent,
+    work_dir: Path,
+    mcp_server_configs: list | None = None,
+    providers: list | None = None,
 ) -> FastAPI:
     """装配入口:由 __main__ 的 --web 路径调用(装配同 TUI,Q5)。"""
     global STATE
-    STATE = ServerState(agent, work_dir)
+    STATE = ServerState(agent, work_dir, providers=providers)
     if _DIST.exists():
         app.mount("/", StaticFiles(directory=str(_DIST), html=True), name="static")
 
@@ -428,11 +495,15 @@ def create_web_server(
 
 
 def run_web(
-    agent: Agent, work_dir: Path, port: int, mcp_server_configs: list | None = None
+    agent: Agent,
+    work_dir: Path,
+    port: int,
+    mcp_server_configs: list | None = None,
+    providers: list | None = None,
 ) -> None:
     """--web 路径:装配 + uvicorn 启动(仅 127.0.0.1)。"""
     import uvicorn
 
-    web_app = create_web_server(agent, work_dir, mcp_server_configs)
+    web_app = create_web_server(agent, work_dir, mcp_server_configs, providers)
     print(f"ArchCode Web: http://127.0.0.1:{port}", file=sys.stderr)
     uvicorn.run(web_app, host="127.0.0.1", port=port, log_level="warning")

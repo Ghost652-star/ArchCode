@@ -17,6 +17,23 @@ async function jsonFetch<T>(url: string, init?: RequestInit): Promise<T> {
 export const api = {
   state: () => jsonFetch<AgentState>('/api/state'),
 
+  model: () =>
+    jsonFetch<{
+      current: string
+      providers: Array<{ name: string; model: string; protocol: string }>
+    }>('/api/model'),
+
+  switchModel: (name: string) =>
+    jsonFetch<{ ok: boolean; model: string }>('/api/model', {
+      method: 'POST',
+      body: JSON.stringify({ name }),
+    }),
+
+  sessionsByWorkspace: (workspace?: string) =>
+    jsonFetch<SessionInfo[]>(
+      workspace ? `/api/sessions?workspace=${encodeURIComponent(workspace)}` : '/api/sessions',
+    ),
+
   sessions: () => jsonFetch<SessionInfo[]>('/api/sessions'),
 
   newSession: () => jsonFetch<{ session_id: string }>('/api/sessions', { method: 'POST' }),

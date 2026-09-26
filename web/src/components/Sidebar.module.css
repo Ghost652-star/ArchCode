@@ -83,6 +83,94 @@
   color: var(--ac-label-caption);
 }
 
+/* ── 工作区树(§10.5)──────────────────────────────────── */
+.wsHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 12px 2px;
+}
+
+.wsHeader .groupLabel {
+  padding: 0;
+}
+
+.workspaceList {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 0 6px 8px;
+}
+
+.wsRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  height: 30px;
+  padding: 0 8px;
+  border-radius: 8px;
+  text-align: left;
+  color: var(--ac-label-primary);
+  font-size: var(--ac-font-size-secondary);
+  font-weight: 500;
+  transition: background var(--ac-dur-fast) var(--ac-ease);
+}
+
+.wsRow:hover {
+  background: var(--ac-bg-hover);
+}
+
+.wsActive {
+  background: var(--ac-bg-active);
+}
+
+.wsName {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wsLive {
+  flex: none;
+  font-size: 8px;
+  color: var(--ac-state-success);
+}
+
+.sessionList {
+  padding-left: 14px;
+}
+
+.addWs {
+  display: flex;
+  gap: 4px;
+  margin: 0 12px 6px;
+}
+
+.addWsInput {
+  flex: 1;
+  min-width: 0;
+  padding: 6px 8px;
+  border-radius: 8px;
+  background: var(--ac-bg-layer-2);
+  font-size: var(--ac-font-size-caption);
+}
+
+.addWsBtn {
+  flex: none;
+  padding: 0 10px;
+  border-radius: 8px;
+  border: 0.5px solid var(--ac-border-l2);
+  font-size: var(--ac-font-size-caption);
+  color: var(--ac-label-secondary);
+}
+
+.addWsBtn:disabled {
+  opacity: 0.4;
+}
+
 .empty {
   padding: 8px;
   font-size: var(--ac-font-size-caption);

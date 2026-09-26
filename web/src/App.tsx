@@ -9,6 +9,18 @@ import SettingsPanel from './components/SettingsPanel'
 import { ChatItems } from './components/ChatItems'
 import styles from './App.module.css'
 
+const WS_KEY = 'ac-workspaces'
+const ACTIVE_WS_KEY = 'ac-active-workspace'
+
+function loadWorkspaces(): string[] {
+  try {
+    const raw = JSON.parse(localStorage.getItem(WS_KEY) ?? '[]')
+    return Array.isArray(raw) ? raw.filter((x) => typeof x === 'string') : []
+  } catch {
+    return []
+  }
+}
+
 export default function App() {
   const [items, setItems] = useState<Item[]>([])
   const [running, setRunning] = useState(false)
@@ -17,8 +29,24 @@ export default function App() {
   const [state, setState] = useState<AgentState | null>(null)
   const [sessions, setSessions] = useState<SessionInfo[]>([])
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [providers, setProviders] = useState<
+    Array<{ name: string; model: string; protocol: string }>
+  >([])
+  const [workspaces, setWorkspaces] = useState<string[]>(loadWorkspaces)
+  const [activeWorkspace, setActiveWorkspace] = useState(
+    () => localStorage.getItem(ACTIVE_WS_KEY) ?? '',
+  )
   const itemsRef = useRef<Item[]>([])
   const rafRef = useRef(0)
+
+  const serverDir = state?.work_dir ?? ''
+  /** 活动工作区是否就是服务端绑定的工作目录(仅此可用 composer/发消息)。 */
+  const isHome = Boolean(
+    serverDir &&
+      activeWorkspace &&
+      activeWorkspace.replace(/\\/g, '/').toLowerCase() ===
+        serverDir.replace(/\\/g, '/').toLowerCase(),
+  )
 
   /** itemsRef 变更后 rAF 批量刷新(高频 delta 不逐条 setState)。 */
   const render = useCallback(() => {
@@ -32,43 +60,74 @@ export default function App() {
   const refreshMeta = useCallback(async () => {
     try {
       setState(await api.state())
-      setSessions(await api.sessions())
+      setSessions(await api.sessionsByWorkspace(activeWorkspace || undefined))
+      const m = await api.model()
+      setProviders(m.providers)
     } catch {
       /* 服务端未就绪时静默 */
     }
-  }, [])
+  }, [activeWorkspace])
 
   useEffect(() => {
     refreshMeta()
   }, [refreshMeta])
+
+  // 服务端目录加载后,把 activeWorkspace 默认为它并并入工作区清单
+  useEffect(() => {
+    if (!serverDir) return
+    setWorkspaces((prev) => {
+      const next = prev.includes(serverDir) ? prev : [...prev, serverDir]
+      if (next !== prev) localStorage.setItem(WS_KEY, JSON.stringify(next))
+      return next
+    })
+    setActiveWorkspace((prev) => {
+      if (prev) return prev
+      localStorage.setItem(ACTIVE_WS_KEY, serverDir)
+      return serverDir
+    })
+  }, [serverDir])
+
+  // 切换工作区:刷新该工作区的会话清单;恢复其历史(仅 home 可恢复)
+  useEffect(() => {
+    if (!activeWorkspace) return
+    localStorage.setItem(ACTIVE_WS_KEY, activeWorkspace)
+    let cancelled = false
+    ;(async () => {
+      try {
+        const list = await api.sessionsByWorkspace(activeWorkspace || undefined)
+        if (cancelled) return
+        setSessions(list)
+        if (isHome) {
+          const history = await api.history()
+          if (cancelled) return
+          const restored: Item[] = []
+          for (const m of history) {
+            const role = m['role']
+            const content = String(m['content'] ?? '')
+            if (role === 'user' && content) restored.push({ kind: 'user', text: content })
+            if (role === 'assistant' && content)
+              restored.push({ kind: 'assistant', text: content, running: false })
+          }
+          itemsRef.current = restored
+          setItems([...restored])
+        } else {
+          itemsRef.current = []
+          setItems([])
+        }
+      } catch {
+        /* ignore */
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [activeWorkspace, isHome])
 
   // 新条目自动滚底(v1 恒跟随;DSH 的 near-bottom 检测后补)
   useEffect(() => {
     const el = document.getElementById('chat-scroll')
     if (el) el.scrollTop = el.scrollHeight
   }, [items])
-
-  /** 刷新页面/切换会话:读回历史重绘(v1 简化映射)。 */
-  const restoreHistory = useCallback(async () => {
-    try {
-      const history = await api.history()
-      const restored: Item[] = []
-      for (const m of history) {
-        const role = m['role']
-        const content = String(m['content'] ?? '')
-        if (role === 'user' && content) restored.push({ kind: 'user', text: content })
-        if (role === 'assistant' && content) restored.push({ kind: 'assistant', text: content, running: false })
-      }
-      itemsRef.current = restored
-      setItems([...restored])
-    } catch {
-      /* ignore */
-    }
-  }, [])
-
-  useEffect(() => {
-    restoreHistory()
-  }, [restoreHistory])
 
   const handleEvent = useCallback(
     (event: WireEvent) => {
@@ -141,7 +200,8 @@ export default function App() {
           break
         }
         case 'loop_complete': {
-          for (const item of list) if (item.kind !== 'user' && item.kind !== 'error') item.running = false
+          for (const item of list)
+            if (item.kind !== 'user' && item.kind !== 'error') item.running = false
           break
         }
         default:
@@ -154,7 +214,7 @@ export default function App() {
 
   const send = useCallback(
     async (text: string) => {
-      if (running || !text.trim()) return
+      if (running || !text.trim() || !isHome) return
       itemsRef.current = [...itemsRef.current, { kind: 'user', text }]
       setItems([...itemsRef.current])
       setRunning(true)
@@ -174,7 +234,7 @@ export default function App() {
         refreshMeta()
       }
     },
-    [running, handleEvent, refreshMeta],
+    [running, handleEvent, refreshMeta, isHome],
   )
 
   const abort = useCallback(async () => {
@@ -186,6 +246,7 @@ export default function App() {
   }, [])
 
   const newSession = useCallback(async () => {
+    if (!isHome) return
     try {
       await api.newSession()
       itemsRef.current = []
@@ -194,19 +255,31 @@ export default function App() {
     } catch {
       /* ignore */
     }
-  }, [refreshMeta])
+  }, [isHome, refreshMeta])
 
   const resumeSession = useCallback(
     async (id: string) => {
+      if (!isHome) return
       try {
         await api.resumeSession(id)
         await refreshMeta()
-        await restoreHistory()
+        await api.history().then((history) => {
+          const restored: Item[] = []
+          for (const m of history) {
+            const role = m['role']
+            const content = String(m['content'] ?? '')
+            if (role === 'user' && content) restored.push({ kind: 'user', text: content })
+            if (role === 'assistant' && content)
+              restored.push({ kind: 'assistant', text: content, running: false })
+          }
+          itemsRef.current = restored
+          setItems([...restored])
+        })
       } catch {
         /* ignore */
       }
     },
-    [refreshMeta, restoreHistory],
+    [isHome, refreshMeta],
   )
 
   const answerPermission = useCallback(
@@ -222,21 +295,46 @@ export default function App() {
     [permission],
   )
 
+  const addWorkspace = useCallback((path: string) => {
+    const normalized = path.trim()
+    if (!normalized) return
+    setWorkspaces((prev) => {
+      const exists = prev.some((p) => p.replace(/\\/g, '/').toLowerCase() === normalized.replace(/\\/g, '/').toLowerCase())
+      const next = exists ? prev : [...prev, normalized]
+      localStorage.setItem(WS_KEY, JSON.stringify(next))
+      return next
+    })
+    localStorage.setItem(ACTIVE_WS_KEY, normalized)
+    setActiveWorkspace(normalized)
+  }, [])
+
+  const switchWorkspace = useCallback((path: string) => {
+    localStorage.setItem(ACTIVE_WS_KEY, path)
+    setActiveWorkspace(path)
+  }, [])
+
   const isEmpty = items.length === 0
+  const activeBaseName = activeWorkspace
+    ? activeWorkspace.split(/[\\/]/).filter(Boolean).pop() ?? ''
+    : ''
 
   return (
     <div className={styles.frame}>
       <Sidebar
         sessions={sessions}
         state={state}
+        workspaces={workspaces}
+        activeWorkspace={activeWorkspace}
         onNewSession={newSession}
         onResume={resumeSession}
         onOpenSettings={() => setSettingsOpen(true)}
+        onAddWorkspace={addWorkspace}
+        onSwitchWorkspace={switchWorkspace}
       />
       <div className={styles.mainColumn}>
         <div className={styles.scroll} id="chat-scroll">
           {isEmpty ? (
-            <Hero project={state?.work_dir ?? ''} />
+            <Hero project={activeWorkspace} locked={!isHome} />
           ) : (
             <div className="contentColumn">
               <ChatItems items={items} />
@@ -246,20 +344,25 @@ export default function App() {
         <div className={styles.composerSeat}>
           <Composer
             running={running}
-            disabled={!state}
-            onSend={send}
-            onAbort={abort}
+            disabled={!state || !isHome}
             usage={usage}
             permissionMode={state?.permission_mode ?? 'default'}
+            modelName={state?.model ?? ''}
+            providers={providers}
+            onSend={send}
+            onAbort={abort}
             onModeChange={async (mode) => {
               await api.setPermissionMode(mode)
+              await refreshMeta()
+            }}
+            onModelSwitch={async () => {
               await refreshMeta()
             }}
           />
         </div>
         <StatusBar
           model={state?.model ?? ''}
-          workDir={state?.work_dir ?? ''}
+          workDir={activeWorkspace || serverDir}
           running={running}
         />
       </div>
@@ -269,8 +372,8 @@ export default function App() {
   )
 }
 
-/** Hero 态(新对话):居中 logo + 标题 + 项目 chip(§10.2)。 */
-function Hero({ project }: { project: string }) {
+/** Hero 态(新对话):居中 logo + 标题 + 工作区 chip(§10.2)。 */
+function Hero({ project, locked }: { project: string; locked: boolean }) {
   const projectName = project ? project.split(/[\\/]/).filter(Boolean).pop() : ''
   return (
     <div className={styles.hero}>
@@ -289,7 +392,7 @@ function Hero({ project }: { project: string }) {
           <span>ArchCode</span>
         </div>
         {projectName && (
-          <button className={styles.heroChip} type="button">
+          <button className={styles.heroChip} type="button" title={locked ? '该工作区未接入后端(浏览模式)' : project}>
             <svg width={14} height={14} viewBox="0 0 16 16" fill="none" aria-hidden>
               <path
                 d="M2 4.5A1.5 1.5 0 0 1 3.5 3h3l1.5 2h4.5A1.5 1.5 0 0 1 14 6.5v5A1.5 1.5 0 0 1 12.5 13h-9A1.5 1.5 0 0 1 2 11.5v-7z"
@@ -298,6 +401,7 @@ function Hero({ project }: { project: string }) {
               />
             </svg>
             <span>{projectName}</span>
+            {locked && <span className={styles.heroLock}>仅浏览</span>}
           </button>
         )}
       </div>

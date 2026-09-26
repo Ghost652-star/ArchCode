@@ -253,7 +253,7 @@ def main() -> None:
             agent = _build_agent_sync(config, work_dir, tool_registry)
             _wire_hooks(config, work_dir, agent)
             _wire_skills(agent, tool_registry, work_dir)
-            run_web(agent, work_dir, args.port, config.mcp_servers)
+            run_web(agent, work_dir, args.port, config.mcp_servers, config.providers)
         else:
             # TUI 路径:build 同步做(create_default_registry 不需要 await),
             # MCP 连接放到 background task,在 TUI 的 event loop 里跑。
