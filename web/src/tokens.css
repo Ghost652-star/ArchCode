@@ -115,13 +115,13 @@
 
 /* ── 全局布局常量(§4 比例)── */
 :root {
-  --ac-content-width: clamp(680px, 64vw, 920px);
+  --ac-content-width: clamp(720px, 66vw, 1000px);
   --ac-bubble-max: calc(var(--ac-content-width) * 0.702);
-  --ac-sidebar-width: 260px;
-  --ac-font-size: 14px;
-  --ac-line-height: 22px;
-  --ac-font-size-secondary: 13px;
-  --ac-line-height-secondary: 20px;
-  --ac-font-size-caption: 12px;
-  --ac-line-height-caption: 18px;
+  --ac-sidebar-width: 280px;
+  --ac-font-size: 16px;
+  --ac-line-height: 24px;
+  --ac-font-size-secondary: 14px;
+  --ac-line-height-secondary: 22px;
+  --ac-font-size-caption: 13px;
+  --ac-line-height-caption: 20px;
 }
