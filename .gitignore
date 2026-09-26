@@ -24,3 +24,4 @@ AGENTS.md
 # WebUI 前端
 web/node_modules/
 web/dist/
+.zcodeignore
