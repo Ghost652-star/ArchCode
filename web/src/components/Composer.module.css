@@ -27,13 +27,13 @@
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  margin-top: 4px;
+  margin-top: 6px;
 }
 
 .tools {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 6px;
   min-width: 0;
 }
 
@@ -41,17 +41,18 @@
   position: relative;
 }
 
+/* ── 小方钮(+)── */
 .toolBtn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 26px;
-  height: 26px;
-  border-radius: 8px;
+  width: 32px;
+  height: 32px;
+  border-radius: 10px;
   border: 0.5px solid var(--ac-border-l2);
-  font-size: 15px;
+  font-size: 17px;
   color: var(--ac-label-secondary);
-  transition: background var(--ac-dur-fast) var(--ac-ease);
+  transition: background var(--ac-dur-fast) var(--ac-ease), color var(--ac-dur-fast) var(--ac-ease);
 }
 
 .toolBtn:hover {
@@ -59,29 +60,31 @@
   color: var(--ac-label-primary);
 }
 
+/* ── 指令列表(DSH MenuView:全宽贴卡底,r16 菜单面)────────── */
 .menu {
   position: absolute;
   bottom: calc(100% + 6px);
   left: 0;
-  z-index: 20;
-  width: 320px;
-  max-height: 320px;
+  right: 0;
+  z-index: 40;
+  max-height: 400px;
   overflow-y: auto;
   padding: 6px;
-  border-radius: 12px;
+  border-radius: 16px;
   background: var(--ac-bg-menu);
   backdrop-filter: blur(12px);
   box-shadow: var(--ac-shadow-prominent);
 }
 
-.menuLabel {
-  padding: 6px 8px 2px;
-  font-size: var(--ac-font-size-caption);
-  color: var(--ac-label-caption);
+.menuSection {
+  padding: 6px 10px 3px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--ac-label-tertiary);
 }
 
 .menuEmpty {
-  padding: 4px 8px 6px;
+  padding: 6px 10px 8px;
   font-size: var(--ac-font-size-caption);
   color: var(--ac-label-caption);
 }
@@ -89,9 +92,10 @@
 .menuItem {
   display: flex;
   align-items: baseline;
-  gap: 8px;
+  gap: 10px;
   width: 100%;
-  padding: 6px 8px;
+  min-height: 34px;
+  padding: 6px 10px;
   border-radius: 8px;
   text-align: left;
   transition: background var(--ac-dur-fast) var(--ac-ease);
@@ -101,58 +105,83 @@
   background: var(--ac-bg-hover);
 }
 
-.menuSkillName {
+.menuName {
   flex: none;
   font-size: var(--ac-font-size-secondary);
   font-weight: 500;
   color: var(--ac-label-primary);
 }
 
-.menuSkillDesc {
+.menuDesc {
+  flex: 1 1 auto;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: var(--ac-font-size-caption);
+  font-size: var(--ac-font-size-secondary);
   color: var(--ac-label-tertiary);
 }
 
-.modeSelect {
-  padding: 4px 6px;
+/* ── 权限模式:自定义下拉(原生 select 高亮色不可控)────────── */
+.modeChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 10px 0 12px;
+  border-radius: 16px;
+  color: var(--ac-label-secondary);
+  font-size: var(--ac-font-size-secondary);
+  font-weight: 500;
+  transition: background var(--ac-dur-fast) var(--ac-ease);
+}
+
+.modeChip:hover:not(:disabled) {
+  background: var(--ac-bg-hover);
+  color: var(--ac-label-primary);
+}
+
+.modeMenu {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 0;
+  z-index: 40;
+  min-width: 180px;
+  padding: 5px;
+  border-radius: 12px;
+  background: var(--ac-bg-menu);
+  backdrop-filter: blur(12px);
+  box-shadow: var(--ac-shadow-prominent);
+}
+
+.modeItem {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  min-height: 34px;
+  padding: 6px 10px;
   border-radius: 8px;
-  border: none;
-  background: transparent;
-  font-size: var(--ac-font-size-caption);
-  color: var(--ac-label-tertiary);
-  cursor: pointer;
+  text-align: left;
+  font-size: var(--ac-font-size-secondary);
+  color: var(--ac-label-primary);
+  transition: background var(--ac-dur-fast) var(--ac-ease);
 }
 
-.modeSelect:hover {
+.modeItem:hover {
   background: var(--ac-bg-hover);
 }
 
-.trailing {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex: none;
-}
-
-.usage {
-  font-size: var(--ac-font-size-caption);
-  font-variant-numeric: tabular-nums;
-  color: var(--ac-label-caption);
-  white-space: nowrap;
-}
-
+/* ── 模型 chip + 菜单 ──────────────────────────────────────── */
 .modelChip {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  max-width: 200px;
-  height: 28px;
-  padding: 0 6px 0 10px;
-  border-radius: 14px;
+  gap: 6px;
+  max-width: 220px;
+  height: 32px;
+  padding: 0 8px 0 12px;
+  border-radius: 16px;
   color: var(--ac-label-secondary);
   font-size: var(--ac-font-size-secondary);
   font-weight: 500;
@@ -174,7 +203,7 @@
   position: absolute;
   bottom: calc(100% + 6px);
   right: 0;
-  z-index: 30;
+  z-index: 40;
   width: min(300px, calc(100vw - 48px));
   max-height: 300px;
   overflow-y: auto;
@@ -217,13 +246,15 @@
   color: var(--ac-label-tertiary);
 }
 
+/* ── 主按钮:发送⇄停止同位 morph ──────────────────────────── */
 .primaryBtn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 30px;
-  height: 30px;
-  border-radius: 15px;
+  flex: none;
+  width: 34px;
+  height: 34px;
+  border-radius: 17px;
   background: var(--ac-label-primary);
   color: var(--ac-bg-base);
   transition: background var(--ac-dur-fast) var(--ac-ease), opacity var(--ac-dur-fast) var(--ac-ease);
@@ -245,4 +276,18 @@
 .stopBtn:hover:not(:disabled) {
   background: var(--ac-state-error);
   opacity: 0.85;
+}
+
+.trailing {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: none;
+}
+
+.usage {
+  font-size: var(--ac-font-size-caption);
+  font-variant-numeric: tabular-nums;
+  color: var(--ac-label-caption);
+  white-space: nowrap;
 }

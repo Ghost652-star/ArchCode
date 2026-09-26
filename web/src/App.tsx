@@ -351,6 +351,7 @@ export default function App() {
             providers={providers}
             onSend={send}
             onAbort={abort}
+            onNewSession={newSession}
             onModeChange={async (mode) => {
               await api.setPermissionMode(mode)
               await refreshMeta()
@@ -360,11 +361,7 @@ export default function App() {
             }}
           />
         </div>
-        <StatusBar
-          model={state?.model ?? ''}
-          workDir={activeWorkspace || serverDir}
-          running={running}
-        />
+        <StatusBar model={state?.model ?? ''} running={running} />
       </div>
       {permission && <PermissionDialog permission={permission} onAnswer={answerPermission} />}
       {settingsOpen && <SettingsPanel onClose={() => setSettingsOpen(false)} />}

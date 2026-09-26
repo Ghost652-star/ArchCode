@@ -35,9 +35,10 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 24px;
-  height: 24px;
-  border-radius: 6px;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  font-size: 14px;
   color: var(--ac-label-tertiary);
   transition: background var(--ac-dur-fast) var(--ac-ease);
 }
@@ -49,7 +50,8 @@
 
 .newBtn {
   margin: 4px 12px 8px;
-  padding: 7px 12px;
+  padding: 9px 12px;
+  font-size: var(--ac-font-size);
   border-radius: 10px;
   border: 0.5px solid var(--ac-border-l2);
   text-align: left;
@@ -152,10 +154,10 @@
 .addWsInput {
   flex: 1;
   min-width: 0;
-  padding: 6px 8px;
-  border-radius: 8px;
+  padding: 8px 10px;
+  border-radius: 10px;
   background: var(--ac-bg-layer-2);
-  font-size: var(--ac-font-size-caption);
+  font-size: var(--ac-font-size-secondary);
 }
 
 .addWsBtn {
@@ -225,10 +227,10 @@
 
 .settingsBtn {
   width: 100%;
-  padding: 6px 8px;
-  border-radius: 8px;
+  padding: 8px 10px;
+  border-radius: 10px;
   text-align: left;
-  font-size: var(--ac-font-size-secondary);
+  font-size: var(--ac-font-size);
   color: var(--ac-label-secondary);
   transition: background var(--ac-dur-fast) var(--ac-ease);
 }
