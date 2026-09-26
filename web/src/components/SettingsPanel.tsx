@@ -19,6 +19,7 @@ export default function SettingsPanel({ onClose }: { onClose: () => void }) {
   const [scope, setScope] = useState<Scope>('project')
   const [section, setSection] = useState<Section>('models')
   const [data, setData] = useState<Record<string, unknown>>({})
+  const [userData, setUserData] = useState<Record<string, unknown>>({})
   const [exists, setExists] = useState(true)
   const [notice, setNotice] = useState('')
   const [skills, setSkills] = useState<
@@ -35,6 +36,14 @@ export default function SettingsPanel({ onClose }: { onClose: () => void }) {
     } catch {
       setData({})
       setExists(false)
+    }
+    // 另一层(user/project)只读展示:当前作用域没配的条目,标注来源可见
+    const otherScope = scope === 'user' ? 'project' : 'user'
+    try {
+      const res2 = await api.getSettings(otherScope)
+      setUserData(res2.data ?? {})
+    } catch {
+      setUserData({})
     }
   }, [scope])
 
@@ -100,10 +109,18 @@ export default function SettingsPanel({ onClose }: { onClose: () => void }) {
             {!exists && <div className={styles.hint}>该作用域尚无 config.yaml,保存时将创建。</div>}
 
             {section === 'models' && (
-              <ProviderSection items={providers} onSave={(items) => save('providers', items)} />
+              <ProviderSection
+                items={providers}
+                readOnlyItems={(userData['providers'] as Array<Record<string, unknown>>) ?? []}
+                onSave={(items) => save('providers', items)}
+              />
             )}
             {section === 'mcp' && (
-              <McpSection items={mcpServers} onSave={(items) => save('mcp_servers', items)} />
+              <McpSection
+                items={mcpServers}
+                readOnlyItems={(userData['mcp_servers'] as Array<Record<string, unknown>>) ?? []}
+                onSave={(items) => save('mcp_servers', items)}
+              />
             )}
             {section === 'skills' && (
               <div>
@@ -122,7 +139,7 @@ export default function SettingsPanel({ onClose }: { onClose: () => void }) {
             )}
             {section === 'hooks' && (
               <div>
-                {hooks.length === 0 && <div className={styles.hint}>未声明任何 hook</div>}
+                {hooks.length === 0 && <div className={styles.hint}>当前作用域未声明 hook</div>}
                 {hooks.map((h, i) => (
                   <div key={i} className={styles.row}>
                     <div className={styles.rowMain}>
@@ -189,15 +206,34 @@ export default function SettingsPanel({ onClose }: { onClose: () => void }) {
 /** Provider 行列表 + 添加表单(§9.1 ModelsSection 的极简版)。 */
 function ProviderSection({
   items,
+  readOnlyItems,
   onSave,
 }: {
   items: Array<Record<string, unknown>>
+  readOnlyItems: Array<Record<string, unknown>>
   onSave: (items: unknown[]) => void
 }) {
   const [form, setForm] = useState({ name: '', protocol: 'openai-compat', base_url: '', model: '', api_key: '' })
   const set = (k: string, v: string) => setForm((f) => ({ ...f, [k]: v }))
   return (
     <div>
+      {items.length === 0 && readOnlyItems.length > 0 && (
+        <div className={styles.hint}>当前作用域未配置,以下为生效的 用户级 配置(只读,编辑请切换作用域)。</div>
+      )}
+      {readOnlyItems.map((p, i) => (
+        <div key={`ro-${i}`} className={styles.row}>
+          <div className={styles.rowMain}>
+            <div className={styles.rowTitle}>
+              {String(p['name'] ?? '')} · {String(p['model'] ?? '')}
+            </div>
+            <div className={styles.rowDesc}>
+              {String(p['protocol'] ?? '')} · {String(p['base_url'] ?? '')}
+            </div>
+          </div>
+          <span className={styles.tag}>{p['api_key'] ? 'key ✓' : 'key 缺失'}</span>
+          <span className={styles.tag}>用户级</span>
+        </div>
+      ))}
       {items.map((p, i) => (
         <div key={i} className={styles.row}>
           <div className={styles.rowMain}>
@@ -245,15 +281,35 @@ function ProviderSection({
 /** MCP 行列表 + 添加表单(stdio/http 二选一)。 */
 function McpSection({
   items,
+  readOnlyItems,
   onSave,
 }: {
   items: Array<Record<string, unknown>>
+  readOnlyItems: Array<Record<string, unknown>>
   onSave: (items: unknown[]) => void
 }) {
   const [form, setForm] = useState({ name: '', command: '', url: '' })
   const set = (k: string, v: string) => setForm((f) => ({ ...f, [k]: v }))
   return (
     <div>
+      {items.length === 0 && readOnlyItems.length > 0 && (
+        <div className={styles.hint}>当前作用域未配置,以下为生效的 用户级 配置(只读)。</div>
+      )}
+      {readOnlyItems.map((s, i) => {
+        const isHttp = Boolean(s['url'])
+        return (
+          <div key={`ro-${i}`} className={styles.row}>
+            <div className={styles.rowMain}>
+              <div className={styles.rowTitle}>{String(s['name'] ?? '')}</div>
+              <div className={styles.rowDesc}>
+                {isHttp ? String(s['url']) : `${String(s['command'] ?? '')} ${(s['args'] as string[])?.join(' ') ?? ''}`}
+              </div>
+            </div>
+            <span className={styles.tag}>{isHttp ? 'http' : 'stdio'}</span>
+            <span className={styles.tag}>用户级</span>
+          </div>
+        )
+      })}
       {items.map((s, i) => {
         const isHttp = Boolean(s['url'])
         return (
