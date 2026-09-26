@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from abc import ABC, abstractmethod
 from typing import Any, AsyncIterator
 
@@ -24,6 +25,8 @@ from archcode.llm.serializer import (
     build_chat_completion_messages,
     build_openai_input,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class LLMError(Exception):
@@ -175,6 +178,11 @@ class AnthropicClient(LLMClient):
         thinking_accum = ""
         thinking_signature = ""
 
+        logger.debug(
+            "llm request: model=%s messages=%d tools=%d",
+            self.model, len(messages), len(tools or []),
+        )
+
         try:
             async with self._client.messages.stream(**kwargs) as stream:
                 async for event in stream:
@@ -235,16 +243,20 @@ class AnthropicClient(LLMClient):
                     cache_creation=getattr(usage, "cache_creation_input_tokens", 0) or 0,
                 )
         except _anthropic.AuthenticationError as e:
+            logger.error("llm auth error: %s", e)
             raise AuthenticationError(f"Invalid API key: {e}") from e
         except _anthropic.RateLimitError as e:
             retry = e.response.headers.get("retry-after") if e.response else None
+            logger.warning("llm rate limited: %s", e)
             raise RateLimitError(
                 f"Rate limited. {f'Retry after {retry}s.' if retry else 'Please wait.'}",
                 retry_after=float(retry) if retry else None,
             ) from e
         except _anthropic.APIConnectionError as e:
+            logger.warning("llm network error: %s", e)
             raise NetworkError(f"Network error: {e}") from e
         except _anthropic.APIStatusError as e:
+            logger.warning("llm api error: %s", e)
             raise LLMError(f"API error ({e.status_code}): {e.message}") from e
 
 
@@ -315,6 +327,11 @@ class OpenAIClient(LLMClient):
         current_call_id = ""
         json_accum = ""
 
+        logger.debug(
+            "llm request: model=%s messages=%d tools=%d",
+            self.model, len(input_messages), len(tools or []),
+        )
+
         try:
             response_stream = await self._client.responses.create(**kwargs)
             async for event in response_stream:
@@ -371,18 +388,22 @@ class OpenAIClient(LLMClient):
                         cache_creation=0,
                     )
         except _openai.AuthenticationError as e:
+            logger.error("llm auth error: %s", e)
             raise AuthenticationError(f"Invalid API key: {e}") from e
         except _openai.RateLimitError as e:
             retry = None
             if hasattr(e, "response") and e.response is not None:
                 retry = e.response.headers.get("retry-after")
+            logger.warning("llm rate limited: %s", e)
             raise RateLimitError(
                 f"Rate limited. {f'Retry after {retry}s.' if retry else 'Please wait.'}",
                 retry_after=float(retry) if retry else None,
             ) from e
         except _openai.APIConnectionError as e:
+            logger.warning("llm network error: %s", e)
             raise NetworkError(f"Network error: {e}") from e
         except _openai.APIStatusError as e:
+            logger.warning("llm api error: %s", e)
             raise LLMError(f"API error ({e.status_code}): {e.message}") from e
 
 
@@ -475,6 +496,11 @@ class OpenAICompatClient(LLMClient):
         active_calls: dict[int, dict[str, str]] = {}
         saw_usage_end = False
 
+        logger.debug(
+            "llm request: model=%s messages=%d tools=%d",
+            self.model, len(messages), len(tools or []),
+        )
+
         try:
             response = await self._client.chat.completions.create(**kwargs)
             async for chunk in response:
@@ -534,18 +560,22 @@ class OpenAICompatClient(LLMClient):
             if not saw_usage_end:
                 yield StreamEnd(stop_reason="end_turn")
         except _openai.AuthenticationError as e:
+            logger.error("llm auth error: %s", e)
             raise AuthenticationError(f"Invalid API key: {e}") from e
         except _openai.RateLimitError as e:
             retry = None
             if hasattr(e, "response") and e.response is not None:
                 retry = e.response.headers.get("retry-after")
+            logger.warning("llm rate limited: %s", e)
             raise RateLimitError(
                 f"Rate limited. {f'Retry after {retry}s.' if retry else 'Please wait.'}",
                 retry_after=float(retry) if retry else None,
             ) from e
         except _openai.APIConnectionError as e:
+            logger.warning("llm network error: %s", e)
             raise NetworkError(f"Network error: {e}") from e
         except _openai.APIStatusError as e:
+            logger.warning("llm api error: %s", e)
             raise LLMError(f"API error ({e.status_code}): {e.message}") from e
 
 

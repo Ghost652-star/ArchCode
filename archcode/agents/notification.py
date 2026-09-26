@@ -8,10 +8,13 @@ tool-pair 配对;注入发生在两轮 LLM 调用之间的固定点,不打断当
 
 from __future__ import annotations
 
+import logging
 from typing import Callable
 
 from archcode.agents.task_manager import BackgroundTask, TaskManager
 from archcode.conversation.manager import ConversationManager
+
+log = logging.getLogger(__name__)
 
 MAX_NOTIFICATION_RESULT_LENGTH = 5000
 
@@ -55,7 +58,10 @@ def make_background_notifier(
     """
 
     def _drain(conversation: ConversationManager) -> None:
-        for task in task_manager.drain_notifications():
+        drained = task_manager.drain_notifications()
+        for task in drained:
             conversation.add_user(format_task_notification(task))
+        if drained:
+            log.debug("bg notifications drained: %d", len(drained))
 
     return _drain

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import random
 import sys
 import time
@@ -40,8 +41,11 @@ from archcode.commands import (
 )
 from archcode.commands.handlers import built_in_command_specs, create_skill_command
 from archcode.memory import SessionManager, format_instruction_diagnostics
+from archcode.logctx import set_session_id
 from archcode.permissions import PermissionMode
 from archcode.permission_modal import PermissionModal
+
+log = logging.getLogger(__name__)
 
 
 # 思考状态显示
@@ -227,6 +231,8 @@ class ArchCodeApp(App):
             self._session_manager = SessionManager(work_dir)
             self._session = self._session_manager.create()
             self._session.bind(self._conversation)
+            log.info("session created: %s", self._session.id)
+            set_session_id(self._session.id)
         self._streaming = False
         self._agent_task: asyncio.Task[None] | None = None
         self._submitted_inputs: deque[str] = deque()
@@ -363,6 +369,7 @@ class ArchCodeApp(App):
         """App 退出:关 MCP manager。"""
         self._fire_session_hook("session_end", "exit")
         if self._session is not None:
+            log.info("session ended: %s", self._session.id)
             self._session.close()
         if self._mcp_manager is not None:
             await self._mcp_manager.shutdown()
@@ -835,9 +842,11 @@ class ArchCodeApp(App):
         self._conversation = new_conversation
         if old_session is not None:
             old_session.close()
+        log.info("session rotated: %s -> %s", old_session.id if old_session else "-", new_session.id)
+        set_session_id(new_session.id)
         self._chat().remove_children()
         self._sync_ctx_tokens_from_conversation()
-        self._show_system(f"已新建会话：{new_session.session_id}")
+        self._show_system(f"已新建会话：{new_session.id}")
         self._fire_session_hook("session_start", "clear")
 
     async def resume_session(self, session_id: str) -> None:
@@ -856,6 +865,8 @@ class ArchCodeApp(App):
         self._agent.clear_active_skills()
         if old_session is not None:
             old_session.close()
+        log.info("session resumed: %s", session_id)
+        set_session_id(session_id)
         self._chat().remove_children()
         for message in self._conversation.history:
             if message.role == "user" and message.content:

@@ -33,6 +33,11 @@ class ConversationManager:
         """绑定会话后，普通对话消息先写盘再进入内存。"""
         self._session = session
 
+    @property
+    def session_id(self) -> str | None:
+        """绑定的会话 ID；未绑定(Session)时为 None(如子 agent 对话)。"""
+        return self._session.id if self._session is not None else None
+
     def _append_persisted(self, message: Message) -> None:
         if self._session is not None:
             self._session.append_message(message)

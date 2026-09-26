@@ -8,6 +8,7 @@ from typing import Any, AsyncIterator
 from pydantic import ValidationError
 
 import asyncio
+import logging
 
 from archcode.conversation.manager import ConversationManager
 from archcode.conversation.models import ThinkingBlock, ToolResultBlock, ToolUseBlock
@@ -54,6 +55,9 @@ from archcode.context.manager import (
     persist_tool_result,
 )
 from archcode.context.recovery import RecoveryState
+
+
+log = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -299,7 +303,7 @@ def partition_tool_calls(
 class Agent:
     """Agent 循环：用户消息 → LLM 流式事件 → 工具执行 → 结果写回 → 循环直到模型结束。
 
-    完整 ReAct 循环（v0.3+）：
+    完整 ReAct 循环：
     - while True 驱动，max_iterations 为硬上限
     - 每轮：stream LLM → 收集 TextDelta + ToolCallComplete →
            无 tool_calls → TurnComplete + LoopComplete 退出
@@ -369,6 +373,7 @@ class Agent:
         self._background_notifier = None             # 后台通知 drain 回调,接线时设置(§9.2)
         self.is_fork: bool = False                   # 防递归标记:fork 产生的子 agent 为 True(§5.5)
         self.parent_id: str | None = None            # 父 agent 标识(caller 判定/诊断,§5.5)
+        self._spawned: bool = False                   # 子 agent 标记(由 AgentTool/skill fork 构造处置位;日志 who 列)
 
         # ── Hook 子系统(hooks-design §6.1) ─────────────────
         self._hook_engine = None                     # HookEngine,启动接线时设置
@@ -632,6 +637,7 @@ class Agent:
         start = time.monotonic()
 
         if tool is None:
+            log.warning("unknown tool: %s", tc.tool_name)
             yield (
                 ToolResult(output=f"Error: unknown tool '{tc.tool_name}'", is_error=True),
                 time.monotonic() - start,
@@ -640,6 +646,7 @@ class Agent:
             return
 
         if not self._tool_registry.is_enabled(tc.tool_name):
+            log.warning("tool disabled: %s", tc.tool_name)
             yield (
                 ToolResult(
                     output=f"Error: tool '{tc.tool_name}' is disabled", is_error=True
@@ -657,6 +664,7 @@ class Agent:
             and tc.tool_name not in effective
             and not getattr(tool, "is_system_tool", False)
         ):
+            log.info("skill boundary reject: tool=%s", tc.tool_name)
             yield (
                 ToolResult(
                     output=(
@@ -674,6 +682,11 @@ class Agent:
         try:
             params = tool.params_model.model_validate(tc.arguments)
         except ValidationError as e:
+            log.warning(
+                "invalid arguments: tool=%s %s",
+                tc.tool_name,
+                " ".join(str(e).split())[:200],
+            )
             yield (
                 ToolResult(output=f"Error: invalid arguments: {e}", is_error=True),
                 time.monotonic() - start,
@@ -702,6 +715,11 @@ class Agent:
                     arguments=normalized_args,
                 )
             if decision.effect == "deny":
+                log.info(
+                    "permission denied: tool=%s reason=%s",
+                    tc.tool_name,
+                    decision.reason,
+                )
                 yield (
                     ToolResult(
                         output=(
@@ -722,6 +740,12 @@ class Agent:
             )
             rejection = await self._hook_engine.gate(gate_ctx)
             if rejection is not None:
+                log.info(
+                    "gate hook reject: tool=%s hook=%s reason=%.80s",
+                    tc.tool_name,
+                    rejection.hook_id,
+                    rejection.reason,
+                )
                 yield (
                     ToolResult(
                         output=(
@@ -774,6 +798,7 @@ class Agent:
                 else:
                     allowed = bool(value)
                     if not allowed:
+                        log.info("user denied tool=%s", tc.tool_name)
                         yield (
                             ToolResult(
                                 output=f"用户拒绝了工具 '{tc.tool_name}' 的执行请求。",
@@ -811,6 +836,15 @@ class Agent:
         # 记录 Read 类工具的输出,供压缩后恢复上下文用
         self._record_recovery_data(tool, tc, result)
 
+        # 执行类结果统一在此记(与上方各拦截路径的日志各记一处,不重复)
+        if result.is_error:
+            log.warning(
+                "tool error: %s: %.200s",
+                tc.tool_name,
+                " ".join(result.output.split()),
+            )
+        else:
+            log.debug("tool ok: %s elapsed=%.2fs", tc.tool_name, time.monotonic() - start)
         yield result, time.monotonic() - start, False
 
     def _record_recovery_data(
@@ -944,6 +978,19 @@ class Agent:
         self.refresh_active_skills_pin(conversation)
         conversation.add_user(user_input)
 
+        # 日志关联(logging plan):有会话 ID 时重绑 session 列;
+        # 子 agent 对话未绑 Session → 不动,保留继承值
+        sid = conversation.session_id
+        if sid:
+            from archcode.logctx import set_session_id
+
+            set_session_id(sid)
+
+        task_start = time.monotonic()
+        who = "sub" if self._spawned else "main"
+        preview = " ".join(user_input.split())[:80]
+        log.info("task start: who=%s input=%s", who, preview or "(none)")
+
         # ── observe: turn_start(hooks-design §3,每 Task 一次) ──
         if self._hook_engine is not None:
             hook_ctx = self._build_hook_context("turn_start", "", {}, message=user_input)
@@ -961,12 +1008,14 @@ class Agent:
 
             # 用户主动打断:每轮开头检查,避免半路强行 cancel SDK 请求
             if abort.is_set():
+                log.info("task aborted: user cancel (turns=%d)", iteration)
                 yield ErrorEvent(message="[aborted] 用户取消")
                 yield LoopComplete(total_turns=iteration, text=final_text)
                 return
 
             # 硬上限
             if iteration > self._max_iterations:
+                log.warning("task aborted: max iterations (%d) reached", self._max_iterations)
                 yield ErrorEvent(
                     message=f"Agent reached maximum iterations ({self._max_iterations})"
                 )
@@ -1211,6 +1260,11 @@ class Agent:
                                 result_collector = retry_collector
                             except LLMError:
                                 # 重试仍失败 → 走错误路径
+                                log.error(
+                                    "LLM error: %s (retry after force-compact)",
+                                    e,
+                                    exc_info=True,
+                                )
                                 yield ErrorEvent(message=str(e))
                                 yield LoopComplete(
                                     total_turns=iteration, text=final_text
@@ -1223,6 +1277,7 @@ class Agent:
                                 if isinstance(compact_event, str)
                                 else "未知失败"
                             )
+                            log.warning("force-compact failed: %s", err_msg)
                             if force_started_flag:
                                 yield CompactFinished(success=False, error=err_msg)
                             yield ErrorEvent(
@@ -1234,6 +1289,7 @@ class Agent:
                             return
                     except Exception as fc_err:
                         fc_msg = f"[force-compact 异常] {type(fc_err).__name__}: {fc_err}"
+                        log.warning("force-compact failed: %s", fc_msg)
                         if force_started_flag:
                             yield CompactStarted(mode="force")
                             yield CompactFinished(success=False, error=fc_msg)
@@ -1241,10 +1297,12 @@ class Agent:
                         yield LoopComplete(total_turns=iteration, text=final_text)
                         return
                 else:
+                    log.error("LLM error: %s", e, exc_info=True)
                     yield ErrorEvent(message=str(e))
                     yield LoopComplete(total_turns=iteration, text=final_text)
                     return
             except Exception as e:
+                log.error("unexpected error in agent loop: %s", e, exc_info=True)
                 yield ErrorEvent(message=str(e))
                 yield LoopComplete(total_turns=iteration, text=final_text)
                 return
@@ -1254,6 +1312,14 @@ class Agent:
 
             # 向 UI 报告本轮实际用量。Conversation 的 usage anchor 要等
             # assistant 消息写入 history 后再建立，避免下一轮重复估算输出。
+            log.info(
+                "llm call: turn=%d in=%d out=%d cache_read=%d stop=%s",
+                iteration,
+                result_collector.response.input_tokens,
+                result_collector.response.output_tokens,
+                result_collector.response.cache_read,
+                result_collector.response.stop_reason,
+            )
             yield UsageEvent(
                 input_tokens=result_collector.response.input_tokens,
                 output_tokens=result_collector.response.output_tokens,
@@ -1277,6 +1343,7 @@ class Agent:
                         "Output token limit hit. Resume directly where you stopped. "
                         "Do not apologize or repeat previous content."
                     )
+                    log.debug("llm response truncated (max_tokens), continuing")
                 yield RetryEvent(reason="max_tokens continuation")
                 continue
 
@@ -1306,6 +1373,12 @@ class Agent:
                         "turn_end", "", {}, message=final_text,
                     )
                     await self._hook_engine.observe("turn_end", hook_ctx)
+                log.info(
+                    "task complete: who=%s turns=%d elapsed=%.1fs",
+                    who,
+                    iteration,
+                    time.monotonic() - task_start,
+                )
                 yield TurnComplete(turn=iteration)
                 yield LoopComplete(total_turns=iteration, text=final_text)
                 return
@@ -1400,6 +1473,7 @@ class Agent:
 
             # 连续未知工具超过 3 次 → 退出
             if consecutive_unknown >= 3:
+                log.warning("task aborted: too many consecutive unknown tool calls")
                 yield ErrorEvent(
                     message="Agent terminated: too many consecutive unknown tool calls"
                 )

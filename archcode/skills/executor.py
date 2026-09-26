@@ -7,9 +7,12 @@ tool_result 不回吐正文(正文已钉进激活消息)。
 
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING, Any
 
 from archcode.skills.loader import SkillLoader, substitute_arguments
+
+log = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from archcode.agent import Agent
@@ -122,9 +125,14 @@ class SkillExecutor:
         sub._hook_engine = agent._hook_engine
         sub._skill_loader = agent._skill_loader
         sub.is_fork = True
+        sub._spawned = True  # 日志 who 列:skill fork 的子 agent 标 "sub"
 
         runner = SubAgentRunner(sub, fork_conv, inject_task=False)
         task_id = task_manager.launch(runner, task="", name=manifest.name)
+        log.info(
+            "skill fork launched: skill=%s context=%s task_id=%s",
+            manifest.name, manifest.context, task_id,
+        )
         return (
             f"Skill '{manifest.name}' 已以后台子 agent 启动(fork 模式)。\n"
             f"Task ID: {task_id}\n"

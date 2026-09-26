@@ -12,10 +12,15 @@ cancel 字段/方法供延后的 ESC 手动切换与 adoptRunning 使用(§8.1/8
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 import uuid
 from dataclasses import dataclass, field
 from typing import Any, Callable
+
+from archcode.logctx import task_scope
+
+log = logging.getLogger(__name__)
 
 
 @dataclass
@@ -61,6 +66,7 @@ class TaskManager:
         task_id = uuid.uuid4().hex[:8]
         bg = BackgroundTask(id=task_id, name=name or task_id, agent=agent, task=task)
         self._tasks[task_id] = bg
+        log.info("bg task launched: id=%s name=%s", task_id, bg.name)
         async_task = asyncio.create_task(self._run_background(task_id))
         self._async_tasks[task_id] = async_task
         bg.cancel = async_task.cancel
@@ -70,21 +76,38 @@ class TaskManager:
         bg = self._tasks.get(task_id)
         if bg is None:
             return
-        try:
-            bg.result = await bg.agent.run_to_completion(bg.task)
-            bg.status = "completed"
-        except asyncio.CancelledError:
-            bg.status = "cancelled"
-            bg.result = "Task was cancelled"
-        except Exception as exc:  # 异常保护:子 agent 崩溃不影响主程序(§8.2)
-            bg.status = "failed"
-            bg.result = f"Error: {exc}"
-        finally:
-            bg.end_time = time.monotonic()
-            bg.progress.input_tokens = int(getattr(bg.agent, "total_input_tokens", 0) or 0)
-            bg.progress.output_tokens = int(getattr(bg.agent, "total_output_tokens", 0) or 0)
-            self._async_tasks.pop(task_id, None)
-            await self._notify_queue.put(task_id)  # 完成即通知,无论成败
+        with task_scope(task_id):  # 关联列:本任务协程内的日志行都带 task id
+            try:
+                bg.result = await bg.agent.run_to_completion(bg.task)
+                bg.status = "completed"
+            except asyncio.CancelledError:
+                bg.status = "cancelled"
+                bg.result = "Task was cancelled"
+            except Exception as exc:  # 异常保护:子 agent 崩溃不影响主程序(§8.2)
+                bg.status = "failed"
+                bg.result = f"Error: {exc}"
+            finally:
+                bg.end_time = time.monotonic()
+                bg.progress.input_tokens = int(getattr(bg.agent, "total_input_tokens", 0) or 0)
+                bg.progress.output_tokens = int(getattr(bg.agent, "total_output_tokens", 0) or 0)
+                self._async_tasks.pop(task_id, None)
+                if bg.status == "completed":
+                    log.info(
+                        "bg task completed: id=%s name=%s elapsed=%.1fs tokens(in/out)=%d/%d",
+                        task_id,
+                        bg.name,
+                        bg.end_time - bg.start_time,
+                        bg.progress.input_tokens,
+                        bg.progress.output_tokens,
+                    )
+                elif bg.status == "cancelled":
+                    log.warning("bg task cancelled: id=%s name=%s", task_id, bg.name)
+                else:
+                    log.error(
+                        "bg task failed: id=%s name=%s error=%.200s",
+                        task_id, bg.name, bg.result,
+                    )
+                await self._notify_queue.put(task_id)  # 完成即通知,无论成败
 
     def drain_notifications(self) -> list[BackgroundTask]:
         """主循环每轮调用:取走全部已完成任务(§9.2 注入 <task-notification>)。"""
@@ -112,6 +135,7 @@ class TaskManager:
             return False
         async_task = self._async_tasks.get(task_id)
         if async_task is not None and not async_task.done():
+            log.info("bg task cancel requested: id=%s", task_id)
             async_task.cancel()
             return True
         return False

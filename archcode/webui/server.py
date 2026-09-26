@@ -36,6 +36,7 @@ from archcode.agent import (
     UsageEvent,
 )
 from archcode.conversation.manager import ConversationManager
+from archcode.logctx import set_session_id
 from archcode.memory import SessionManager
 
 log = logging.getLogger(__name__)
@@ -54,6 +55,8 @@ class ServerState:
         self.conversation = ConversationManager()
         self._session = self.session_manager.create()
         self._session.bind(self.conversation)
+        log.info("session created: %s", self._session.id)
+        set_session_id(self._session.id)
         self._run_lock = asyncio.Lock()
         self._permissions: dict[str, asyncio.Future] = {}
         self._pending_permits: list[dict] = []  # 重连时重发的未决请求
@@ -68,6 +71,8 @@ class ServerState:
         self._session.bind(self.conversation)
         if old is not None:
             old.close()
+        log.info("session rotated: %s -> %s", old.id if old else "-", self._session.id)
+        set_session_id(self._session.id)
         return self._session.id
 
     def resume_session(self, session_id: str) -> None:
@@ -80,6 +85,8 @@ class ServerState:
         self.conversation = restored.conversation
         if old is not None:
             old.close()
+        log.info("session resumed: %s", session_id)
+        set_session_id(session_id)
 
     def list_sessions(self) -> list[dict]:
         running = self._run_lock.locked()
@@ -505,5 +512,6 @@ def run_web(
     import uvicorn
 
     web_app = create_web_server(agent, work_dir, mcp_server_configs, providers)
+    log.info("web server starting: port=%d", port)
     print(f"ArchCode Web: http://127.0.0.1:{port}", file=sys.stderr)
     uvicorn.run(web_app, host="127.0.0.1", port=port, log_level="warning")

@@ -25,6 +25,8 @@ from archcode.skills import SkillExecutor, SkillLoader
 from archcode.tools import create_default_registry
 from archcode.tools.tool_search import ToolSearchTool
 
+_log = logging.getLogger("archcode")  # 运行时 __name__=="__main__",显式包级名
+
 
 def _wire_hooks(config, work_dir: Path, agent: Agent) -> None:
     """创建 HookEngine 并接线(hooks-design §8)。诊断打 stderr。"""
@@ -126,6 +128,9 @@ async def _run_prompt(
         for message in format_instruction_diagnostics(agent.last_instruction_diagnostics):
             print(message, file=sys.stderr)
         print(result, flush=True)
+    except RuntimeError as e:
+        _log.error("oneshot run failed: %s", e)
+        raise
     finally:
         session.close()
         if mcp_manager is not None:
@@ -157,16 +162,37 @@ def _build_agent_sync(config, work_dir, tool_registry):
 
 
 def _setup_logging(work_dir: Path) -> None:
-    """日志最小集(deferred-designs #4):INFO 起步,写项目级 debug.log,追加模式。
+    """日志配置:项目级 debug.log(追加) + [sess/task] 关联列。
 
-    存量三处 getLogger(compactor / mcp.client / mcp.manager)与 hooks 引擎自动接入。
+    - 默认 INFO,ARCHCODE_LOG_LEVEL 可覆盖(非法值回落 INFO);
+    - CorrelationFilter 在 emit 时注入 session/task 关联列(语义见 logctx);
+    - 存量 getLogger 处(compactor / hooks / mcp / webui)零改动继承新格式。
+    幂等:root 已挂带 _archcode_log 标记的 handler 时直接返回。
     """
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(name)s %(message)s",
-        filename=str(debug_log_path(work_dir)),
-        filemode="a",
+    from archcode.logctx import CorrelationFilter
+
+    level = getattr(logging, os.environ.get("ARCHCODE_LOG_LEVEL", "INFO").upper(), None)
+    if not isinstance(level, int):
+        level = logging.INFO
+    root = logging.getLogger()
+    root.setLevel(level)
+    for handler in root.handlers:
+        if getattr(handler, "_archcode_log", False):
+            return
+    # 目录由 main() 先建;这里再兜底一次,函数自包含(直接调用时不依赖调用序)
+    debug_log_path(work_dir).parent.mkdir(parents=True, exist_ok=True)
+    handler = logging.FileHandler(debug_log_path(work_dir), mode="a", encoding="utf-8")
+    handler._archcode_log = True
+    handler.addFilter(CorrelationFilter())
+    handler.setFormatter(
+        logging.Formatter(
+            "%(asctime)s [%(sess)s/%(task)s] %(name)s %(levelname)s: %(message)s",
+            datefmt="%Y-%m-%d %H:%M:%S",
+        )
     )
+    root.addHandler(handler)
+    _log.info("logging ready: file=%s level=%s", debug_log_path(work_dir),
+               logging.getLevelName(level))
 
 
 def main() -> None:
@@ -220,6 +246,14 @@ def main() -> None:
     except ConfigError as e:
         print(f"Config error: {e}", file=sys.stderr)
         sys.exit(1)
+
+    _log.info(
+        "archcode start: mode=%s work_dir=%s provider=%s model=%s",
+        "oneshot" if args.p is not None else ("web" if args.web else "tui"),
+        work_dir,
+        config.providers[0].protocol,
+        config.providers[0].model,
+    )
 
     try:
         if args.p is not None:
