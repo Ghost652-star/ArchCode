@@ -124,6 +124,45 @@ def main():
             assert client.get("/api/file", params={"path": "sub"}).status_code == 400
             print("[6] 文件端点 OK: 列目录/读文本/二进制/圈定")
 
+            # 7. 会话管理(设计 §10.9:标题/改名/删除)+ 历史去污染
+            sessions = client.get("/api/sessions").json()
+            row = sessions[0]
+            assert "title" in row and "last_active_ms" in row and "message_count" in row, row
+            sid = row["id"]
+            assert client.post(f"/api/sessions/{sid}/rename",
+                               json={"title": "冒烟改名"}).json()["ok"] is True
+            assert client.get("/api/sessions").json()[0]["title"] == "冒烟改名"
+            # 历史去污染:注入三类内部消息,均不应出现在 /api/history
+            import archcode.webui.server as _srv
+            from archcode.conversation.models import Message as _Msg
+
+            conv = _srv.STATE.conversation
+            conv.history.append(
+                _Msg(role="user", content="<system-reminder>\n注入\n</system-reminder>")
+            )
+            conv.history.append(
+                _Msg(role="user", content="<会话恢复材料>\n降级线索\n</会话恢复材料>")
+            )
+            conv.history.append(_Msg(role="user", content="[恢复提示] 距离上次超过 24 小时"))
+            conv.history.append(_Msg(role="user", content="真实用户消息"))
+            hist = client.get("/api/history").json()
+            contents = [m["content"] for m in hist if m["role"] == "user"]
+            assert any(c == "真实用户消息" for c in contents), contents
+            assert not any(
+                c.startswith(("<system-reminder>", "<会话恢复材料>", "[恢复提示]"))
+                for c in contents
+            ), contents
+            # 删除非当前会话:新建一个再删它
+            new_sid = client.post("/api/sessions").json()["session_id"]
+            assert client.delete(f"/api/sessions/{new_sid}").json()["ok"] is True
+            # 删除当前会话:服务端应自动开新会话
+            cur = client.get("/api/sessions").json()
+            cur_sid = next(s["id"] for s in cur if s["current"])
+            assert client.delete(f"/api/sessions/{cur_sid}").json()["ok"] is True
+            after = client.get("/api/sessions").json()
+            assert any(s["current"] for s in after) and all(s["id"] != cur_sid for s in after)
+            print("[7] 会话管理 OK: 字段/改名/删除/自动新会话/历史去污染")
+
     print("=== 链路冒烟全部通过 ===")
 
 

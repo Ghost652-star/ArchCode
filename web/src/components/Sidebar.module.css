@@ -188,14 +188,12 @@
   color: var(--ac-label-caption);
 }
 
+/* ── 会话行(§10.9-4:小一号弱色 + 相对时间 + hover 管理,与工作区行分层)── */
 .sessionRow {
   display: flex;
   align-items: center;
-  gap: 8px;
   width: 100%;
-  padding: 6px 8px;
   border-radius: 8px;
-  text-align: left;
   transition: background var(--ac-dur-fast) var(--ac-ease);
 }
 
@@ -203,8 +201,19 @@
   background: var(--ac-bg-hover);
 }
 
-.current {
+.sessionRow[data-current] {
   background: var(--ac-bg-active);
+}
+
+.sessionMain {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+  padding: 5px 0 5px 8px;
+  background: transparent;
+  text-align: left;
 }
 
 .sessionDot {
@@ -219,13 +228,66 @@
   background: var(--ac-state-success);
 }
 
-.sessionId {
+.sessionTitle {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: var(--ac-font-size-secondary);
+  font-size: var(--ac-font-size-caption);
   color: var(--ac-label-secondary);
+}
+
+.sessionTime {
+  flex: none;
+  padding: 0 8px;
+  font-size: var(--ac-font-size-caption);
+  color: var(--ac-label-dimmed);
+}
+
+.rowActions {
+  display: none;
+  flex: none;
+  gap: 2px;
+  padding-left: 4px;
+}
+
+.sessionRow:hover .rowActions {
+  display: inline-flex;
+}
+
+.sessionRow:hover .sessionTime {
+  display: none;
+}
+
+.rowAction {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  font-size: 12px;
+  color: var(--ac-label-tertiary);
+  transition: background var(--ac-dur-fast) var(--ac-ease), color var(--ac-dur-fast) var(--ac-ease);
+}
+
+.rowAction:hover {
+  background: var(--ac-border-l2);
+  color: var(--ac-label-primary);
+}
+
+.rowAction:disabled {
+  opacity: 0.35;
+}
+
+.renameInput {
+  flex: 1;
+  min-width: 0;
+  margin: 2px 6px 2px 4px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  background: var(--ac-bg-layer-2);
+  font-size: var(--ac-font-size-caption);
 }
 
 .foot {

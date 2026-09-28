@@ -441,6 +441,16 @@ class SessionManager:
         session.bind(conversation)
         return SessionRestore(session=session, conversation=conversation, warnings=warnings)
 
+    def rename(self, session_id: str, title: str) -> bool:
+        """改会话标题(只动 .meta 索引,JSONL 正文不动)。目标不存在返回 False。"""
+        meta_path = self.sessions_dir / f"{session_id}.meta"
+        meta = SessionMeta.load(meta_path)
+        if meta is None:
+            return False
+        meta.title = title.strip()
+        meta.save(meta_path)
+        return True
+
     def delete(self, session_id: str) -> bool:
         path = self.sessions_dir / f"{session_id}.jsonl"
         meta_path = path.with_suffix(".meta")

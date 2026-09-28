@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { api } from '../api'
 import type { FileContent } from '../types'
 import { Markdown } from './ChatItems'
+import CodeBlock, { langFromFilename } from './CodeBlock'
 import styles from './FilePreview.module.css'
 
 interface Props {
@@ -11,7 +12,7 @@ interface Props {
   refreshSignal: number
 }
 
-/** 文件预览:.md → Markdown;其余 → 等宽文本 + 行号;二进制/超限 → 提示(设计 §12.4)。 */
+/** 文件预览:.md → Markdown;其余 → Prism 高亮 + 行号;二进制/超限 → 提示(设计 §10.9-1/§12.4)。 */
 export default function FilePreview({ path, refreshSignal }: Props) {
   const [content, setContent] = useState<FileContent | null>(null)
   const [error, setError] = useState('')
@@ -55,27 +56,18 @@ export default function FilePreview({ path, refreshSignal }: Props) {
     )
   }
 
-  const lineCount = content.text === '' ? 0 : content.text.split('\n').length
+  const text = content.text.replace(/\r\n/g, '\n') // Windows CRLF:\r 会渲染成多余换行
+  const lineCount = text === '' ? 0 : text.split('\n').length
   return (
     <div className={styles.root}>
       {isMarkdown ? (
         <div className={styles.markdownScroll}>
-          <Markdown text={content.text} />
+          <Markdown text={text} />
         </div>
       ) : (
         <div className={styles.codeScroll}>
-          <pre className={styles.code}>
-            {content.text
-              .replace(/\r\n/g, '\n') // Windows CRLF:行结构由 div 决定,\r 会渲染成多余换行
-              .split('\n')
-              .map((line, i) => (
-                <div key={i} className={styles.codeLine}>
-                  <span className={styles.lineNo}>{i + 1}</span>
-                  <span className={styles.lineText}>{line || ' '}</span>
-                </div>
-              ))}
-            {lineCount === 0 && <div className={styles.hint}>(空文件)</div>}
-          </pre>
+          <CodeBlock code={text} language={langFromFilename(name)} lineNumbers />
+          {lineCount === 0 && <div className={styles.hint}>(空文件)</div>}
         </div>
       )}
       {content.truncated && (

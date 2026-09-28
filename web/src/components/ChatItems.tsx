@@ -2,6 +2,7 @@ import { useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import type { Item } from '../types'
+import CodeBlock from './CodeBlock'
 import styles from './ChatItems.module.css'
 
 /** 最近一个已完成段落的首行(流式摘要,DSH ReasoningRow 同款逻辑)。 */
@@ -181,7 +182,23 @@ function ToolCallRow({
 export function Markdown({ text }: { text: string }) {
   return (
     <div className={styles.markdown}>
-      <ReactMarkdown remarkPlugins={[remarkGfm]}>{text}</ReactMarkdown>
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        components={{
+          // 块级代码走 Prism 高亮(§10.9-1);pre 解包避免双层容器;行内 code 保持原样
+          pre: ({ children }) => <>{children}</>,
+          code: (props: { className?: string; children?: React.ReactNode }) => {
+            const { className, children } = props
+            const match = /language-(\w+)/.exec(className ?? '')
+            if (!match) return <code className={className}>{children}</code>
+            return (
+              <CodeBlock code={String(children)} language={match[1]} />
+            )
+          },
+        }}
+      >
+        {text}
+      </ReactMarkdown>
     </div>
   )
 }

@@ -7,9 +7,13 @@ export interface WireEvent {
 
 export interface SessionInfo {
   id: string
+  title?: string
+  message_count?: number
+  last_active_ms?: number
   created?: string
   current?: boolean
   running?: boolean
+  workspace?: string
 }
 
 export interface AgentState {

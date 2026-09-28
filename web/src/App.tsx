@@ -401,6 +401,18 @@ export default function App() {
   }, [])
   const onDragEnd = useCallback(() => setDragging(false), [])
 
+  // 会话改名/删除后的刷新:删除的是当前会话时后端已自动开新会话 → 清空对话区
+  const handleSessionsChanged = useCallback(
+    async (currentDeleted: boolean) => {
+      if (currentDeleted) {
+        itemsRef.current = []
+        setItems([])
+      }
+      await refreshMeta()
+    },
+    [refreshMeta],
+  )
+
   const isEmpty = items.length === 0
   const activeBaseName = activeWorkspace
     ? activeWorkspace.split(/[\\/]/).filter(Boolean).pop() ?? ''
@@ -430,6 +442,7 @@ export default function App() {
           onOpenSettings={() => setSettingsOpen(true)}
           onAddWorkspace={addWorkspace}
           onSwitchWorkspace={switchWorkspace}
+          onSessionsChanged={handleSessionsChanged}
         />
       </div>
       <div className={styles.mainColumn}>

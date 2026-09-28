@@ -1,0 +1,28 @@
+/* Prism 代码块:主题配色来自内联 style,这里只管布局与行号槽。 */
+.pre {
+  margin: 0;
+  padding: 12px 0;
+  overflow: auto;
+  font-size: var(--ac-font-size-caption);
+  line-height: 1.6;
+  border-radius: 10px;
+}
+
+.line {
+  display: flex;
+  min-width: max-content;
+}
+
+.lineNo {
+  flex: none;
+  width: 46px;
+  padding: 0 12px 0 0;
+  text-align: right;
+  color: var(--ac-label-dimmed);
+  user-select: none;
+}
+
+.lineText {
+  padding: 0 20px 0 0;
+  white-space: pre;
+}

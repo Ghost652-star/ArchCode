@@ -1,4 +1,5 @@
-import { useMemo, useState } from 'react'
+import { useCallback, useMemo, useState } from 'react'
+import { api } from '../api'
 import type { AgentState, SessionInfo } from '../types'
 import styles from './Sidebar.module.css'
 
@@ -14,6 +15,8 @@ interface Props {
   onOpenSettings: () => void
   onAddWorkspace: (path: string) => void
   onSwitchWorkspace: (path: string) => void
+  /** 会话变更后的刷新:改名传 false;删除当前会话传 true(清空对话区)。 */
+  onSessionsChanged: (currentDeleted: boolean) => void
 }
 
 function baseName(p: string): string {
@@ -21,7 +24,20 @@ function baseName(p: string): string {
   return parts[parts.length - 1] ?? p
 }
 
-/** 侧栏:工作区(项目)树 + 活动工作区下的会话清单(§10.5,ZCode 同款两级树)。 */
+/** last_active_ms → 相对时间(DSH 侧栏同款:20小时 / 2天 / 日期)。 */
+function relTime(ms?: number): string {
+  if (!ms) return ''
+  const diff = Date.now() - ms
+  const minute = 60_000
+  const hour = 3_600_000
+  const day = 86_400_000
+  if (diff < hour) return `${Math.max(1, Math.floor(diff / minute))}分钟`
+  if (diff < day) return `${Math.floor(diff / hour)}小时`
+  if (diff < 30 * day) return `${Math.floor(diff / day)}天`
+  return new Date(ms).toLocaleDateString()
+}
+
+/** 侧栏:工作区(项目)树 + 活动工作区下的会话清单(§10.5/§10.9-4)。 */
 export default function Sidebar({
   sessions,
   state,
@@ -34,18 +50,52 @@ export default function Sidebar({
   onOpenSettings,
   onAddWorkspace,
   onSwitchWorkspace,
+  onSessionsChanged,
 }: Props) {
   const [query, setQuery] = useState('')
   const [adding, setAdding] = useState(false)
   const [newPath, setNewPath] = useState('')
+  const [renamingId, setRenamingId] = useState<string | null>(null)
+  const [renameValue, setRenameValue] = useState('')
 
   const serverDir = state?.work_dir ?? ''
   const filtered = useMemo(
     () =>
       sessions.filter(
-        (s) => !query || s.id.toLowerCase().includes(query.toLowerCase()),
+        (s) =>
+          !query ||
+          s.id.toLowerCase().includes(query.toLowerCase()) ||
+          (s.title ?? '').toLowerCase().includes(query.toLowerCase()),
       ),
     [sessions, query],
+  )
+
+  const commitRename = useCallback(
+    async (id: string) => {
+      const value = renameValue.trim()
+      setRenamingId(null)
+      if (!value) return
+      try {
+        await api.renameSession(id, value)
+        onSessionsChanged(false)
+      } catch {
+        /* 改名失败静默:列表下次刷新会显示原名 */
+      }
+    },
+    [renameValue, onSessionsChanged],
+  )
+
+  const removeSession = useCallback(
+    async (s: SessionInfo) => {
+      if (!window.confirm(`删除会话 "${s.title || s.id.slice(0, 18)}"?`)) return
+      try {
+        await api.deleteSession(s.id)
+        onSessionsChanged(Boolean(s.current))
+      } catch {
+        /* 运行中删除被服务端 409 拒绝,静默 */
+      }
+    },
+    [onSessionsChanged],
   )
 
   // 折叠 = 56px 图标栏(DSH 同款:展开入口常驻,不消失)
@@ -149,17 +199,71 @@ export default function Sidebar({
                       {isServer ? '暂无会话' : '该工作区未接入后端(仅浏览)'}
                     </div>
                   )}
-                  {filtered.map((s) => (
-                    <button
-                      key={s.id}
-                      className={`${styles.sessionRow} ${s.current ? styles.current : ''}`}
-                      onClick={() => isServer && !s.current && onResume(s.id)}
-                      title={s.id}
-                    >
-                      <span className={styles.sessionDot} data-running={s.running || undefined} />
-                      <span className={styles.sessionId}>{s.id.slice(0, 18)}</span>
-                    </button>
-                  ))}
+                  {filtered.map((s) => {
+                    const renaming = renamingId === s.id
+                    return (
+                      <div
+                        key={s.id}
+                        className={styles.sessionRow}
+                        data-current={s.current || undefined}
+                      >
+                        {renaming ? (
+                          <input
+                            className={styles.renameInput}
+                            value={renameValue}
+                            onChange={(e) => setRenameValue(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') commitRename(s.id)
+                              if (e.key === 'Escape') setRenamingId(null)
+                            }}
+                            onBlur={() => commitRename(s.id)}
+                            autoFocus
+                          />
+                        ) : (
+                          <>
+                            <button
+                              className={styles.sessionMain}
+                              onClick={() => isServer && !s.current && onResume(s.id)}
+                              title={s.id}
+                            >
+                              <span
+                                className={styles.sessionDot}
+                                data-running={s.running || undefined}
+                              />
+                              <span className={styles.sessionTitle}>
+                                {s.title || s.id.slice(0, 18)}
+                              </span>
+                            </button>
+                            {isServer && (
+                              <span className={styles.rowActions}>
+                                <button
+                                  className={styles.rowAction}
+                                  title="重命名会话"
+                                  onClick={() => {
+                                    setRenamingId(s.id)
+                                    setRenameValue(s.title ?? '')
+                                  }}
+                                >
+                                  ✎
+                                </button>
+                                <button
+                                  className={styles.rowAction}
+                                  title={s.running ? '运行中,无法删除' : '删除会话'}
+                                  disabled={s.running}
+                                  onClick={() => removeSession(s)}
+                                >
+                                  ✕
+                                </button>
+                              </span>
+                            )}
+                            <span className={styles.sessionTime}>
+                              {relTime(s.last_active_ms)}
+                            </span>
+                          </>
+                        )}
+                      </div>
+                    )
+                  })}
                 </div>
               )}
             </div>

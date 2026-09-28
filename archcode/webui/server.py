@@ -94,12 +94,11 @@ class ServerState:
         current_id = self._session.id if self._session else None
         sessions = self.session_manager.list_sessions()
         return [
-            {
-                "id": s.id,
-                "created": str(getattr(s, "created_at", "")),
-                "current": s.id == current_id,
-                "running": running and s.id == current_id,
-            }
+            _session_row(
+                s,
+                current=s.id == current_id,
+                running=running and s.id == current_id,
+            )
             for s in sessions
         ]
 
@@ -222,7 +221,7 @@ def api_state():
 
 @app.get("/api/sessions")
 def api_sessions(workspace: str | None = None):
-    """会话清单;`?workspace=<path>` 可列出其他工作区的会话(只读,v1 不切换 agent)。"""
+    """会话清单;`?workspace=<path>` 可列出其他工作区的会话(只读,不切换 agent)。"""
     assert STATE is not None
     if workspace:
         from archcode.memory import SessionManager as _SM
@@ -231,12 +230,50 @@ def api_sessions(workspace: str | None = None):
         if not ws.exists() or ws.resolve() == STATE.work_dir.resolve():
             return STATE.list_sessions()
         other = _SM(ws)
-        return [
-            {"id": s.id, "created": str(getattr(s, "created_at", "")),
-             "current": False, "running": False, "workspace": str(ws)}
-            for s in other.list_sessions()
-        ]
+        return [_session_row(s, workspace=str(ws)) for s in other.list_sessions()]
     return STATE.list_sessions()
+
+
+def _session_row(s, **extra) -> dict:
+    """SessionMeta → wire 行(设计 §10.9-4:标题 + 相对时间数据源)。"""
+    return {
+        "id": s.id,
+        "title": s.title,
+        "message_count": s.message_count,
+        "last_active_ms": s.last_active_ms,
+        "created": str(getattr(s, "created_at", "")),
+        "current": bool(extra.pop("current", False)),
+        "running": bool(extra.pop("running", False)),
+        **extra,
+    }
+
+
+@app.post("/api/sessions/{session_id}/rename")
+def api_rename_session(session_id: str, body: dict):
+    assert STATE is not None
+    title = str((body or {}).get("title", "")).strip()
+    if not title:
+        raise HTTPException(400, "title is required")
+    if not STATE.session_manager.rename(session_id, title):
+        raise HTTPException(404, f"session not found: {session_id}")
+    if STATE._session is not None and STATE._session.id == session_id:
+        STATE._session.meta.title = title  # 同步内存态,防 _touch_meta 把旧名写回
+    return {"ok": True}
+
+
+@app.delete("/api/sessions/{session_id}")
+def api_delete_session(session_id: str):
+    assert STATE is not None
+    is_current = STATE._session is not None and STATE._session.id == session_id
+    if is_current and STATE._run_lock.locked():
+        raise HTTPException(409, "cannot delete the running session")
+    if is_current:
+        STATE._session.close()  # 先关句柄,Windows 下不关无法删除
+    if not STATE.session_manager.delete(session_id):
+        raise HTTPException(404, f"session not found: {session_id}")
+    if is_current:
+        STATE.new_session()  # 删的是当前会话:自动开新会话,页面始终有落点
+    return {"ok": True}
 
 
 # ── 模型选择器(§9.1 ModelsSection 模式:当前 + 已配置清单)──────────────
@@ -287,10 +324,18 @@ def api_resume_session(session_id: str):
 
 @app.get("/api/history")
 def api_history():
-    """当前会话全量历史(刷新恢复用):按消息角色返回。"""
+    """当前会话全量历史(刷新恢复用):按消息角色返回。
+
+    内部注入的 user 消息不进 UI(§10.9-3):`<system-reminder>`(运行时提醒)、
+    `<会话恢复材料>`(恢复降级线索)、`[恢复提示]`(时间间隔提示)。
+    会话数据不动,只在显示层过滤;对应的 assistant 边界说明是真实回复,保留。
+    """
     assert STATE is not None
+    internal_prefixes = ("<system-reminder>", "<会话恢复材料>", "[恢复提示]")
     out = []
     for m in STATE.conversation.history:
+        if m.role == "user" and m.content.startswith(internal_prefixes):
+            continue
         entry: dict = {"role": m.role, "content": m.content}
         if m.tool_uses:
             entry["tool_uses"] = [asdict(u) for u in m.tool_uses]

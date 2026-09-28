@@ -41,6 +41,15 @@ export const api = {
   resumeSession: (id: string) =>
     jsonFetch<{ session_id: string }>(`/api/sessions/${id}/resume`, { method: 'POST' }),
 
+  renameSession: (id: string, title: string) =>
+    jsonFetch<{ ok: boolean }>(`/api/sessions/${id}/rename`, {
+      method: 'POST',
+      body: JSON.stringify({ title }),
+    }),
+
+  deleteSession: (id: string) =>
+    jsonFetch<{ ok: boolean }>(`/api/sessions/${id}`, { method: 'DELETE' }),
+
   history: () => jsonFetch<Array<Record<string, unknown>>>('/api/history'),
 
   abort: () => jsonFetch<{ ok: boolean }>('/api/abort', { method: 'POST' }),
