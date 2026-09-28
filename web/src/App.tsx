@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { api, streamChat } from './api'
-import type { AgentState, Item, PermissionState, SessionInfo, Usage, WireEvent } from './types'
+import type { AgentState, ContextInfo, Item, PermissionState, SessionInfo, Usage, WireEvent } from './types'
 import Sidebar from './components/Sidebar'
 import Composer from './components/Composer'
 import PermissionDialog from './components/PermissionDialog'
@@ -55,6 +55,7 @@ export default function App() {
   const [providers, setProviders] = useState<
     Array<{ name: string; model: string; protocol: string }>
   >([])
+  const [context, setContext] = useState<ContextInfo | null>(null)
   const [workspaces, setWorkspaces] = useState<string[]>(loadWorkspaces)
   const [activeWorkspace, setActiveWorkspace] = useState(
     () => localStorage.getItem(ACTIVE_WS_KEY) ?? '',
@@ -78,6 +79,11 @@ export default function App() {
   const [animating, setAnimating] = useState(false)
   const itemsRef = useRef<Item[]>([])
   const rafRef = useRef(0)
+  const runStartRef = useRef(0)
+  // 智能滚底(§13-A3):距底 >80px 视为"脱离底部",不再跟随
+  const scrollRef = useRef<HTMLDivElement>(null)
+  const detachedRef = useRef(false)
+  const [detached, setDetached] = useState(false)
 
   const serverDir = state?.work_dir ?? ''
   /** 活动工作区是否就是服务端绑定的工作目录(仅此可用 composer/发消息)。 */
@@ -103,6 +109,7 @@ export default function App() {
       setSessions(await api.sessionsByWorkspace(activeWorkspace || undefined))
       const m = await api.model()
       setProviders(m.providers)
+      api.context().then(setContext).catch(() => {})
     } catch {
       /* 服务端未就绪时静默 */
     }
@@ -144,7 +151,31 @@ export default function App() {
           for (const m of history) {
             const role = m['role']
             const content = String(m['content'] ?? '')
-            if (role === 'user' && content) restored.push({ kind: 'user', text: content })
+            const ts = Number(m['created_at'] ?? 0) || undefined
+            // 恢复工具行(§13-A5):数据 /api/history 一直有,前端此前丢掉了
+            const uses = Array.isArray(m['tool_uses']) ? m['tool_uses'] : []
+            for (const u of uses) {
+              restored.push({
+                kind: 'tool',
+                toolId: String(u['tool_use_id'] ?? ''),
+                toolName: String(u['tool_name'] ?? ''),
+                args: (u['arguments'] as Record<string, unknown>) ?? {},
+                output: '',
+                isError: false,
+                running: false,
+              })
+            }
+            const results = Array.isArray(m['tool_results']) ? m['tool_results'] : []
+            for (const r of results) {
+              const tool = [...restored]
+                .reverse()
+                .find((i) => i.kind === 'tool' && i.toolId === String(r['tool_use_id'] ?? ''))
+              if (tool && tool.kind === 'tool') {
+                tool.output = String(r['content'] ?? '')
+                tool.isError = Boolean(r['is_error'])
+              }
+            }
+            if (role === 'user' && content) restored.push({ kind: 'user', text: content, ts })
             if (role === 'assistant' && content)
               restored.push({ kind: 'assistant', text: content, running: false })
           }
@@ -163,11 +194,28 @@ export default function App() {
     }
   }, [activeWorkspace, isHome])
 
-  // 新条目自动滚底(v1 恒跟随;DSH 的 near-bottom 检测后补)
+  // 新条目自动滚底(§13-A3:near-bottom 才跟随,不拽上翻的用户)
   useEffect(() => {
-    const el = document.getElementById('chat-scroll')
-    if (el) el.scrollTop = el.scrollHeight
+    const el = scrollRef.current
+    if (el && !detachedRef.current) el.scrollTop = el.scrollHeight
   }, [items])
+
+  const onScroll = useCallback(() => {
+    const el = scrollRef.current
+    if (!el) return
+    const d = el.scrollHeight - el.scrollTop - el.clientHeight > 80
+    if (d !== detachedRef.current) {
+      detachedRef.current = d
+      setDetached(d)
+    }
+  }, [])
+
+  const jumpToBottom = useCallback(() => {
+    const el = scrollRef.current
+    if (el) el.scrollTop = el.scrollHeight
+    detachedRef.current = false
+    setDetached(false)
+  }, [])
 
   const handleEvent = useCallback(
     (event: WireEvent) => {
@@ -241,7 +289,12 @@ export default function App() {
         }
         case 'loop_complete': {
           for (const item of list)
-            if (item.kind !== 'user' && item.kind !== 'error') item.running = false
+            if (item.kind !== 'user' && item.kind !== 'error' && item.kind !== 'turnEnd') item.running = false
+          list.push({
+            kind: 'turnEnd',
+            steps: Number(event['total_turns'] ?? 0),
+            elapsed: runStartRef.current ? Date.now() - runStartRef.current : 0,
+          })
           break
         }
         default:
@@ -255,7 +308,8 @@ export default function App() {
   const send = useCallback(
     async (text: string) => {
       if (running || !text.trim() || !isHome) return
-      itemsRef.current = [...itemsRef.current, { kind: 'user', text }]
+      runStartRef.current = Date.now()
+      itemsRef.current = [...itemsRef.current, { kind: 'user', text, ts: Date.now() }]
       setItems([...itemsRef.current])
       setRunning(true)
       try {
@@ -268,7 +322,7 @@ export default function App() {
         setItems([...itemsRef.current])
       } finally {
         for (const item of itemsRef.current)
-          if (item.kind !== 'user' && item.kind !== 'error') item.running = false
+          if (item.kind !== 'user' && item.kind !== 'error' && item.kind !== 'turnEnd') item.running = false
         setItems([...itemsRef.current])
         setRunning(false)
         refreshMeta()
@@ -462,7 +516,7 @@ export default function App() {
             </svg>
           </button>
         </div>
-        <div className={styles.scroll} id="chat-scroll">
+        <div className={styles.scroll} ref={scrollRef} onScroll={onScroll} id="chat-scroll">
           {isEmpty ? (
             <Hero project={activeWorkspace} locked={!isHome} />
           ) : (
@@ -471,6 +525,11 @@ export default function App() {
             </div>
           )}
         </div>
+        {detached && (
+          <button className={styles.jumpBottom} onClick={jumpToBottom}>
+            ↓ 回到底部
+          </button>
+        )}
         <div className={styles.composerSeat}>
           <Composer
             running={running}
@@ -491,7 +550,7 @@ export default function App() {
             }}
           />
         </div>
-        <StatusBar model={state?.model ?? ''} running={running} />
+        <StatusBar model={state?.model ?? ''} running={running} context={context} />
       </div>
       {filesOpen && serverDir && (
         <div className={styles.filesCol}>

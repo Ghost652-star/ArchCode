@@ -396,7 +396,13 @@ class SessionManager:
                 break
 
             if record_type == "user":
-                history.append(Message(role="user", content=str(record.get("content", ""))))
+                history.append(
+                    Message(
+                        role="user",
+                        content=str(record.get("content", "")),
+                        created_at=int(record.get("ts", 0)),
+                    )
+                )
             elif record_type == "assistant":
                 tool_uses = [
                     ToolUseBlock(
@@ -412,6 +418,7 @@ class SessionManager:
                     content=str(record.get("content", "")),
                     tool_uses=tool_uses,
                     completes_user_turn=bool(record.get("completes_user_turn", False)),
+                    created_at=int(record.get("ts", 0)),
                 )
                 if tool_uses:
                     pending = {

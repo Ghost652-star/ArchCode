@@ -20,6 +20,33 @@
   word-break: break-word;
 }
 
+/* 用户气泡下的时间(§13-A1) */
+.userTime {
+  padding: 4px 8px 0 0;
+  font-size: var(--ac-font-size-caption);
+  color: var(--ac-label-dimmed);
+}
+
+/* ── 轮次分隔(§13-A2:细线 + 居中 caption)────────────────── */
+.turnDivider {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 0 6px;
+}
+
+.turnLine {
+  flex: 1;
+  height: 0.5px;
+  background: var(--ac-border-l2);
+}
+
+.turnText {
+  flex: none;
+  font-size: var(--ac-font-size-caption);
+  color: var(--ac-label-caption);
+}
+
 /* ── 助手 Markdown(全宽,无气泡)──────────────────────────── */
 .assistant {
   padding: 2px 0;

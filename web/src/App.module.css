@@ -121,6 +121,27 @@
   background: var(--ac-bg-active);
 }
 
+/* "回到底部"悬浮钮(§13-A3):脱离底部时浮在输入区上方 */
+.jumpBottom {
+  position: absolute;
+  bottom: 140px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 10;
+  padding: 6px 14px;
+  border-radius: 16px;
+  background: var(--ac-bg-raised, var(--ac-neutral-100));
+  border: 0.5px solid var(--ac-border-l2);
+  box-shadow: var(--ac-shadow-prominent);
+  font-size: var(--ac-font-size-caption);
+  color: var(--ac-label-primary);
+  transition: background var(--ac-dur-fast) var(--ac-ease);
+}
+
+.jumpBottom:hover {
+  background: var(--ac-bg-hover);
+}
+
 .mainColumn .scroll {
   flex: 1 1 auto;
   min-height: 0;

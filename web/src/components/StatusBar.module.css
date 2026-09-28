@@ -52,3 +52,14 @@
 .status {
   flex: none;
 }
+
+/* 上下文占用:临近耗尽变警示色(§13-A4) */
+.ctx {
+  flex: none;
+  color: var(--ac-label-secondary);
+}
+
+.ctx[data-warn] {
+  color: var(--ac-state-warn);
+  font-weight: 500;
+}

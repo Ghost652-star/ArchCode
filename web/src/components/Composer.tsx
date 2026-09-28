@@ -42,6 +42,9 @@ export default function Composer({
   const [draft, setDraft] = useState('')
   const [menuOpen, setMenuOpen] = useState(false)
   const [menuQuery, setMenuQuery] = useState('') // slash 触发时 = "/" 后的过滤词
+  const [atOpen, setAtOpen] = useState(false)
+  const [atQuery, setAtQuery] = useState('') // @ 后的文件名过滤词
+  const [atItems, setAtItems] = useState<string[]>([])
   const [modelOpen, setModelOpen] = useState(false)
   const [modeOpen, setModeOpen] = useState(false)
   const [currentModel, setCurrentModel] = useState(modelName)
@@ -70,6 +73,7 @@ export default function Composer({
     const onDown = (e: PointerEvent) => {
       if (rootRef.current && !rootRef.current.contains(e.target as Node)) {
         setMenuOpen(false)
+        setAtOpen(false)
         setModelOpen(false)
         setModeOpen(false)
       }
@@ -80,15 +84,38 @@ export default function Composer({
 
   const onDraftChange = (value: string) => {
     setDraft(value)
-    // 输入 "/"(开头)→ 触发指令列表并按后缀过滤;清掉 "/" 则收起
+    // "/"(开头)→ 指令列表;"@词"(行内)→ 文件引用菜单(§13-B1);两者互斥
     if (value.startsWith('/')) {
       setMenuQuery(value.slice(1))
       setMenuOpen(true)
-    } else if (menuOpen && menuQuery !== '') {
+      setAtOpen(false)
+      return
+    }
+    const atMatch = /(^|\s)@([^\s@]*)$/.exec(value)
+    if (atMatch) {
+      setAtQuery(atMatch[2])
+      setAtOpen(true)
+      setMenuOpen(false)
+      return
+    }
+    if (menuOpen && menuQuery !== '') {
       setMenuOpen(false)
       setMenuQuery('')
     }
+    if (atOpen) setAtOpen(false)
   }
+
+  // @ 菜单防抖搜索(§13-B1)
+  useEffect(() => {
+    if (!atOpen) return
+    const timer = setTimeout(() => {
+      api
+        .filesSearch(atQuery)
+        .then((r) => setAtItems(r.results))
+        .catch(() => setAtItems([]))
+    }, 300)
+    return () => clearTimeout(timer)
+  }, [atOpen, atQuery])
 
   /** 指令 + 技能的合并清单(slash 模式按 query 过滤)。 */
   const menuItems = useMemo(() => {
@@ -120,17 +147,27 @@ export default function Composer({
     editorRef.current?.focus()
   }
 
+  /** 选中 @ 文件:替换草稿末尾的 @token 为相对路径 + 空格。 */
+  const pickFile = (path: string) => {
+    setAtOpen(false)
+    setAtQuery('')
+    setDraft((prev) => prev.replace(/@([^\s@]*)$/, `${path} `))
+    editorRef.current?.focus()
+  }
+
   const submit = () => {
     if (running || !draft.trim()) return
     onSend(draft)
     setDraft('')
     setMenuOpen(false)
     setMenuQuery('')
+    setAtOpen(false)
   }
 
   const onKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Escape') {
       setMenuOpen(false)
+      setAtOpen(false)
       setModelOpen(false)
       setModeOpen(false)
       return
@@ -140,6 +177,10 @@ export default function Composer({
       if (menuOpen && draft.startsWith('/') && menuItems.length > 0) {
         // slash 列表打开时,Enter 选中第一项(而非发送)
         pickEntry(menuItems[0])
+        return
+      }
+      if (atOpen && atItems.length > 0) {
+        pickFile(atItems[0])
         return
       }
       submit()
@@ -153,7 +194,7 @@ export default function Composer({
           ref={editorRef}
           rows={1}
           value={draft}
-          placeholder={running ? 'Agent 工作中…' : '输入消息,/ 唤起指令与技能'}
+          placeholder={running ? 'Agent 工作中…' : '输入消息,/ 指令与技能,@ 引用文件'}
           onChange={(e) => onDraftChange(e.target.value)}
           onKeyDown={onKeyDown}
           disabled={disabled}
@@ -182,6 +223,22 @@ export default function Composer({
           ))}
           {menuItems.filter((m) => m.kind === 'skill').length === 0 && (
             <div className={styles.menuEmpty}>{menuQuery ? '无匹配技能' : '未加载任何技能'}</div>
+          )}
+        </div>
+      )}
+
+      {/* @ 触发的文件引用菜单(§13-B1):全宽贴卡底,与 slash 菜单同骨架 */}
+      {atOpen && (
+        <div className={styles.menu} role="listbox">
+          <div className={styles.menuSection}>文件</div>
+          {atItems.map((p) => (
+            <button key={p} className={styles.menuItem} onClick={() => pickFile(p)} title={p}>
+              <span className={styles.menuName}>{p.split('/').pop()}</span>
+              <span className={styles.menuDesc}>{p}</span>
+            </button>
+          ))}
+          {atItems.length === 0 && (
+            <div className={styles.menuEmpty}>{atQuery ? '无匹配文件' : '输入文件名搜索…'}</div>
           )}
         </div>
       )}

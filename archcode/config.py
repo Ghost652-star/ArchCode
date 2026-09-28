@@ -25,6 +25,8 @@ class ProviderConfig:
     api_key: str = ""
     max_output_tokens: int = 4096
     thinking: bool = False
+    # 上下文窗口(token);0 = 未配置,使用侧回退 131072(§13-A4)
+    context_window: int = 0
 
     def resolve_api_key(self) -> str:
         if self.api_key:
@@ -169,6 +171,7 @@ def _parse_provider(raw: dict) -> ProviderConfig:
         api_key=_resolve_env(str(raw.get("api_key", ""))),
         max_output_tokens=int(raw.get("max_output_tokens", 4096)),
         thinking=bool(raw.get("thinking", False)),
+        context_window=int(raw.get("context_window", 0)),
     )
 
 

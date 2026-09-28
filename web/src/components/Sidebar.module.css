@@ -76,6 +76,7 @@
 .search {
   margin: 0 12px 8px;
   padding: 6px 10px;
+  width: calc(100% - 24px);
   border-radius: 10px;
   background: var(--ac-bg-layer-2);
   font-size: var(--ac-font-size-caption);
@@ -100,6 +101,17 @@
   align-items: center;
   justify-content: space-between;
   padding: 6px 12px 2px;
+}
+
+.wsHeaderActions {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.iconBtn[data-on] {
+  background: var(--ac-bg-active);
+  color: var(--ac-label-primary);
 }
 
 .wsHeader .groupLabel {

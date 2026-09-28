@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import time
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -35,8 +36,10 @@ class Message:
     tool_results: list[ToolResultBlock] = field(default_factory=list)
     thinking_blocks: list[ThinkingBlock] = field(default_factory=list)
     # 仅由 Agent 在一个用户任务的最终回答上标记。ReAct 的工具调用、
-    # max_tokens 续写和中间消息均不应被当成已完成的用户级轮次。
+    # max_tokens 续写和中间消息均不应被当成已完成的用户级回复。
     completes_user_turn: bool = False
+    # 消息创建时刻(epoch ms,WebUI 用户气泡时间的数据源,§13-A1)。
+    created_at: int = field(default_factory=lambda: int(time.time() * 1000))
 
 
 _CHARS_PER_TOKEN = 3.5

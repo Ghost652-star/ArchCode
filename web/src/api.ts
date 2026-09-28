@@ -1,6 +1,6 @@
 /** 服务端 API 客户端:REST + SSE 流解析(plan §4.1/§4.2)。 */
 
-import type { AgentState, DirListing, FileContent, SessionInfo, WireEvent } from './types'
+import type { AgentState, ContextInfo, DirListing, FileContent, FileSearch, SessionInfo, WireEvent } from './types'
 
 async function jsonFetch<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(url, {
@@ -54,8 +54,6 @@ export const api = {
 
   abort: () => jsonFetch<{ ok: boolean }>('/api/abort', { method: 'POST' }),
 
-  context: () => jsonFetch<{ total_tokens: number; percent: number }>('/api/context'),
-
   skills: () =>
     jsonFetch<
       Array<{ name: string; description: string; source: string; path: string; is_directory: boolean }>
@@ -89,6 +87,11 @@ export const api = {
 
   readFile: (path: string) =>
     jsonFetch<FileContent>(`/api/file?path=${encodeURIComponent(path)}`),
+
+  filesSearch: (q: string) =>
+    jsonFetch<FileSearch>(`/api/files/search?q=${encodeURIComponent(q)}`),
+
+  context: () => jsonFetch<ContextInfo>('/api/context'),
 }
 
 /**

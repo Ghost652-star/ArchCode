@@ -163,6 +163,20 @@ def main():
             assert any(s["current"] for s in after) and all(s["id"] != cur_sid for s in after)
             print("[7] 会话管理 OK: 字段/改名/删除/自动新会话/历史去污染")
 
+            # 8. 上下文占用真值 + 文件名搜索(§13-A4/B1)
+            ctx = client.get("/api/context").json()
+            assert {"total_tokens", "percent", "window"} <= set(ctx), ctx
+            assert 0.0 <= ctx["percent"] <= 1.0 and ctx["window"] == 131072, ctx
+            (ws / "node_modules").mkdir(exist_ok=True)
+            (ws / "node_modules" / "skipme.qmd").write_text("x")
+            (ws / "sub" / "deep").mkdir(exist_ok=True)
+            (ws / "sub" / "deep" / "notes.bmd").write_text("x")
+            hits = client.get("/api/files/search", params={"q": "bmd"}).json()["results"]
+            assert hits == ["sub/deep/notes.bmd"], hits  # node_modules 被剪枝,POSIX 分隔
+            empty = client.get("/api/files/search", params={"q": ""}).json()
+            assert empty["results"] == []
+            print("[8] 上下文占用 + 文件搜索 OK")
+
     print("=== 链路冒烟全部通过 ===")
 
 

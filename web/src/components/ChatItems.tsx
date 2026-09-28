@@ -29,6 +29,19 @@ function firstLine(text: string): string {
   return newline === -1 ? text : text.slice(0, newline)
 }
 
+/** epoch ms → HH:MM(用户气泡时间,§13-A1)。 */
+function fmtTime(ts?: number): string {
+  if (!ts) return ''
+  return new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })
+}
+
+/** 轮次用时:秒 / 分秒(§13-A2)。 */
+function fmtElapsed(ms: number): string {
+  const s = Math.round(ms / 1000)
+  if (s < 60) return `${s}s`
+  return `${Math.floor(s / 60)}分${s % 60}秒`
+}
+
 export function ChatItems({ items }: { items: Item[] }) {
   return (
     <>
@@ -45,6 +58,17 @@ function ItemView({ item }: { item: Item }) {
       return (
         <div className={styles.userRow}>
           <div className={styles.bubble}>{item.text}</div>
+          {item.ts ? <div className={styles.userTime}>{fmtTime(item.ts)}</div> : null}
+        </div>
+      )
+    case 'turnEnd':
+      return (
+        <div className={styles.turnDivider}>
+          <span className={styles.turnLine} />
+          <span className={styles.turnText}>
+            本轮完成 · {item.steps} 步 · {fmtElapsed(item.elapsed)}
+          </span>
+          <span className={styles.turnLine} />
         </div>
       )
     case 'reasoning':

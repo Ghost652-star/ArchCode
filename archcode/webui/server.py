@@ -9,8 +9,10 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import re
 import sys
+import time
 import uuid
 from dataclasses import asdict
 from pathlib import Path, PurePosixPath
@@ -195,7 +197,9 @@ def serialize_event(event) -> dict:
     if mapping is None:
         return {"type": "unknown", "repr": repr(event)}
     wire_type, fields = mapping
-    return {"type": wire_type, **fields(event)}
+    payload = {"type": wire_type, **fields(event)}
+    payload["ts"] = int(time.time() * 1000)  # 事件发出时刻(§13-A1)
+    return payload
 
 
 def _sse(payload: dict) -> str:
@@ -336,7 +340,7 @@ def api_history():
     for m in STATE.conversation.history:
         if m.role == "user" and m.content.startswith(internal_prefixes):
             continue
-        entry: dict = {"role": m.role, "content": m.content}
+        entry: dict = {"role": m.role, "content": m.content, "created_at": m.created_at}
         if m.tool_uses:
             entry["tool_uses"] = [asdict(u) for u in m.tool_uses]
         if m.tool_results:
@@ -411,9 +415,13 @@ async def api_permission(request_id: str, body: dict):
 
 @app.get("/api/context")
 def api_context():
+    """上下文占用(§13-A4):percent = 当前 token / 窗口(provider 可配,缺省 128k)。"""
     assert STATE is not None
     total = STATE.conversation.current_tokens()
-    return {"total_tokens": total, "percent": 0.0, "segments": []}
+    provider = STATE.providers[0] if STATE.providers else None
+    window = int(getattr(provider, "context_window", 0) or 0) or 131072
+    percent = min(1.0, total / window) if window > 0 else 0.0
+    return {"total_tokens": total, "percent": percent, "window": window}
 
 
 # ── 设置(§9.2:作用域选择器;ruamel round-trip 保注释)───────────────────
@@ -581,6 +589,37 @@ def api_file(path: str):
         "size": size,
         "binary": False,
     }
+
+
+# 文件名搜索时跳过的目录(§13-B1:依赖与构建产物无引用价值)
+_SEARCH_SKIP_DIRS = {
+    ".git", ".venv", "venv", "node_modules", "__pycache__", ".archcode",
+    ".pytest_cache", ".idea", ".cursor", ".codegraph", "dist", "build",
+}
+_SEARCH_SCAN_CAP = 20000
+
+
+@app.get("/api/files/search")
+def api_files_search(q: str = "", limit: int = 20):
+    """按文件名子串递归搜索工作区(@ 引用的数据源,§13-B1)。"""
+    assert STATE is not None
+    needle = q.strip().lower()
+    if not needle:
+        return {"results": []}
+    root = STATE.work_dir.resolve()
+    results: list[str] = []
+    scanned = 0
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [d for d in dirnames if d not in _SEARCH_SKIP_DIRS]
+        for name in filenames:
+            scanned += 1
+            if scanned > _SEARCH_SCAN_CAP:
+                return {"results": results}
+            if needle in name.lower():
+                results.append(Path(dirpath, name).relative_to(root).as_posix())
+                if len(results) >= max(1, min(limit, 50)):
+                    return {"results": results}
+    return {"results": results}
 
 
 # ── 静态文件(web/dist 存在时,装配时挂载)──────────────────────────────

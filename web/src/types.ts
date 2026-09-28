@@ -26,7 +26,7 @@ export interface AgentState {
 
 /** 对话流条目(SSE 事件累积的渲染单元)。 */
 export type Item =
-  | { kind: 'user'; text: string }
+  | { kind: 'user'; text: string; ts?: number }
   | { kind: 'reasoning'; text: string; running: boolean }
   | {
       kind: 'tool'
@@ -39,6 +39,7 @@ export type Item =
       elapsed?: number
     }
   | { kind: 'assistant'; text: string; running: boolean }
+  | { kind: 'turnEnd'; steps: number; elapsed: number }
   | { kind: 'error'; message: string }
 
 export interface PermissionState {
@@ -76,4 +77,16 @@ export interface FileContent {
   truncated: boolean
   size: number
   binary: boolean
+}
+
+/** 上下文占用(§13-A4):percent 为 0~1。 */
+export interface ContextInfo {
+  total_tokens: number
+  percent: number
+  window: number
+}
+
+/** @ 文件引用搜索结果(§13-B1)。 */
+export interface FileSearch {
+  results: string[]
 }

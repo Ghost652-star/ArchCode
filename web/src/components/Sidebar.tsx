@@ -53,6 +53,7 @@ export default function Sidebar({
   onSessionsChanged,
 }: Props) {
   const [query, setQuery] = useState('')
+  const [searchOpen, setSearchOpen] = useState(false)
   const [adding, setAdding] = useState(false)
   const [newPath, setNewPath] = useState('')
   const [renamingId, setRenamingId] = useState<string | null>(null)
@@ -130,14 +131,46 @@ export default function Sidebar({
 
       <div className={styles.wsHeader}>
         <span className={styles.groupLabel}>工作区</span>
-        <button
-          className={styles.iconBtn}
-          title="添加工作区"
-          onClick={() => setAdding((v) => !v)}
-        >
-          +
-        </button>
+        <span className={styles.wsHeaderActions}>
+          <button
+            className={styles.iconBtn}
+            title="搜索会话"
+            data-on={searchOpen || undefined}
+            onClick={() => {
+              setSearchOpen((v) => !v)
+              setQuery('')
+            }}
+          >
+            <svg width={14} height={14} viewBox="0 0 16 16" fill="none" aria-hidden>
+              <circle cx="7" cy="7" r="4.2" stroke="currentColor" strokeWidth="1.3" />
+              <path d="M10.5 10.5L14 14" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
+            </svg>
+          </button>
+          <button
+            className={styles.iconBtn}
+            title="添加工作区"
+            onClick={() => setAdding((v) => !v)}
+          >
+            +
+          </button>
+        </span>
       </div>
+
+      {searchOpen && (
+        <input
+          className={styles.search}
+          placeholder="搜索会话(标题 / ID)"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Escape') {
+              setSearchOpen(false)
+              setQuery('')
+            }
+          }}
+          autoFocus
+        />
+      )}
 
       {adding && (
         <div className={styles.addWs}>
