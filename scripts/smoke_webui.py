@@ -103,6 +103,27 @@ def main():
                 assert res.status_code == 200
             print("[5] 重入 OK(锁已释放)")
 
+            # 6. 工作区文件端点(设计 §12:圈定 + 惰性列目录 + 二进制探测)
+            ws = Path(tmp)
+            (ws / "sub").mkdir()
+            (ws / "a.txt").write_text("hello\nworld\n", encoding="utf-8")
+            (ws / "sub" / "b.md").write_text("# 标题\n\n正文", encoding="utf-8")
+            (ws / "bin.dat").write_bytes(b"\x00\x01\x02binary")
+            files = client.get("/api/files").json()
+            names = [e["name"] for e in files["entries"]]
+            assert "sub" in names and "a.txt" in names, names
+            assert files["entries"][0]["type"] == "directory", files
+            sub = client.get("/api/files", params={"path": "sub"}).json()
+            assert sub["entries"][0]["name"] == "b.md"
+            text = client.get("/api/file", params={"path": "sub/b.md"}).json()
+            assert text["text"].startswith("# 标题") and not text["binary"], text
+            binary = client.get("/api/file", params={"path": "bin.dat"}).json()
+            assert binary["binary"] is True, binary
+            assert client.get("/api/files", params={"path": "../"}).status_code == 403
+            assert client.get("/api/files", params={"path": "nope"}).status_code == 404
+            assert client.get("/api/file", params={"path": "sub"}).status_code == 400
+            print("[6] 文件端点 OK: 列目录/读文本/二进制/圈定")
+
     print("=== 链路冒烟全部通过 ===")
 
 

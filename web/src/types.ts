@@ -52,3 +52,24 @@ export interface Usage {
   cacheRead: number
   cacheCreation: number
 }
+
+/** ── 工作区文件面板(设计 §12)────────────────────────────── */
+
+export interface FileEntry {
+  name: string
+  type: 'directory' | 'file' | 'other'
+  size?: number
+}
+
+export interface DirListing {
+  path: string
+  entries: FileEntry[]
+  truncated: boolean
+}
+
+export interface FileContent {
+  text: string
+  truncated: boolean
+  size: number
+  binary: boolean
+}

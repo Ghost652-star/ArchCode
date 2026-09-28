@@ -7,6 +7,8 @@ interface Props {
   state: AgentState | null
   workspaces: string[]
   activeWorkspace: string
+  collapsed: boolean
+  onToggleCollapse: () => void
   onNewSession: () => void
   onResume: (id: string) => void
   onOpenSettings: () => void
@@ -25,6 +27,8 @@ export default function Sidebar({
   state,
   workspaces,
   activeWorkspace,
+  collapsed,
+  onToggleCollapse,
   onNewSession,
   onResume,
   onOpenSettings,
@@ -32,7 +36,6 @@ export default function Sidebar({
   onSwitchWorkspace,
 }: Props) {
   const [query, setQuery] = useState('')
-  const [collapsed, setCollapsed] = useState(false)
   const [adding, setAdding] = useState(false)
   const [newPath, setNewPath] = useState('')
 
@@ -45,11 +48,19 @@ export default function Sidebar({
     [sessions, query],
   )
 
+  // 折叠 = 56px 图标栏(DSH 同款:展开入口常驻,不消失)
   if (collapsed) {
     return (
       <div className={styles.collapsed}>
-        <button className={styles.iconBtn} onClick={() => setCollapsed(false)} title="展开">
+        <button className={styles.iconBtn} onClick={onToggleCollapse} title="展开侧栏">
           »
+        </button>
+        <span className={styles.railSpring} />
+        <button className={styles.iconBtn} onClick={onNewSession} title="新对话">
+          +
+        </button>
+        <button className={styles.iconBtn} onClick={onOpenSettings} title="设置">
+          ⚙
         </button>
       </div>
     )
@@ -59,7 +70,7 @@ export default function Sidebar({
     <div className={styles.root}>
       <div className={styles.header}>
         <span className={styles.brand}>ArchCode</span>
-        <button className={styles.iconBtn} onClick={() => setCollapsed(true)} title="折叠">
+        <button className={styles.iconBtn} onClick={onToggleCollapse} title="折叠侧栏">
           «
         </button>
       </div>

@@ -6,11 +6,34 @@ import Composer from './components/Composer'
 import PermissionDialog from './components/PermissionDialog'
 import StatusBar from './components/StatusBar'
 import SettingsPanel from './components/SettingsPanel'
+import FilePanel from './components/FilePanel'
 import { ChatItems } from './components/ChatItems'
 import styles from './App.module.css'
 
 const WS_KEY = 'ac-workspaces'
 const ACTIVE_WS_KEY = 'ac-active-workspace'
+
+// ── 三栏几何常量(设计 §11.2,DSH 同源,数值可微调)──────────────────
+const SIDEBAR_MIN = 264
+const SIDEBAR_MAX = 420
+const SIDEBAR_DEFAULT = 280
+const SIDEBAR_COLLAPSED = 56
+const FILES_MIN = 300
+const FILES_MAX_RATIO = 0.7
+const FILES_DEFAULT_RATIO = 0.45
+
+function loadNum(key: string, fallback: number): number {
+  const raw = Number(localStorage.getItem(key))
+  return Number.isFinite(raw) && raw > 0 ? raw : fallback
+}
+function loadBool(key: string, fallback: boolean): boolean {
+  const raw = localStorage.getItem(key)
+  return raw === null ? fallback : raw === '1'
+}
+
+function clampWidth(px: number, min: number, max: number): number {
+  return Math.min(Math.round(max), Math.max(min, Math.round(px)))
+}
 
 function loadWorkspaces(): string[] {
   try {
@@ -36,6 +59,23 @@ export default function App() {
   const [activeWorkspace, setActiveWorkspace] = useState(
     () => localStorage.getItem(ACTIVE_WS_KEY) ?? '',
   )
+  // ── 三栏布局状态(设计 §11.5:宽度偏好进 localStorage)──────────
+  const [sidebarW, setSidebarW] = useState(() =>
+    clampWidth(loadNum('ac-sidebar-w', SIDEBAR_DEFAULT), SIDEBAR_MIN, SIDEBAR_MAX),
+  )
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() =>
+    loadBool('ac-sidebar-collapsed', false),
+  )
+  const [filesOpen, setFilesOpen] = useState(() => loadBool('ac-files-open', true))
+  const [filesW, setFilesW] = useState(() =>
+    clampWidth(
+      loadNum('ac-files-w', Math.round(window.innerWidth * FILES_DEFAULT_RATIO)),
+      FILES_MIN,
+      Math.max(FILES_MIN, window.innerWidth * FILES_MAX_RATIO),
+    ),
+  )
+  const [dragging, setDragging] = useState(false)
+  const [animating, setAnimating] = useState(false)
   const itemsRef = useRef<Item[]>([])
   const rafRef = useRef(0)
 
@@ -313,25 +353,102 @@ export default function App() {
     setActiveWorkspace(path)
   }, [])
 
+  // ── 三栏交互(设计 §11.3/§11.4)────────────────────────────────
+  // 折叠/展开是离散切换:才给轨道过渡动画;拖拽与窗口缩放一律瞬时。
+  const fireAnimating = useCallback(() => {
+    setAnimating(true)
+    window.setTimeout(() => setAnimating(false), 320)
+  }, [])
+
+  const toggleSidebarCollapsed = useCallback(() => {
+    const next = !sidebarCollapsed
+    setSidebarCollapsed(next)
+    localStorage.setItem('ac-sidebar-collapsed', next ? '1' : '0')
+    fireAnimating()
+  }, [sidebarCollapsed, fireAnimating])
+
+  const toggleFiles = useCallback(() => {
+    const next = !filesOpen
+    setFilesOpen(next)
+    localStorage.setItem('ac-files-open', next ? '1' : '0')
+    fireAnimating()
+  }, [filesOpen, fireAnimating])
+
+  // 拖拽基点冻结在手势开始时的渲染宽度(DSH:从存储偏好出发会让被夹住的列跳回)
+  const sidebarBase = useRef(0)
+  const filesBase = useRef(0)
+  const onSidebarStart = useCallback(() => {
+    sidebarBase.current = sidebarW
+    setDragging(true)
+  }, [sidebarW])
+  const onSidebarDrag = useCallback((dx: number) => {
+    const next = clampWidth(sidebarBase.current + dx, SIDEBAR_MIN, SIDEBAR_MAX)
+    setSidebarW(next)
+    localStorage.setItem('ac-sidebar-w', String(next))
+  }, [])
+  const onFilesStart = useCallback(() => {
+    filesBase.current = filesW
+    setDragging(true)
+  }, [filesW])
+  const onFilesDrag = useCallback((dx: number) => {
+    const next = clampWidth(
+      filesBase.current - dx,
+      FILES_MIN,
+      Math.max(FILES_MIN, window.innerWidth * FILES_MAX_RATIO),
+    )
+    setFilesW(next)
+    localStorage.setItem('ac-files-w', String(next))
+  }, [])
+  const onDragEnd = useCallback(() => setDragging(false), [])
+
   const isEmpty = items.length === 0
   const activeBaseName = activeWorkspace
     ? activeWorkspace.split(/[\\/]/).filter(Boolean).pop() ?? ''
     : ''
 
   return (
-    <div className={styles.frame}>
-      <Sidebar
-        sessions={sessions}
-        state={state}
-        workspaces={workspaces}
-        activeWorkspace={activeWorkspace}
-        onNewSession={newSession}
-        onResume={resumeSession}
-        onOpenSettings={() => setSettingsOpen(true)}
-        onAddWorkspace={addWorkspace}
-        onSwitchWorkspace={switchWorkspace}
-      />
+    <div
+      className={styles.frame}
+      style={{
+        gridTemplateColumns: `${sidebarCollapsed ? SIDEBAR_COLLAPSED : sidebarW}px minmax(360px, 1fr) ${
+          filesOpen ? `${filesW}px` : '0px'
+        }`,
+      }}
+      data-dragging={dragging || undefined}
+      data-animating={animating || undefined}
+    >
+      <div className={styles.sidebarCol}>
+        <Sidebar
+          sessions={sessions}
+          state={state}
+          workspaces={workspaces}
+          activeWorkspace={activeWorkspace}
+          collapsed={sidebarCollapsed}
+          onToggleCollapse={toggleSidebarCollapsed}
+          onNewSession={newSession}
+          onResume={resumeSession}
+          onOpenSettings={() => setSettingsOpen(true)}
+          onAddWorkspace={addWorkspace}
+          onSwitchWorkspace={switchWorkspace}
+        />
+      </div>
       <div className={styles.mainColumn}>
+        <div className={styles.mainHeader}>
+          <span className={styles.mainTitle}>{activeBaseName || 'ArchCode'}</span>
+          {!isHome && <span className={styles.mainBadge}>仅浏览</span>}
+          <span className={styles.headerSpring} />
+          <button
+            className={styles.iconBtn}
+            onClick={toggleFiles}
+            data-on={filesOpen || undefined}
+            title={filesOpen ? '收起文件面板' : '打开文件面板'}
+          >
+            <svg width={16} height={16} viewBox="0 0 16 16" fill="none" aria-hidden>
+              <rect x="2" y="2.5" width="12" height="11" rx="1.5" stroke="currentColor" strokeWidth="1.2" />
+              <path d="M10 2.5v11" stroke="currentColor" strokeWidth="1.2" />
+            </svg>
+          </button>
+        </div>
         <div className={styles.scroll} id="chat-scroll">
           {isEmpty ? (
             <Hero project={activeWorkspace} locked={!isHome} />
@@ -363,9 +480,122 @@ export default function App() {
         </div>
         <StatusBar model={state?.model ?? ''} running={running} />
       </div>
+      {filesOpen && serverDir && (
+        <div className={styles.filesCol}>
+          <FilePanel workDir={serverDir} showBrowsingHint={!isHome} />
+        </div>
+      )}
+      {!sidebarCollapsed && (
+        <DragHandle left={`${sidebarW}px`} onStart={onSidebarStart} onDrag={onSidebarDrag} onEnd={onDragEnd} />
+      )}
+      {filesOpen && (
+        <DragHandle
+          left={`calc(100% - ${filesW}px)`}
+          onStart={onFilesStart}
+          onDrag={onFilesDrag}
+          onEnd={onDragEnd}
+        />
+      )}
       {permission && <PermissionDialog permission={permission} onAnswer={answerPermission} />}
       {settingsOpen && <SettingsPanel onClose={() => setSettingsOpen(false)} />}
     </div>
+  )
+}
+
+/** 列宽拖拽手柄:跨在列边界上的浮层,pointer capture + rAF 节流(设计 §11.3)。
+ *  capture 只是加固——窗口级监听才是手势主路(DSH:滚动容器会抢手势,合成指针会抛 NotFoundError)。 */
+function DragHandle(props: {
+  left: string
+  onStart: () => void
+  onDrag: (dx: number) => void
+  onEnd: () => void
+}) {
+  const [active, setActive] = useState(false)
+  const captured = useRef(false)
+  const origin = useRef(0)
+  const latest = useRef(0)
+  const raf = useRef<number | null>(null)
+  const listeners = useRef<{ move: (e: PointerEvent) => void; up: () => void } | null>(null)
+  const cb = useRef(props)
+  cb.current = props
+
+  const reportMove = useCallback((clientX: number) => {
+    latest.current = clientX
+    if (raf.current === null) {
+      raf.current = requestAnimationFrame(() => {
+        raf.current = null
+        cb.current.onDrag(latest.current - origin.current)
+      })
+    }
+  }, [])
+
+  const finish = useCallback(() => {
+    if (!captured.current) return
+    captured.current = false
+    const l = listeners.current
+    if (l) {
+      window.removeEventListener('pointermove', l.move)
+      window.removeEventListener('pointerup', l.up)
+      window.removeEventListener('pointercancel', l.up)
+      listeners.current = null
+    }
+    if (raf.current !== null) {
+      cancelAnimationFrame(raf.current)
+      raf.current = null
+    }
+    setActive(false)
+    cb.current.onEnd()
+  }, [])
+
+  const start = useCallback(
+    (clientX: number) => {
+      origin.current = clientX
+      latest.current = clientX
+      setActive(true)
+      cb.current.onStart()
+      const move = (e: PointerEvent) => reportMove(e.clientX)
+      const up = () => finish()
+      listeners.current = { move, up }
+      window.addEventListener('pointermove', move)
+      window.addEventListener('pointerup', up)
+      window.addEventListener('pointercancel', up)
+    },
+    [reportMove, finish],
+  )
+
+  const onPointerDown = useCallback(
+    (e: React.PointerEvent<HTMLDivElement>) => {
+      if (e.button !== 0 || captured.current) return
+      e.preventDefault()
+      try {
+        e.currentTarget.setPointerCapture(e.pointerId)
+      } catch {
+        /* 无效指针(合成事件):窗口监听兜底 */
+      }
+      captured.current = true
+      start(e.clientX)
+    },
+    [start],
+  )
+
+  const onPointerMove = useCallback(
+    (e: React.PointerEvent<HTMLDivElement>) => {
+      if (!captured.current) return
+      reportMove(e.clientX)
+    },
+    [reportMove],
+  )
+
+  return (
+    <div
+      className={styles.handle}
+      style={{ left: props.left }}
+      data-dragging={active || undefined}
+      onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
+      onPointerUp={finish}
+      onPointerCancel={finish}
+    />
   )
 }
 

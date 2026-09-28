@@ -9,10 +9,11 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import sys
 import uuid
 from dataclasses import asdict
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import StreamingResponse
@@ -455,6 +456,86 @@ def api_skills():
         }
         for m in loader.manifests().values()
     ]
+
+
+# ── 工作区文件(只读浏览:设计 §12,路径圈定在工作区内是安全底线)──────────
+
+_MAX_ENTRIES = 2000
+_MAX_LINES = 2000
+_MAX_BYTES = 512 * 1024
+
+
+def _confine(rel: str) -> Path:
+    """相对路径 → work_dir 内的绝对路径;越界 403、不存在 404。空串 = 根。"""
+    assert STATE is not None
+    rel = (rel or "").replace("\\", "/").strip("/")
+    root = STATE.work_dir.resolve()
+    if not rel or rel == ".":
+        return root
+    if PurePosixPath(rel).is_absolute() or ".." in PurePosixPath(rel).parts:
+        raise HTTPException(403, "path escapes the workspace")
+    target = (root / rel).resolve()
+    if not target.is_relative_to(root):
+        raise HTTPException(403, "path escapes the workspace")
+    if not target.exists():
+        raise HTTPException(404, f"not found: {rel}")
+    return target
+
+
+def _natural_key(name: str) -> list:
+    return [int(p) if p.isdigit() else p.lower() for p in re.split(r"(\d+)", name)]
+
+
+@app.get("/api/files")
+def api_files(path: str = ""):
+    """列目录直接子项:目录在前、自然序、2000 条上限(设计 §12.2)。"""
+    target = _confine(path)
+    if not target.is_dir():
+        raise HTTPException(400, f"not a directory: {path}")
+    entries: list[dict] = []
+    for child in target.iterdir():
+        try:
+            if child.is_dir():
+                entries.append({"name": child.name, "type": "directory"})
+            elif child.is_file():
+                entries.append(
+                    {"name": child.name, "type": "file", "size": child.stat().st_size}
+                )
+            else:
+                entries.append({"name": child.name, "type": "other"})
+        except OSError:
+            entries.append({"name": child.name, "type": "other"})
+    entries.sort(key=lambda e: (e["type"] != "directory", _natural_key(e["name"])))
+    return {
+        "path": path,
+        "entries": entries[:_MAX_ENTRIES],
+        "truncated": len(entries) > _MAX_ENTRIES,
+    }
+
+
+@app.get("/api/file")
+def api_file(path: str):
+    """读文本文件:二进制探测 → utf-8/gbk 解码 → 2000 行 / 512KB 截断(设计 §12.4)。"""
+    target = _confine(path)
+    if not target.is_file():
+        raise HTTPException(400, f"not a regular file: {path}")
+    size = target.stat().st_size
+    with target.open("rb") as f:
+        head = f.read(_MAX_BYTES)
+    if b"\0" in head[:8192]:
+        return {"text": "", "truncated": False, "size": size, "binary": True}
+    try:
+        text = head.decode("utf-8")
+    except UnicodeDecodeError:
+        text = head.decode("gbk", errors="replace")
+    lines = text.split("\n")
+    truncated = len(lines) > _MAX_LINES
+    return {
+        "text": "\n".join(lines[:_MAX_LINES]),
+        "truncated": truncated,
+        "size": size,
+        "binary": False,
+    }
 
 
 # ── 静态文件(web/dist 存在时,装配时挂载)──────────────────────────────

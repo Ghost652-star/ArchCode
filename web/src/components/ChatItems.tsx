@@ -178,7 +178,7 @@ function ToolCallRow({
   )
 }
 
-function Markdown({ text }: { text: string }) {
+export function Markdown({ text }: { text: string }) {
   return (
     <div className={styles.markdown}>
       <ReactMarkdown remarkPlugins={[remarkGfm]}>{text}</ReactMarkdown>

@@ -1,6 +1,27 @@
+/* ── 三栏外壳(设计 §11:grid 三轨,中栏挤压交给 minmax,JS 只做离散决策)── */
 .frame {
-  display: flex;
+  position: relative; /* 锚定跨列边界的拖拽手柄 */
+  display: grid;
+  grid-template-rows: minmax(0, 1fr);
   height: 100%;
+  overflow: hidden;
+  background: var(--ac-bg-base);
+}
+
+/* 只有离散的折叠/展开切换才给轨道过渡(§11.3 动效纪律) */
+.frame[data-animating] {
+  transition: grid-template-columns 0.24s var(--ac-ease);
+}
+
+/* 拖拽按指针节奏写宽度,加过渡会让列边脱离指针 */
+.frame[data-dragging] {
+  transition: none;
+}
+
+.sidebarCol {
+  min-width: 0;
+  height: 100%;
+  overflow: hidden;
 }
 
 .mainColumn {
@@ -12,7 +33,95 @@
   position: relative;
 }
 
-.scroll {
+.filesCol {
+  min-width: 0;
+  height: 100%;
+  overflow: hidden;
+}
+
+/* 拖拽手柄:透明浮层,hover/拖拽时中缝显形。 */
+.handle {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 9px;
+  margin-left: -4px;
+  z-index: 30;
+  cursor: col-resize;
+}
+
+.handle::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 4px;
+  width: 1px;
+  background: transparent;
+  transition: background var(--ac-dur-fast) var(--ac-ease);
+}
+
+.handle:hover::after,
+.handle[data-dragging]::after {
+  background: var(--ac-border-l3);
+}
+
+/* ── 主栏头部(工作区名 + 文件面板开关)────────────────────────── */
+.mainHeader {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 44px;
+  padding: 0 12px;
+  border-bottom: 0.5px solid var(--ac-border-l2);
+}
+
+.mainTitle {
+  font-size: var(--ac-font-size-secondary);
+  font-weight: 500;
+  color: var(--ac-label-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mainBadge {
+  flex: none;
+  font-size: var(--ac-font-size-caption);
+  color: var(--ac-label-caption);
+  border: 0.5px solid var(--ac-border-l2);
+  border-radius: 8px;
+  padding: 1px 6px;
+}
+
+.headerSpring {
+  flex: 1;
+}
+
+.iconBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  color: var(--ac-label-tertiary);
+  transition: background var(--ac-dur-fast) var(--ac-ease), color var(--ac-dur-fast) var(--ac-ease);
+}
+
+.iconBtn:hover {
+  background: var(--ac-bg-hover);
+  color: var(--ac-label-primary);
+}
+
+.iconBtn[data-on] {
+  color: var(--ac-label-primary);
+  background: var(--ac-bg-active);
+}
+
+.mainColumn .scroll {
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
