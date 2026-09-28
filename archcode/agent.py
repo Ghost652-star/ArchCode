@@ -11,7 +11,7 @@ import asyncio
 import logging
 
 from archcode.conversation.manager import ConversationManager
-from archcode.conversation.models import ThinkingBlock, ToolResultBlock, ToolUseBlock
+from archcode.conversation.models import Message, ThinkingBlock, ToolResultBlock, ToolUseBlock
 from archcode.llm.client import LLMClient, LLMError, is_prompt_too_long_error
 from archcode.llm.events import (
     StreamEnd,
@@ -298,6 +298,52 @@ def partition_tool_calls(
 # ---------------------------------------------------------------------------
 # Agent 主循环
 # ---------------------------------------------------------------------------
+
+
+def seal_dangling_tool_calls(conversation: ConversationManager) -> None:
+    """补写悬空 tool_calls 的合成占位结果,防止对话协议悬空。
+
+    run 因中断/异常/消费方取消结束时,assistant 消息的 tool_calls 可能
+    没有对应 tool_results —— 之后每条消息都会被 OpenAI 兼容 API 以
+    "insufficient tool messages" 400 拒绝,会话等于报废。
+    检查所有 assistant(tool_uses) 与其后继消息的配对,缺哪个 id 补哪个;
+    已有部分结果则补进同一条 results 消息,否则插入新消息。
+    """
+    history = conversation.history
+    idx = 0
+    while idx < len(history):
+        message = history[idx]
+        if message.role != "assistant" or not message.tool_uses:
+            idx += 1
+            continue
+        nxt = history[idx + 1] if idx + 1 < len(history) else None
+        covered = (
+            {r.tool_use_id for r in nxt.tool_results}
+            if nxt is not None and nxt.role == "user"
+            else set()
+        )
+        missing = [u for u in message.tool_uses if u.tool_use_id not in covered]
+        if not missing:
+            idx += 2
+            continue
+        seal_blocks = [
+            ToolResultBlock(
+                tool_use_id=block.tool_use_id,
+                content="[中断] 工具调用未完成(会话被打断或出错),此为占位结果。",
+                is_error=True,
+            )
+            for block in missing
+        ]
+        if nxt is not None and nxt.role == "user" and nxt.tool_results:
+            nxt.tool_results.extend(seal_blocks)
+        else:
+            history.insert(idx + 1, Message(role="user", content="", tool_results=seal_blocks))
+        log.warning(
+            "sealed %d dangling tool call(s) after history[%d] (%s)",
+            len(seal_blocks), idx, message.content[:50] or "(tool call)",
+        )
+        idx += 2
+
 
 
 class Agent:
@@ -976,6 +1022,9 @@ class Agent:
         self._refresh_skill_catalog()
         self._refresh_agent_catalog()
         self.refresh_active_skills_pin(conversation)
+        # 起始封口(§R4):上次 run 留下的悬空 tool_calls 在此自愈,
+        # 否则本条消息的第一次 LLM 调用就会被 API 400 拒绝。
+        seal_dangling_tool_calls(conversation)
         conversation.add_user(user_input)
 
         # 日志关联(logging plan):有会话 ID 时重绑 session 列;
@@ -1003,362 +1052,407 @@ class Agent:
         # loop 每轮开头 + 每个 stream 事件点检查 → 立刻退出
         abort = self._abort_event
 
-        while True:
-            iteration += 1
+        try:
+            # 封口保护(§R4):整个 ReAct 循环包在 try/finally 里,
+            # 无论正常结束、异常还是被消费方取消(GeneratorExit),都保证不留下
+            # 悬空的 tool_calls —— 否则该会话之后每条消息都被 API 400 拒绝。
+            while True:
+                iteration += 1
 
-            # 用户主动打断:每轮开头检查,避免半路强行 cancel SDK 请求
-            if abort.is_set():
-                log.info("task aborted: user cancel (turns=%d)", iteration)
-                yield ErrorEvent(message="[aborted] 用户取消")
-                yield LoopComplete(total_turns=iteration, text=final_text)
-                return
+                # 用户主动打断:每轮开头检查,避免半路强行 cancel SDK 请求
+                if abort.is_set():
+                    log.info("task aborted: user cancel (turns=%d)", iteration)
+                    yield ErrorEvent(message="[aborted] 用户取消")
+                    yield LoopComplete(total_turns=iteration, text=final_text)
+                    return
 
-            # 硬上限
-            if iteration > self._max_iterations:
-                log.warning("task aborted: max iterations (%d) reached", self._max_iterations)
-                yield ErrorEvent(
-                    message=f"Agent reached maximum iterations ({self._max_iterations})"
-                )
-                yield LoopComplete(total_turns=iteration, text=final_text)
-                return
-
-            # 每轮重新注入 plan mode reminder(对话历史可能会污染 LLM 判断)
-            # ── 动态上下文注入点(扩展契约)────────────────────────────────
-            # 当前只注入 plan reminder 与 MCP 延迟工具提示。长期记忆索引
-            # 已在新任务边界/压缩后通过 refresh_memory_context 注入，不能
-            # 在这里每个 ReAct iteration 重复追加。
-            # 注意:不要动 self._system_prompt(那会破 Anthropic prompt cache),
-            # 任何会变的内容都走 conversation.add_system_reminder 这条路。
-            # 详细设计见 docs/prompts-design.md。
-            if self._plan_mode and self._plan_path is not None:
-                work_dir_str = str(self._work_dir) if self._work_dir else None
-                conversation.add_system_reminder(
-                    build_plan_mode_reminder(
-                        plan_path=str(self._plan_path),
-                        work_dir=work_dir_str,
-                        iteration=iteration,
+                # 硬上限
+                if iteration > self._max_iterations:
+                    log.warning("task aborted: max iterations (%d) reached", self._max_iterations)
+                    yield ErrorEvent(
+                        message=f"Agent reached maximum iterations ({self._max_iterations})"
                     )
-                )
+                    yield LoopComplete(total_turns=iteration, text=final_text)
+                    return
 
-            # ── MCP 延迟工具注入(独立于 plan_mode,每轮都注) ────
-            if self._tool_registry is not None:
-                deferred_names = self._tool_registry.get_deferred_tool_names()
-                if deferred_names:
+                # 每轮重新注入 plan mode reminder(对话历史可能会污染 LLM 判断)
+                # ── 动态上下文注入点(扩展契约)────────────────────────────────
+                # 当前只注入 plan reminder 与 MCP 延迟工具提示。长期记忆索引
+                # 已在新任务边界/压缩后通过 refresh_memory_context 注入，不能
+                # 在这里每个 ReAct iteration 重复追加。
+                # 注意:不要动 self._system_prompt(那会破 Anthropic prompt cache),
+                # 任何会变的内容都走 conversation.add_system_reminder 这条路。
+                # 详细设计见 docs/prompts-design.md。
+                if self._plan_mode and self._plan_path is not None:
+                    work_dir_str = str(self._work_dir) if self._work_dir else None
                     conversation.add_system_reminder(
-                        "以下工具可通过 ToolSearch 加载(完整 schema 默认不发):\n"
-                        + "\n".join(f"  - {n}" for n in deferred_names)
-                        + '\n用法:ToolSearch(query="select:name1,name2") 或 '
-                        + 'ToolSearch(query="关键词")'
-                    )
-
-            # ── 后台任务通知注入(§9.2:fork/后台子 agent 完成回传) ──
-            # 每轮 drain TaskManager 通知队列,以 user 消息注入 <task-notification>
-            # ——不破坏 tool-pair 配对;经 _background_notifier 回调接线,agent
-            # 不反向依赖 agents/ 包(§11)。
-            if self._background_notifier is not None:
-                self._background_notifier(conversation)
-
-            # ── 上下文压缩:Layer 1 (单条预算) + Layer 2 (累积阈值) ──
-            # 顺序:先轻量(per-message budget),再昂贵(LLM 摘要)
-            if (
-                self._compression is not None
-                and self._compression.enabled
-                and self._session_dir is not None
-            ):
-                try:
-                    apply_tool_result_budget(
-                        conversation=conversation,
-                        session_dir=self._session_dir,
-                        state=self._replacement_state,
-                        single_char_limit=self._compression.single_char_limit,
-                        aggregate_char_limit=self._compression.aggregate_char_limit,
-                        preview_chars=self._compression.preview_chars,
-                        old_result_snip_chars=self._compression.old_result_snip_chars,
-                        keep_recent_turns=self._compression.keep_recent_turns,
-                    )
-                except Exception:
-                    # Layer 1 失败不能阻塞 agent loop,降级到原样发
-                    pass
-
-                if should_auto_compact(
-                    conversation.current_tokens(), self._client.context_window
-                ):
-                    # Layer 2: 摘要
-                    # 用 on_started 回调:真正开始调 LLM 才标记 started,
-                    # auto_compact 跑完后才 yield CompactStarted,避免
-                    # 「阈值过但 to_summarize 空」时短暂挂 widget
-                    progress_chars = [0]
-                    started_flag: list[str] = []  # 长度=1 表示 started 已触发
-
-                    def _on_progress(delta: str) -> None:
-                        progress_chars[0] += len(delta)
-
-                    def _on_started() -> None:
-                        if not started_flag:
-                            started_flag.append("started")
-
-                    try:
-                        tool_schemas = self._tool_schemas()
-                        event = await auto_compact(
-                            conversation=conversation,
-                            client=self._client,
-                            context_window=self._client.context_window,
-                            session_dir=self._session_dir,
-                            recovery=self._recovery_state,
-                            tool_schemas=tool_schemas,
-                            breaker=self._auto_compact_breaker,
-                            manual=False,
-                            keep_recent_turns=self._compression.keep_recent_turns,
-                            keep_recent_tokens=self._compression.keep_recent_tokens,
-                            keep_max_tokens=self._compression.keep_max_tokens,
-                            min_keep_turns=self._compression.min_keep_turns,
-                            min_summarize_prefix_tokens=self._compression.min_summarize_prefix_tokens,
-                            recovery_file_limit=self._compression.recovery_file_limit,
-                            recovery_tokens_per_file=self._compression.recovery_tokens_per_file,
-                            recovery_skills_budget=self._compression.recovery_skills_budget,
-                            recovery_tokens_per_skill=self._compression.recovery_tokens_per_skill,
-                            max_retries=self._compression.max_summary_retries,
-                            on_text_delta=_on_progress,
-                            on_started=_on_started,
+                        build_plan_mode_reminder(
+                            plan_path=str(self._plan_path),
+                            work_dir=work_dir_str,
+                            iteration=iteration,
                         )
-                        # 只在 started_flag 非空时才发任何进度事件
-                        if started_flag:
-                            yield CompactStarted(mode="auto")
-                            if progress_chars[0] > 0:
-                                yield CompactProgress(
-                                    delta="",
-                                    total_chars=progress_chars[0],
-                                )
-                        if isinstance(event, str):
-                            # 失败 / 熔断 → 注入 system_reminder 让模型看到
-                            conversation.add_system_reminder(
-                                f"[compression] {event}"
-                            )
-                            if started_flag:
-                                yield CompactFinished(
-                                    success=False, error=event
-                                )
-                        elif event is None:
-                            # 阈值过但 to_summarize 空 — Widget 没挂,啥也不发
-                            pass
-                        elif isinstance(event, CompactEvent):
-                            self.refresh_memory_context(conversation)
-                            self.refresh_active_skills_pin(conversation)
-                            snippet = event.summary[:200].replace("\n", " ")
-                            yield CompactFinished(
-                                success=True,
-                                dropped=event.dropped_messages,
-                                summary_preview=snippet,
-                            )
-                    except Exception as e:
-                        # 摘要异常不能阻塞 agent loop
-                        msg = f"自动压缩异常: {type(e).__name__}: {e}"
-                        conversation.add_system_reminder(f"[compression] {msg}")
-                        if started_flag:
-                            yield CompactStarted(mode="auto")
-                            yield CompactFinished(success=False, error=msg)
-
-            # 构造 LLM 响应收集器
-            # ``result_collector`` 在 force-compact 重试成功后会被替换为新收集器
-            # 这样下游 (record_usage_anchor / add_assistant_message) 读的就是
-            # 重试那次的 response。
-            result_collector = StreamCollector()
-
-            try:
-                stream_iter = result_collector.consume(
-                    self._client.stream(
-                        conversation,
-                        system=self._system_prompt,
-                        tools=self._tool_schemas(),
                     )
-                )
-                while True:
-                    # 每 yield 一次前检查 abort — 取消的话立刻 break,
-                    # 不会把 StreamEnd / partial text 加进 conversation
-                    if abort.is_set():
-                        break
-                    try:
-                        event = await anext(stream_iter)
-                    except StopAsyncIteration:
-                        break
-                    yield event
-                    if abort.is_set():
-                        break
 
-            except LLMError as e:
-                # prompt 超出窗口 → 触发 force-compact 重试一次
+                # ── MCP 延迟工具注入(独立于 plan_mode,每轮都注) ────
+                if self._tool_registry is not None:
+                    deferred_names = self._tool_registry.get_deferred_tool_names()
+                    if deferred_names:
+                        conversation.add_system_reminder(
+                            "以下工具可通过 ToolSearch 加载(完整 schema 默认不发):\n"
+                            + "\n".join(f"  - {n}" for n in deferred_names)
+                            + '\n用法:ToolSearch(query="select:name1,name2") 或 '
+                            + 'ToolSearch(query="关键词")'
+                        )
+
+                # ── 后台任务通知注入(§9.2:fork/后台子 agent 完成回传) ──
+                # 每轮 drain TaskManager 通知队列,以 user 消息注入 <task-notification>
+                # ——不破坏 tool-pair 配对;经 _background_notifier 回调接线,agent
+                # 不反向依赖 agents/ 包(§11)。
+                if self._background_notifier is not None:
+                    self._background_notifier(conversation)
+
+                # ── 上下文压缩:Layer 1 (单条预算) + Layer 2 (累积阈值) ──
+                # 顺序:先轻量(per-message budget),再昂贵(LLM 摘要)
                 if (
                     self._compression is not None
                     and self._compression.enabled
                     and self._session_dir is not None
-                    and is_prompt_too_long_error(e)
                 ):
-                    # 仅在 force_compact 真要调 LLM 时,才向 UI 发 Started
-                    # (跟 auto_compact 保持一致:熔断 / 空 history / 空 to_summarize 都跳过)
-                    force_progress_chars = [0]
-                    force_started_flag: list[str] = []
-
-                    def _on_force_progress(delta: str) -> None:
-                        force_progress_chars[0] += len(delta)
-
-                    def _on_force_started() -> None:
-                        if not force_started_flag:
-                            force_started_flag.append("started")
-
                     try:
-                        tool_schemas = self._tool_schemas()
-                        compact_event = await force_compact(
+                        apply_tool_result_budget(
                             conversation=conversation,
-                            client=self._client,
-                            context_window=self._client.context_window,
                             session_dir=self._session_dir,
-                            recovery=self._recovery_state,
-                            tool_schemas=tool_schemas,
-                            breaker=self._force_compact_breaker,
+                            state=self._replacement_state,
+                            single_char_limit=self._compression.single_char_limit,
+                            aggregate_char_limit=self._compression.aggregate_char_limit,
+                            preview_chars=self._compression.preview_chars,
+                            old_result_snip_chars=self._compression.old_result_snip_chars,
                             keep_recent_turns=self._compression.keep_recent_turns,
-                            keep_recent_tokens=self._compression.keep_recent_tokens,
-                            keep_max_tokens=self._compression.keep_max_tokens,
-                            min_keep_turns=self._compression.min_keep_turns,
-                            min_summarize_prefix_tokens=self._compression.min_summarize_prefix_tokens,
-                            recovery_file_limit=self._compression.recovery_file_limit,
-                            recovery_tokens_per_file=self._compression.recovery_tokens_per_file,
-                            recovery_skills_budget=self._compression.recovery_skills_budget,
-                            recovery_tokens_per_skill=self._compression.recovery_tokens_per_skill,
-                            max_retries=self._compression.max_summary_retries,
-                            on_text_delta=_on_force_progress,
-                            on_started=_on_force_started,
                         )
-                        # 仅在真的进 LLM 之后,才把 Started/Progress 事件投出去
-                        if force_started_flag:
-                            yield CompactStarted(mode="force")
-                            if force_progress_chars[0] > 0:
-                                yield CompactProgress(
-                                    delta="",
-                                    total_chars=force_progress_chars[0],
+                    except Exception:
+                        # Layer 1 失败不能阻塞 agent loop,降级到原样发
+                        pass
+
+                    if should_auto_compact(
+                        conversation.current_tokens(), self._client.context_window
+                    ):
+                        # Layer 2: 摘要
+                        # 用 on_started 回调:真正开始调 LLM 才标记 started,
+                        # auto_compact 跑完后才 yield CompactStarted,避免
+                        # 「阈值过但 to_summarize 空」时短暂挂 widget
+                        progress_chars = [0]
+                        started_flag: list[str] = []  # 长度=1 表示 started 已触发
+
+                        def _on_progress(delta: str) -> None:
+                            progress_chars[0] += len(delta)
+
+                        def _on_started() -> None:
+                            if not started_flag:
+                                started_flag.append("started")
+
+                        try:
+                            tool_schemas = self._tool_schemas()
+                            event = await auto_compact(
+                                conversation=conversation,
+                                client=self._client,
+                                context_window=self._client.context_window,
+                                session_dir=self._session_dir,
+                                recovery=self._recovery_state,
+                                tool_schemas=tool_schemas,
+                                breaker=self._auto_compact_breaker,
+                                manual=False,
+                                keep_recent_turns=self._compression.keep_recent_turns,
+                                keep_recent_tokens=self._compression.keep_recent_tokens,
+                                keep_max_tokens=self._compression.keep_max_tokens,
+                                min_keep_turns=self._compression.min_keep_turns,
+                                min_summarize_prefix_tokens=self._compression.min_summarize_prefix_tokens,
+                                recovery_file_limit=self._compression.recovery_file_limit,
+                                recovery_tokens_per_file=self._compression.recovery_tokens_per_file,
+                                recovery_skills_budget=self._compression.recovery_skills_budget,
+                                recovery_tokens_per_skill=self._compression.recovery_tokens_per_skill,
+                                max_retries=self._compression.max_summary_retries,
+                                on_text_delta=_on_progress,
+                                on_started=_on_started,
+                            )
+                            # 只在 started_flag 非空时才发任何进度事件
+                            if started_flag:
+                                yield CompactStarted(mode="auto")
+                                if progress_chars[0] > 0:
+                                    yield CompactProgress(
+                                        delta="",
+                                        total_chars=progress_chars[0],
+                                    )
+                            if isinstance(event, str):
+                                # 失败 / 熔断 → 注入 system_reminder 让模型看到
+                                conversation.add_system_reminder(
+                                    f"[compression] {event}"
                                 )
-                        if isinstance(compact_event, CompactEvent):
-                            self.refresh_memory_context(conversation)
-                            self.refresh_active_skills_pin(conversation)
-                            snippet = compact_event.summary[:200].replace("\n", " ")
-                            if force_started_flag:
+                                if started_flag:
+                                    yield CompactFinished(
+                                        success=False, error=event
+                                    )
+                            elif event is None:
+                                # 阈值过但 to_summarize 空 — Widget 没挂,啥也不发
+                                pass
+                            elif isinstance(event, CompactEvent):
+                                self.refresh_memory_context(conversation)
+                                self.refresh_active_skills_pin(conversation)
+                                snippet = event.summary[:200].replace("\n", " ")
                                 yield CompactFinished(
                                     success=True,
-                                    dropped=compact_event.dropped_messages,
+                                    dropped=event.dropped_messages,
                                     summary_preview=snippet,
                                 )
-                            # 重试一次
-                            retry_collector = StreamCollector()
-                            try:
-                                async for event in retry_collector.consume(
-                                    self._client.stream(
-                                        conversation,
-                                        system=self._system_prompt,
-                                        tools=self._tool_schemas(),
+                        except Exception as e:
+                            # 摘要异常不能阻塞 agent loop
+                            msg = f"自动压缩异常: {type(e).__name__}: {e}"
+                            conversation.add_system_reminder(f"[compression] {msg}")
+                            if started_flag:
+                                yield CompactStarted(mode="auto")
+                                yield CompactFinished(success=False, error=msg)
+
+                # 构造 LLM 响应收集器
+                # ``result_collector`` 在 force-compact 重试成功后会被替换为新收集器
+                # 这样下游 (record_usage_anchor / add_assistant_message) 读的就是
+                # 重试那次的 response。
+                result_collector = StreamCollector()
+
+                try:
+                    stream_iter = result_collector.consume(
+                        self._client.stream(
+                            conversation,
+                            system=self._system_prompt,
+                            tools=self._tool_schemas(),
+                        )
+                    )
+                    while True:
+                        # 每 yield 一次前检查 abort — 取消的话立刻 break,
+                        # 不会把 StreamEnd / partial text 加进 conversation
+                        if abort.is_set():
+                            break
+                        try:
+                            event = await anext(stream_iter)
+                        except StopAsyncIteration:
+                            break
+                        yield event
+                        if abort.is_set():
+                            break
+
+                except LLMError as e:
+                    # prompt 超出窗口 → 触发 force-compact 重试一次
+                    if (
+                        self._compression is not None
+                        and self._compression.enabled
+                        and self._session_dir is not None
+                        and is_prompt_too_long_error(e)
+                    ):
+                        # 仅在 force_compact 真要调 LLM 时,才向 UI 发 Started
+                        # (跟 auto_compact 保持一致:熔断 / 空 history / 空 to_summarize 都跳过)
+                        force_progress_chars = [0]
+                        force_started_flag: list[str] = []
+
+                        def _on_force_progress(delta: str) -> None:
+                            force_progress_chars[0] += len(delta)
+
+                        def _on_force_started() -> None:
+                            if not force_started_flag:
+                                force_started_flag.append("started")
+
+                        try:
+                            tool_schemas = self._tool_schemas()
+                            compact_event = await force_compact(
+                                conversation=conversation,
+                                client=self._client,
+                                context_window=self._client.context_window,
+                                session_dir=self._session_dir,
+                                recovery=self._recovery_state,
+                                tool_schemas=tool_schemas,
+                                breaker=self._force_compact_breaker,
+                                keep_recent_turns=self._compression.keep_recent_turns,
+                                keep_recent_tokens=self._compression.keep_recent_tokens,
+                                keep_max_tokens=self._compression.keep_max_tokens,
+                                min_keep_turns=self._compression.min_keep_turns,
+                                min_summarize_prefix_tokens=self._compression.min_summarize_prefix_tokens,
+                                recovery_file_limit=self._compression.recovery_file_limit,
+                                recovery_tokens_per_file=self._compression.recovery_tokens_per_file,
+                                recovery_skills_budget=self._compression.recovery_skills_budget,
+                                recovery_tokens_per_skill=self._compression.recovery_tokens_per_skill,
+                                max_retries=self._compression.max_summary_retries,
+                                on_text_delta=_on_force_progress,
+                                on_started=_on_force_started,
+                            )
+                            # 仅在真的进 LLM 之后,才把 Started/Progress 事件投出去
+                            if force_started_flag:
+                                yield CompactStarted(mode="force")
+                                if force_progress_chars[0] > 0:
+                                    yield CompactProgress(
+                                        delta="",
+                                        total_chars=force_progress_chars[0],
                                     )
-                                ):
-                                    yield event
-                                result_collector = retry_collector
-                            except LLMError:
-                                # 重试仍失败 → 走错误路径
-                                log.error(
-                                    "LLM error: %s (retry after force-compact)",
-                                    e,
-                                    exc_info=True,
+                            if isinstance(compact_event, CompactEvent):
+                                self.refresh_memory_context(conversation)
+                                self.refresh_active_skills_pin(conversation)
+                                snippet = compact_event.summary[:200].replace("\n", " ")
+                                if force_started_flag:
+                                    yield CompactFinished(
+                                        success=True,
+                                        dropped=compact_event.dropped_messages,
+                                        summary_preview=snippet,
+                                    )
+                                # 重试一次
+                                retry_collector = StreamCollector()
+                                try:
+                                    async for event in retry_collector.consume(
+                                        self._client.stream(
+                                            conversation,
+                                            system=self._system_prompt,
+                                            tools=self._tool_schemas(),
+                                        )
+                                    ):
+                                        yield event
+                                    result_collector = retry_collector
+                                except LLMError:
+                                    # 重试仍失败 → 走错误路径
+                                    log.error(
+                                        "LLM error: %s (retry after force-compact)",
+                                        e,
+                                        exc_info=True,
+                                    )
+                                    yield ErrorEvent(message=str(e))
+                                    yield LoopComplete(
+                                        total_turns=iteration, text=final_text
+                                    )
+                                    return
+                            else:
+                                # force_compact 也挂了(熔断 / 空 history / 空 to_summarize / 摘要失败)
+                                err_msg = (
+                                    compact_event
+                                    if isinstance(compact_event, str)
+                                    else "未知失败"
                                 )
-                                yield ErrorEvent(message=str(e))
+                                log.warning("force-compact failed: %s", err_msg)
+                                if force_started_flag:
+                                    yield CompactFinished(success=False, error=err_msg)
+                                yield ErrorEvent(
+                                    message=f"[force-compact 失败] {err_msg}"
+                                )
                                 yield LoopComplete(
                                     total_turns=iteration, text=final_text
                                 )
                                 return
-                        else:
-                            # force_compact 也挂了(熔断 / 空 history / 空 to_summarize / 摘要失败)
-                            err_msg = (
-                                compact_event
-                                if isinstance(compact_event, str)
-                                else "未知失败"
-                            )
-                            log.warning("force-compact failed: %s", err_msg)
+                        except Exception as fc_err:
+                            fc_msg = f"[force-compact 异常] {type(fc_err).__name__}: {fc_err}"
+                            log.warning("force-compact failed: %s", fc_msg)
                             if force_started_flag:
-                                yield CompactFinished(success=False, error=err_msg)
-                            yield ErrorEvent(
-                                message=f"[force-compact 失败] {err_msg}"
-                            )
-                            yield LoopComplete(
-                                total_turns=iteration, text=final_text
-                            )
+                                yield CompactStarted(mode="force")
+                                yield CompactFinished(success=False, error=fc_msg)
+                            yield ErrorEvent(message=fc_msg)
+                            yield LoopComplete(total_turns=iteration, text=final_text)
                             return
-                    except Exception as fc_err:
-                        fc_msg = f"[force-compact 异常] {type(fc_err).__name__}: {fc_err}"
-                        log.warning("force-compact failed: %s", fc_msg)
-                        if force_started_flag:
-                            yield CompactStarted(mode="force")
-                            yield CompactFinished(success=False, error=fc_msg)
-                        yield ErrorEvent(message=fc_msg)
+                    else:
+                        log.error("LLM error: %s", e, exc_info=True)
+                        yield ErrorEvent(message=str(e))
                         yield LoopComplete(total_turns=iteration, text=final_text)
                         return
-                else:
-                    log.error("LLM error: %s", e, exc_info=True)
+                except Exception as e:
+                    log.error("unexpected error in agent loop: %s", e, exc_info=True)
                     yield ErrorEvent(message=str(e))
                     yield LoopComplete(total_turns=iteration, text=final_text)
                     return
-            except Exception as e:
-                log.error("unexpected error in agent loop: %s", e, exc_info=True)
-                yield ErrorEvent(message=str(e))
-                yield LoopComplete(total_turns=iteration, text=final_text)
-                return
 
-            # 从收集器取 tool_calls
-            tool_calls = result_collector.response.tool_calls
+                # 从收集器取 tool_calls
+                tool_calls = result_collector.response.tool_calls
 
-            # 向 UI 报告本轮实际用量。Conversation 的 usage anchor 要等
-            # assistant 消息写入 history 后再建立，避免下一轮重复估算输出。
-            log.info(
-                "llm call: turn=%d in=%d out=%d cache_read=%d stop=%s",
-                iteration,
-                result_collector.response.input_tokens,
-                result_collector.response.output_tokens,
-                result_collector.response.cache_read,
-                result_collector.response.stop_reason,
-            )
-            yield UsageEvent(
-                input_tokens=result_collector.response.input_tokens,
-                output_tokens=result_collector.response.output_tokens,
-                cache_read=result_collector.response.cache_read,
-                cache_creation=result_collector.response.cache_creation,
-            )
-
-            # 处理 max_tokens 停止原因:将当前输出接续到下一轮
-            if result_collector.response.stop_reason == "max_tokens":
-                # 简单重试：将当前输出接续到下一轮
-                if result_collector.response.text:
-                    conversation.add_assistant_message(result_collector.response.text)
-                conversation.record_usage_anchor(
+                # 向 UI 报告本轮实际用量。Conversation 的 usage anchor 要等
+                # assistant 消息写入 history 后再建立，避免下一轮重复估算输出。
+                log.info(
+                    "llm call: turn=%d in=%d out=%d cache_read=%d stop=%s",
+                    iteration,
                     result_collector.response.input_tokens,
                     result_collector.response.output_tokens,
                     result_collector.response.cache_read,
-                    result_collector.response.cache_creation,
+                    result_collector.response.stop_reason,
                 )
-                if result_collector.response.text:
-                    conversation.add_user_message(
-                        "Output token limit hit. Resume directly where you stopped. "
-                        "Do not apologize or repeat previous content."
+                yield UsageEvent(
+                    input_tokens=result_collector.response.input_tokens,
+                    output_tokens=result_collector.response.output_tokens,
+                    cache_read=result_collector.response.cache_read,
+                    cache_creation=result_collector.response.cache_creation,
+                )
+
+                # 处理 max_tokens 停止原因:将当前输出接续到下一轮
+                if result_collector.response.stop_reason == "max_tokens":
+                    # 简单重试：将当前输出接续到下一轮
+                    if result_collector.response.text:
+                        conversation.add_assistant_message(result_collector.response.text)
+                    conversation.record_usage_anchor(
+                        result_collector.response.input_tokens,
+                        result_collector.response.output_tokens,
+                        result_collector.response.cache_read,
+                        result_collector.response.cache_creation,
                     )
-                    log.debug("llm response truncated (max_tokens), continuing")
-                yield RetryEvent(reason="max_tokens continuation")
-                continue
+                    if result_collector.response.text:
+                        conversation.add_user_message(
+                            "Output token limit hit. Resume directly where you stopped. "
+                            "Do not apologize or repeat previous content."
+                        )
+                        log.debug("llm response truncated (max_tokens), continuing")
+                    yield RetryEvent(reason="max_tokens continuation")
+                    continue
 
-            final_text = result_collector.response.text
+                final_text = result_collector.response.text
 
-            # 无 tool_calls → 本轮结束，退出循环
-            if not tool_calls:
+                # 无 tool_calls → 本轮结束，退出循环
+                if not tool_calls:
+                    conv_thinking = [
+                        ThinkingBlock(thinking=tb.thinking, signature=tb.signature)
+                        for tb in result_collector.response.thinking_blocks
+                    ]
+                    conversation.add_assistant_message(
+                        result_collector.response.text,
+                        thinking_blocks=conv_thinking or None,
+                        completes_user_turn=True,
+                    )
+                    conversation.record_usage_anchor(
+                        result_collector.response.input_tokens,
+                        result_collector.response.output_tokens,
+                        result_collector.response.cache_read,
+                        result_collector.response.cache_creation,
+                    )
+                    self._schedule_memory_extraction(conversation)
+                    # ── observe: turn_end(hooks-design §3,每 Task 一次) ──
+                    if self._hook_engine is not None:
+                        hook_ctx = self._build_hook_context(
+                            "turn_end", "", {}, message=final_text,
+                        )
+                        await self._hook_engine.observe("turn_end", hook_ctx)
+                    log.info(
+                        "task complete: who=%s turns=%d elapsed=%.1fs",
+                        who,
+                        iteration,
+                        time.monotonic() - task_start,
+                    )
+                    yield TurnComplete(turn=iteration)
+                    yield LoopComplete(total_turns=iteration, text=final_text)
+                    return
+
+                # 有 tool_calls → 记录 assistant 回复（含 tool_uses）
+                uses = [
+                    ToolUseBlock(
+                        tool_use_id=tc.tool_id,
+                        tool_name=tc.tool_name,
+                        arguments=tc.arguments,
+                    )
+                    for tc in tool_calls
+                ]
                 conv_thinking = [
                     ThinkingBlock(thinking=tb.thinking, signature=tb.signature)
                     for tb in result_collector.response.thinking_blocks
                 ]
                 conversation.add_assistant_message(
                     result_collector.response.text,
+                    tool_uses=uses,
                     thinking_blocks=conv_thinking or None,
-                    completes_user_turn=True,
                 )
                 conversation.record_usage_anchor(
                     result_collector.response.input_tokens,
@@ -1366,123 +1460,84 @@ class Agent:
                     result_collector.response.cache_read,
                     result_collector.response.cache_creation,
                 )
-                self._schedule_memory_extraction(conversation)
-                # ── observe: turn_end(hooks-design §3,每 Task 一次) ──
-                if self._hook_engine is not None:
-                    hook_ctx = self._build_hook_context(
-                        "turn_end", "", {}, message=final_text,
-                    )
-                    await self._hook_engine.observe("turn_end", hook_ctx)
-                log.info(
-                    "task complete: who=%s turns=%d elapsed=%.1fs",
-                    who,
-                    iteration,
-                    time.monotonic() - task_start,
-                )
-                yield TurnComplete(turn=iteration)
-                yield LoopComplete(total_turns=iteration, text=final_text)
-                return
 
-            # 有 tool_calls → 记录 assistant 回复（含 tool_uses）
-            uses = [
-                ToolUseBlock(
-                    tool_use_id=tc.tool_id,
-                    tool_name=tc.tool_name,
-                    arguments=tc.arguments,
-                )
-                for tc in tool_calls
-            ]
-            conv_thinking = [
-                ThinkingBlock(thinking=tb.thinking, signature=tb.signature)
-                for tb in result_collector.response.thinking_blocks
-            ]
-            conversation.add_assistant_message(
-                result_collector.response.text,
-                tool_uses=uses,
-                thinking_blocks=conv_thinking or None,
-            )
-            conversation.record_usage_anchor(
-                result_collector.response.input_tokens,
-                result_collector.response.output_tokens,
-                result_collector.response.cache_read,
-                result_collector.response.cache_creation,
-            )
+                # 执行工具分组：同一 batch 可并发，不同 batch 串行
+                tool_results: list[ToolResultBlock] = []
+                batches = partition_tool_calls(tool_calls, self._tool_registry)
 
-            # 执行工具分组：同一 batch 可并发，不同 batch 串行
-            tool_results: list[ToolResultBlock] = []
-            batches = partition_tool_calls(tool_calls, self._tool_registry)
+                for batch in batches:
+                    if batch.concurrent and len(batch.calls) > 1:
+                        # 并发执行
+                        batch_results = await self._execute_batch_parallel(batch.calls)
+                        for tc, result, elapsed, is_unknown in batch_results:
+                            if is_unknown:
+                                consecutive_unknown += 1
+                            else:
+                                consecutive_unknown = 0
 
-            for batch in batches:
-                if batch.concurrent and len(batch.calls) > 1:
-                    # 并发执行
-                    batch_results = await self._execute_batch_parallel(batch.calls)
-                    for tc, result, elapsed, is_unknown in batch_results:
-                        if is_unknown:
-                            consecutive_unknown += 1
-                        else:
-                            consecutive_unknown = 0
+                            block = ToolResultBlock(
+                                tool_use_id=tc.tool_id,
+                                content=result.output,
+                                is_error=result.is_error,
+                            )
+                            tool_results.append(block)
+                            yield ToolResultEvent(
+                                tool_id=tc.tool_id,
+                                tool_name=tc.tool_name,
+                                output=result.output,
+                                is_error=result.is_error,
+                                elapsed=elapsed,
+                            )
+                    else:
+                        # 串行执行：async for 处理 _execute_tool 的 yield
+                        for tc in batch.calls:
+                            result = None
+                            elapsed = 0.0
+                            is_unknown = False
+                            async for item in self._execute_tool(tc):
+                                if isinstance(item, PermissionRequest):
+                                    # HITL: yield 给 app.py 处理（app 端 set_result 后解除）
+                                    yield item
+                                    continue
+                                result, elapsed, is_unknown = item
 
-                        block = ToolResultBlock(
-                            tool_use_id=tc.tool_id,
-                            content=result.output,
-                            is_error=result.is_error,
-                        )
-                        tool_results.append(block)
-                        yield ToolResultEvent(
-                            tool_id=tc.tool_id,
-                            tool_name=tc.tool_name,
-                            output=result.output,
-                            is_error=result.is_error,
-                            elapsed=elapsed,
-                        )
-                else:
-                    # 串行执行：async for 处理 _execute_tool 的 yield
-                    for tc in batch.calls:
-                        result = None
-                        elapsed = 0.0
-                        is_unknown = False
-                        async for item in self._execute_tool(tc):
-                            if isinstance(item, PermissionRequest):
-                                # HITL: yield 给 app.py 处理（app 端 set_result 后解除）
-                                yield item
+                            if result is None:
+                                # 工具被取消 / 没结果
                                 continue
-                            result, elapsed, is_unknown = item
 
-                        if result is None:
-                            # 工具被取消 / 没结果
-                            continue
+                            if is_unknown:
+                                consecutive_unknown += 1
+                            else:
+                                consecutive_unknown = 0
 
-                        if is_unknown:
-                            consecutive_unknown += 1
-                        else:
-                            consecutive_unknown = 0
+                            block = ToolResultBlock(
+                                tool_use_id=tc.tool_id,
+                                content=result.output,
+                                is_error=result.is_error,
+                            )
+                            tool_results.append(block)
+                            yield ToolResultEvent(
+                                tool_id=tc.tool_id,
+                                tool_name=tc.tool_name,
+                                output=result.output,
+                                is_error=result.is_error,
+                                elapsed=elapsed,
+                            )
 
-                        block = ToolResultBlock(
-                            tool_use_id=tc.tool_id,
-                            content=result.output,
-                            is_error=result.is_error,
-                        )
-                        tool_results.append(block)
-                        yield ToolResultEvent(
-                            tool_id=tc.tool_id,
-                            tool_name=tc.tool_name,
-                            output=result.output,
-                            is_error=result.is_error,
-                            elapsed=elapsed,
-                        )
+                # 连续未知工具超过 3 次 → 退出
+                if consecutive_unknown >= 3:
+                    log.warning("task aborted: too many consecutive unknown tool calls")
+                    yield ErrorEvent(
+                        message="Agent terminated: too many consecutive unknown tool calls"
+                    )
+                    yield LoopComplete(total_turns=iteration, text=final_text)
+                    return
 
-            # 连续未知工具超过 3 次 → 退出
-            if consecutive_unknown >= 3:
-                log.warning("task aborted: too many consecutive unknown tool calls")
-                yield ErrorEvent(
-                    message="Agent terminated: too many consecutive unknown tool calls"
-                )
-                yield LoopComplete(total_turns=iteration, text=final_text)
-                return
-
-            # 将 tool results 写回对话，进入下一轮
-            conversation.add_tool_results_message(tool_results)
-            yield TurnComplete(turn=iteration)
+                # 将 tool results 写回对话，进入下一轮
+                conversation.add_tool_results_message(tool_results)
+                yield TurnComplete(turn=iteration)
+        finally:
+            seal_dangling_tool_calls(conversation)
 
     async def run_to_completion(
         self,

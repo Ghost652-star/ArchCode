@@ -42,12 +42,18 @@ export type Item =
   | { kind: 'turnEnd'; steps: number; elapsed: number }
   | { kind: 'error'; message: string }
 
+export interface QuestionOption {
+  label: string
+  description?: string
+}
+
 export interface PermissionState {
   requestId: string
   toolName: string
   reason: string
   question: string | null
-  options: string[] | null
+  /** AskUserQuestion 的选项可能是字符串或 {label, description} 对象。 */
+  options: Array<string | QuestionOption> | null
   multiSelect: boolean
 }
 

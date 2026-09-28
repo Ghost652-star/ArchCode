@@ -1,6 +1,13 @@
 import { useState } from 'react'
-import type { PermissionState } from '../types'
+import type { PermissionState, QuestionOption } from '../types'
 import styles from './PermissionDialog.module.css'
+
+/** 选项归一:AskUserQuestion 传 {label, description} 对象,权限询问传字符串。 */
+function normalize(options: NonNullable<PermissionState['options']>): QuestionOption[] {
+  return options.map((o) =>
+    typeof o === 'string' ? { label: o } : { label: o.label, description: o.description },
+  )
+}
 
 /** HITL 卡片:权限询问(Yes/No)与 AskUserQuestion(多选)两种模式(§8.5 Q3)。 */
 export default function PermissionDialog({
@@ -12,6 +19,7 @@ export default function PermissionDialog({
 }) {
   const [selected, setSelected] = useState<string[]>([])
   const isQuestion = permission.question !== null
+  const normalized = permission.options ? normalize(permission.options) : []
 
   const answerQuestion = () => {
     const answer =
@@ -33,24 +41,27 @@ export default function PermissionDialog({
           <>
             <div className={styles.question}>{permission.question}</div>
             <div className={styles.options}>
-              {(permission.options ?? []).map((option) => {
-                const checked = selected.includes(option)
+              {normalized.map((option) => {
+                const checked = selected.includes(option.label)
                 return (
                   <button
-                    key={option}
+                    key={option.label}
                     type="button"
                     className={`${styles.option} ${checked ? styles.optionChecked : ''}`}
                     onClick={() =>
                       setSelected((prev) =>
                         permission.multiSelect
                           ? checked
-                            ? prev.filter((x) => x !== option)
-                            : [...prev, option]
-                          : [option],
+                            ? prev.filter((x) => x !== option.label)
+                            : [...prev, option.label]
+                          : [option.label],
                       )
                     }
                   >
-                    {option}
+                    <span>{option.label}</span>
+                    {option.description && (
+                      <span className={styles.optionDesc}>{option.description}</span>
+                    )}
                   </button>
                 )
               })}

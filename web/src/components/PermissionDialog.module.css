@@ -79,6 +79,11 @@
 }
 
 .option {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  text-align: left;
   padding: 8px 12px;
   border-radius: 10px;
   border: 0.5px solid var(--ac-border-l2);
@@ -129,4 +134,11 @@
 
 .denyBtn:hover {
   background: var(--ac-bg-hover);
+}
+
+/* 选项描述(AskUserQuestion 的 {label, description}) */
+.optionDesc {
+  font-size: var(--ac-font-size-caption);
+  font-weight: 400;
+  color: var(--ac-label-caption);
 }
