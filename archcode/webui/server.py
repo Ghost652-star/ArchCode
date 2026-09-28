@@ -399,6 +399,7 @@ async def api_chat(body: dict):
 @app.post("/api/abort")
 async def api_abort():
     assert STATE is not None
+    log.info("abort requested (web)")
     STATE.agent._abort_event.set()
     return {"ok": True}
 

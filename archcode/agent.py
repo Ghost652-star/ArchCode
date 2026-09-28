@@ -346,6 +346,30 @@ def seal_dangling_tool_calls(conversation: ConversationManager) -> None:
 
 
 
+# HITL 等待被中断时的哨兵值(与任何用户回答区分开)
+HITL_ABORTED = object()
+
+
+async def wait_hitl_answer(future: asyncio.Future, abort: asyncio.Event):
+    """等用户回填 future,同时监听中断信号。
+
+    弹窗等待期间按"停"必须能生效——裸 await future 会让停止键在
+    "对话框/提问等待"状态里完全失灵(用户实测)。abort 先到 → 返回哨兵。
+    """
+    if abort.is_set():
+        return HITL_ABORTED
+    waiter = asyncio.ensure_future(abort.wait())
+    try:
+        done, _pending = await asyncio.wait(
+            {future, waiter}, return_when=asyncio.FIRST_COMPLETED
+        )
+    finally:
+        waiter.cancel()
+    if future in done:
+        return future.result()
+    return HITL_ABORTED
+
+
 class Agent:
     """Agent 循环：用户消息 → LLM 流式事件 → 工具执行 → 结果写回 → 循环直到模型结束。
 
@@ -827,7 +851,19 @@ class Agent:
                     multi_select=multi_select,
                 )
                 yield req
-                value = await future
+                value = await wait_hitl_answer(future, self._abort_event)
+                if value is HITL_ABORTED:
+                    # 等待回答时用户按了停:写占位结果,循环下一轮开头退出
+                    log.info("hitl aborted while waiting: tool=%s", tc.tool_name)
+                    yield (
+                        ToolResult(
+                            output="[中断] 对话已被用户取消,该确认未获得回答。",
+                            is_error=True,
+                        ),
+                        0.0,
+                        False,
+                    )
+                    return
 
                 # 解析用户决策
                 if tc.tool_name == "AskUserQuestion":

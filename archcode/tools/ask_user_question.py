@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
 
 from archcode.tools.base import Tool, ToolResult
 
@@ -28,7 +28,17 @@ class AskUserQuestion(Tool):
         question: str
         header: str | None = None
         multi_select: bool = False
-        options: list[dict[str, str]]
+        # 模型两种格式都会发:纯字符串数组或 {"label", "description"} 对象数组
+        # (日志实证)。两者都收,渲染层(TUI PermissionModal / Web PermissionDialog)
+        # 各自兼容。
+        options: list[str | dict[str, str]] = Field(default_factory=list)
+
+        @field_validator("options", mode="before")
+        @classmethod
+        def _coerce_options(cls, value: Any) -> Any:
+            if value is None:
+                return []
+            return value
 
     params_model = Params
 
