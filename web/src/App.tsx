@@ -7,6 +7,7 @@ import PermissionDialog from './components/PermissionDialog'
 import StatusBar from './components/StatusBar'
 import SettingsPanel from './components/SettingsPanel'
 import FilePanel from './components/FilePanel'
+import TaskMonitor from './components/TaskMonitor'
 import { ChatItems } from './components/ChatItems'
 import styles from './App.module.css'
 
@@ -580,6 +581,7 @@ export default function App() {
           <span className={styles.mainTitle}>{activeBaseName || 'ArchCode'}</span>
           {!isHome && <span className={styles.mainBadge}>仅浏览</span>}
           <span className={styles.headerSpring} />
+          <TaskMonitor />
           <button
             className={styles.iconBtn}
             onClick={toggleFiles}

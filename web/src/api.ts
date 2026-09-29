@@ -99,6 +99,19 @@ export const api = {
   context: () => jsonFetch<ContextInfo>('/api/context'),
 
   usage: () => jsonFetch<UsageTotal>('/api/usage'),
+
+  tasks: () =>
+    jsonFetch<{
+      tasks: Array<{
+        id: string
+        name: string
+        status: string
+        elapsed: number
+        input_tokens: number
+        output_tokens: number
+        result_preview: string
+      }>
+    }>('/api/tasks'),
 }
 
 /**

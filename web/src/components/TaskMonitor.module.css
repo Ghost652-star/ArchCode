@@ -1,0 +1,171 @@
+/* 顶栏后台任务监控:触发器 + 下拉任务清单。 */
+
+.root {
+  position: relative;
+}
+
+.trigger {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: 8px;
+  background: none;
+  color: var(--ac-label-tertiary);
+  transition: background var(--ac-dur-fast) var(--ac-ease), color var(--ac-dur-fast) var(--ac-ease);
+}
+
+.trigger:hover,
+.trigger[data-on] {
+  background: var(--ac-bg-hover);
+  color: var(--ac-label-primary);
+}
+
+.badge {
+  position: absolute;
+  top: -2px;
+  right: -2px;
+  min-width: 14px;
+  height: 14px;
+  padding: 0 3px;
+  border-radius: 7px;
+  background: var(--ac-brand-500);
+  color: #fff;
+  font-size: 10px;
+  line-height: 14px;
+  font-weight: 600;
+  text-align: center;
+}
+
+.panel {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 60;
+  width: 340px;
+  max-height: 420px;
+  overflow-y: auto;
+  padding: 8px;
+  border-radius: 12px;
+  background: var(--ac-bg-menu);
+  border: 0.5px solid var(--ac-border-l2);
+  box-shadow: 0 8px 28px rgb(0 0 0 / 14%);
+}
+
+.head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 2px 6px 6px;
+  font-size: var(--ac-font-size-secondary);
+  font-weight: 500;
+  color: var(--ac-label-secondary);
+}
+
+.count {
+  font-variant-numeric: tabular-nums;
+  color: var(--ac-label-caption);
+}
+
+.empty {
+  padding: 12px 6px;
+  font-size: var(--ac-font-size-secondary);
+  color: var(--ac-label-caption);
+}
+
+.row {
+  padding: 7px 8px;
+  border-radius: 8px;
+}
+
+.row:hover {
+  background: var(--ac-bg-hover);
+}
+
+.rowHead {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+}
+
+.dot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 4px;
+  background: var(--ac-border-l3);
+}
+
+.row[data-status='running'] .dot {
+  background: var(--ac-state-success);
+  animation: ac-task-pulse 1.6s ease-in-out infinite;
+}
+
+.row[data-status='failed'] .dot {
+  background: var(--ac-state-error);
+}
+
+.row[data-status='cancelled'] .dot {
+  background: var(--ac-state-warn);
+}
+
+@keyframes ac-task-pulse {
+  50% {
+    opacity: 0.4;
+  }
+}
+
+.name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--ac-font-size-secondary);
+  color: var(--ac-label-primary);
+}
+
+.status {
+  flex: none;
+  font-size: var(--ac-font-size-caption);
+  color: var(--ac-label-caption);
+}
+
+.elapsed {
+  flex: none;
+  font-size: var(--ac-font-size-caption);
+  font-variant-numeric: tabular-nums;
+  color: var(--ac-label-caption);
+}
+
+.tokens {
+  padding: 3px 0 0 14px;
+  font-size: var(--ac-font-size-caption);
+  font-variant-numeric: tabular-nums;
+  color: var(--ac-label-tertiary);
+}
+
+.preview {
+  margin-top: 4px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  background: var(--ac-bg-code);
+  font-size: var(--ac-font-size-caption);
+  line-height: 1.45;
+  color: var(--ac-label-tertiary);
+  display: -webkit-box;
+  -webkit-line-clamp: 4;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .row[data-status='running'] .dot {
+    animation: none;
+  }
+}

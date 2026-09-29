@@ -89,6 +89,7 @@ def _wire_agents(agent: Agent, tool_registry, work_dir: Path, skill_executor=Non
 
     agent._agent_loader = loader
     agent._background_notifier = make_background_notifier(task_manager)
+    agent._task_manager = task_manager  # Web 端任务面板的只读数据源
     if skill_executor is not None:
         skill_executor.task_manager = task_manager
 

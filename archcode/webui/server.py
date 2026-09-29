@@ -608,6 +608,30 @@ def api_permission_mode(body: dict):
     return {"ok": True, "mode": mode}
 
 
+@app.get("/api/tasks")
+def api_tasks():
+    """后台任务清单(TaskManager 只读快照):状态/耗时/token 用量/结果预览。"""
+    assert STATE is not None
+    manager = getattr(STATE.agent, "_task_manager", None)
+    if manager is None:
+        return {"tasks": []}
+    tasks = []
+    for bg in manager.list_tasks():
+        end = bg.end_time if bg.end_time is not None else time.monotonic()
+        tasks.append(
+            {
+                "id": bg.id,
+                "name": bg.name,
+                "status": bg.status,
+                "elapsed": max(end - bg.start_time, 0.0),
+                "input_tokens": bg.progress.input_tokens,
+                "output_tokens": bg.progress.output_tokens,
+                "result_preview": (bg.result or "")[:200],
+            }
+        )
+    return {"tasks": tasks}
+
+
 @app.get("/api/skills")
 def api_skills():
     assert STATE is not None
