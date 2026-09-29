@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { api, streamChat } from './api'
-import type { AgentState, ContextInfo, Item, PermissionState, SessionInfo, UsageTotal, WireEvent } from './types'
+import type { AgentState, ContextInfo, Item, PermissionState, SessionInfo, TodoItem, UsageTotal, WireEvent } from './types'
 import Sidebar from './components/Sidebar'
 import Composer from './components/Composer'
 import PermissionDialog from './components/PermissionDialog'
@@ -8,6 +8,7 @@ import StatusBar from './components/StatusBar'
 import SettingsPanel from './components/SettingsPanel'
 import FilePanel from './components/FilePanel'
 import TaskMonitor from './components/TaskMonitor'
+import TodoPanel from './components/TodoPanel'
 import { ChatItems } from './components/ChatItems'
 import styles from './App.module.css'
 
@@ -93,6 +94,7 @@ export default function App() {
   const [running, setRunning] = useState(false)
   const [permission, setPermission] = useState<PermissionState | null>(null)
   const [usage, setUsage] = useState<UsageTotal | null>(null)
+  const [todos, setTodos] = useState<TodoItem[]>([])
   const [state, setState] = useState<AgentState | null>(null)
   const [sessions, setSessions] = useState<SessionInfo[]>([])
   const [settingsOpen, setSettingsOpen] = useState(false)
@@ -155,6 +157,7 @@ export default function App() {
       setProviders(m.providers)
       api.context().then(setContext).catch(() => {})
       api.usage().then(setUsage).catch(() => {})
+      api.todo().then((r) => setTodos(r.todos)).catch(() => {})
     } catch {
       /* 服务端未就绪时静默 */
     }
@@ -280,6 +283,8 @@ export default function App() {
             tool.running = false
             tool.elapsed = Number(event['elapsed'] ?? 0)
           }
+          // TodoWrite 的结果事件附带清单快照,驱动输入区上方面板
+          if (Array.isArray(event['todos'])) setTodos(event['todos'] as TodoItem[])
           break
         }
         case 'permission_request': {
@@ -609,25 +614,28 @@ export default function App() {
           </button>
         )}
         <div className={styles.composerSeat}>
-          <Composer
-            running={running}
-            disabled={!state || !isHome}
-            usage={usage}
-            permissionMode={state?.permission_mode ?? 'default'}
-            planMode={state?.plan_mode ?? false}
-            modelName={state?.model ?? ''}
-            providers={providers}
-            onSend={send}
-            onAbort={abort}
-            onNewSession={newSession}
-            onModeChange={async (mode) => {
-              await api.setPermissionMode(mode)
-              await refreshMeta()
-            }}
-            onModelSwitch={async () => {
-              await refreshMeta()
-            }}
-          />
+          <div className={styles.composerStack}>
+            <TodoPanel todos={todos} />
+            <Composer
+              running={running}
+              disabled={!state || !isHome}
+              usage={usage}
+              permissionMode={state?.permission_mode ?? 'default'}
+              planMode={state?.plan_mode ?? false}
+              modelName={state?.model ?? ''}
+              providers={providers}
+              onSend={send}
+              onAbort={abort}
+              onNewSession={newSession}
+              onModeChange={async (mode) => {
+                await api.setPermissionMode(mode)
+                await refreshMeta()
+              }}
+              onModelSwitch={async () => {
+                await refreshMeta()
+              }}
+            />
+          </div>
         </div>
         <StatusBar model={state?.model ?? ''} running={running} context={context} />
       </div>

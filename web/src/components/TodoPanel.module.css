@@ -1,0 +1,87 @@
+/* 输入区上方任务清单卡:与 composer 同宽,轻量贴卡。 */
+
+.root {
+  border: 0.5px solid var(--ac-border-l1);
+  border-radius: 12px;
+  background: var(--ac-bg-layer-1);
+  padding: 4px 12px;
+  margin-bottom: 6px;
+}
+
+.head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  height: 32px;
+  border: none;
+  background: none;
+  padding: 0;
+  text-align: left;
+  color: var(--ac-label-secondary);
+}
+
+.title {
+  font-size: var(--ac-font-size-secondary);
+  font-weight: 600;
+}
+
+.summary {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--ac-font-size-caption);
+  color: var(--ac-label-caption);
+}
+
+.chevron {
+  flex: none;
+  color: var(--ac-label-caption);
+  transition: transform var(--ac-dur-fast) var(--ac-ease);
+}
+
+.chevron[data-open] {
+  transform: rotate(180deg);
+}
+
+.list {
+  margin: 0;
+  padding: 0 0 6px;
+  list-style: none;
+  display: grid;
+  gap: 4px;
+}
+
+.item {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: var(--ac-font-size-secondary);
+  line-height: var(--ac-line-height-secondary);
+}
+
+.dot {
+  flex: none;
+  font-size: 10px;
+  color: var(--ac-label-caption);
+}
+
+.item[data-status='completed'] {
+  color: var(--ac-label-caption);
+  text-decoration: line-through;
+}
+
+.item[data-status='in_progress'] {
+  color: var(--ac-label-primary);
+}
+
+.item[data-status='in_progress'] .dot {
+  color: var(--ac-state-success);
+}
+
+.text {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}

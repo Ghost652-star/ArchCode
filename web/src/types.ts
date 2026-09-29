@@ -117,6 +117,12 @@ export interface ContextInfo {
   breakdown?: { system: number; tools: number; messages: number }
 }
 
+/** 会话任务清单(TodoWrite 工具维护,面板可视化)。 */
+export interface TodoItem {
+  content: string
+  status: 'pending' | 'in_progress' | 'completed' | string
+}
+
 /** @ 文件引用搜索结果(§13-B1)。 */
 export interface FileSearch {
   results: string[]

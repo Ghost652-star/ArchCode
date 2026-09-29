@@ -163,6 +163,17 @@
   max-width: calc(var(--ac-content-width) + 32px);
 }
 
+/* TodoPanel + Composer 纵向堆栈(任务清单卡贴输入卡上方) */
+.composerStack {
+  display: flex;
+  flex-direction: column;
+}
+
+.composerStack > * {
+  width: 100%;
+  max-width: calc(var(--ac-content-width) + 32px);
+}
+
 /* ── Hero 态(§10.2)────────────────────────────── */
 .hero {
   display: flex;

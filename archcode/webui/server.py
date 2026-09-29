@@ -108,6 +108,9 @@ class ServerState:
         log.info("session rotated: %s -> %s", old.id if old else "-", self._session.id)
         set_session_id(self._session.id)
         self._usage = self._usage_from_meta()
+        store = _todo_store()
+        if store is not None:
+            store.clear()  # 任务清单是会话作用域,会话轮转即清空
         return self._session.id
 
     def resume_session(self, session_id: str) -> None:
@@ -123,6 +126,9 @@ class ServerState:
         log.info("session resumed: %s", session_id)
         set_session_id(session_id)
         self._usage = self._usage_from_meta()
+        store = _todo_store()
+        if store is not None:
+            store.clear()
 
     def list_sessions(self) -> list[dict]:
         running = self._run_lock.locked()
@@ -218,7 +224,7 @@ def serialize_event(event) -> dict:
             "arguments": event.arguments,
         }
     if isinstance(event, ToolResultEvent):
-        return {
+        payload = {
             "type": "tool_result",
             "tool_id": event.tool_id,
             "tool_name": event.tool_name,
@@ -226,6 +232,9 @@ def serialize_event(event) -> dict:
             "is_error": event.is_error,
             "elapsed": event.elapsed,
         }
+        if event.tool_name == "TodoWrite":
+            payload["todos"] = _todo_snapshot()
+        return payload
     if isinstance(event, InstructionDiagnosticsEvent):
         return {
             "type": "instruction_diagnostics",
@@ -242,6 +251,19 @@ def serialize_event(event) -> dict:
 
 def _sse(payload: dict) -> str:
     return f"event: agent\ndata: {json.dumps(payload, ensure_ascii=False, default=str)}\n\n"
+
+
+def _todo_store():
+    """TodoWrite 工具实例上的会话级清单 store(未注册/被禁用时为 None)。"""
+    assert STATE is not None
+    registry = getattr(STATE.agent, "_tool_registry", None)
+    tool = registry.get("TodoWrite") if registry is not None else None
+    return getattr(tool, "store", None)
+
+
+def _todo_snapshot() -> list[dict]:
+    store = _todo_store()
+    return list(store.todos) if store is not None else []
 
 
 # ── 端点 ─────────────────────────────────────────────────────────────────
@@ -606,6 +628,12 @@ def api_permission_mode(body: dict):
     if checker is not None:
         checker.mode = PermissionMode(mode)
     return {"ok": True, "mode": mode}
+
+
+@app.get("/api/todo")
+def api_todo():
+    """当前会话任务清单(TodoWrite store 快照)。"""
+    return {"todos": _todo_snapshot()}
 
 
 @app.get("/api/tasks")

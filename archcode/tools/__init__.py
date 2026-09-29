@@ -25,6 +25,7 @@ from archcode.tools.glob import Glob
 from archcode.tools.grep import Grep
 from archcode.tools.read_file import ReadFile
 from archcode.tools.registry import ToolRegistry
+from archcode.tools.todo import TodoWriteTool
 from archcode.tools.write_file import WriteFile
 
 __all__ = [
@@ -62,6 +63,7 @@ def create_default_registry(work_dir) -> ToolRegistry:
     registry.register(Glob(work_dir=work_dir))
     registry.register(Grep(work_dir=work_dir))
     registry.register(AskUserQuestion())
+    registry.register(TodoWriteTool())
     # LoadSkill 的 executor 由 __main__/app 在 Agent 创建后经 set_executor 接线
     registry.register(LoadSkillTool())
     return registry

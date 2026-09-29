@@ -309,6 +309,10 @@ function toolSummary(item: Extract<Item, { kind: 'tool' }>): string {
       return s(a.pattern)
     case 'Agent':
       return s(a.name) || s(a.description) || 'subagent'
+    case 'TodoWrite': {
+      const todos = Array.isArray(a.todos) ? (a.todos as unknown[]) : []
+      return `${todos.length} 项`
+    }
     default: {
       const summary = Object.entries(a)
         .map(([k, v]) => `${k}=${typeof v === 'string' ? v : JSON.stringify(v)}`)
