@@ -373,6 +373,87 @@
   overflow-wrap: anywhere;
 }
 
+/* ── 提示行(notice:斜杠命令反馈/自动重试,居中弱化)────────── */
+.noticeRow {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 0;
+}
+
+.noticeLine {
+  flex: 1;
+  height: 0.5px;
+  background: var(--ac-border-l2);
+}
+
+.noticeText {
+  flex: none;
+  max-width: 70%;
+  font-size: var(--ac-font-size-caption);
+  color: var(--ac-label-caption);
+  overflow-wrap: anywhere;
+}
+
+/* ── 压缩卡(running 进度 / done 可展开摘要 / failed 错误)──── */
+.compactRoot {
+  padding: 2px 0;
+  min-width: 0;
+}
+
+.compactRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  height: 30px;
+  min-width: 0;
+  padding: 0 4px;
+  border: none;
+  border-radius: 8px;
+  background: none;
+  color: var(--ac-label-tertiary);
+  text-align: left;
+  transition: color var(--ac-dur-fast) var(--ac-ease);
+}
+
+.compactRow:hover:not(:disabled) {
+  color: var(--ac-label-secondary);
+}
+
+.compactRow:disabled {
+  cursor: default;
+}
+
+.compactTitle {
+  flex: none;
+  font-size: var(--ac-font-size-secondary);
+}
+
+.compactRoot[data-state='failed'] .compactTitle {
+  color: var(--ac-state-error);
+  overflow-wrap: anywhere;
+}
+
+.compactMeta {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--ac-font-size-caption);
+  font-variant-numeric: tabular-nums;
+  color: var(--ac-label-caption);
+}
+
+.compactBody {
+  padding: 4px 0 8px 24px;
+  min-width: 0;
+  color: var(--ac-label-tertiary);
+  font-size: var(--ac-font-size-secondary);
+  line-height: var(--ac-line-height-secondary);
+}
+
 /* ── 无障碍 ───────────────────────────────────────────────── */
 .visuallyHidden {
   position: absolute;

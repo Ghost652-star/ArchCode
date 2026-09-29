@@ -22,6 +22,7 @@ export interface AgentState {
   work_dir: string
   model: string
   permission_mode: string
+  plan_mode?: boolean
 }
 
 /** 对话流条目(SSE 事件累积的渲染单元)。 */
@@ -38,9 +39,21 @@ export type Item =
       running: boolean
       elapsed?: number
     }
-  | { kind: 'assistant'; text: string; running: boolean }
-  | { kind: 'turnEnd'; steps: number; elapsed: number }
+  | { kind: 'assistant'; text: string; running: boolean; ts?: number }
+  | { kind: 'turnEnd'; steps: number; elapsed: number; tokens?: number }
   | { kind: 'error'; message: string }
+  /** 服务端提示行(/plan 切换、斜杠命令不支持、请求重试等)。 */
+  | { kind: 'notice'; text: string }
+  /** 上下文压缩进度卡(running → done/failed)。 */
+  | {
+      kind: 'compact'
+      state: 'running' | 'done' | 'failed'
+      mode: string
+      totalChars: number
+      dropped?: number
+      summaryPreview?: string
+      error?: string
+    }
 
 export interface QuestionOption {
   label: string
@@ -64,6 +77,17 @@ export interface Usage {
   cacheCreation: number
 }
 
+/** 会话累计用量(GET /api/usage;SSE usage 事件在前端增量累加)。 */
+export interface UsageTotal {
+  input_tokens: number
+  output_tokens: number
+  cache_read: number
+  cache_creation: number
+  llm_rounds: number
+  total_tokens: number
+  cache_hit: number | null
+}
+
 /** ── 工作区文件面板(设计 §12)────────────────────────────── */
 
 export interface FileEntry {
@@ -85,11 +109,12 @@ export interface FileContent {
   binary: boolean
 }
 
-/** 上下文占用(§13-A4):percent 为 0~1。 */
+/** 上下文占用(§13-A4):percent 为 0~1;breakdown 为启发式分段估算。 */
 export interface ContextInfo {
   total_tokens: number
   percent: number
   window: number
+  breakdown?: { system: number; tools: number; messages: number }
 }
 
 /** @ 文件引用搜索结果(§13-B1)。 */

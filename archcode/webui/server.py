@@ -48,7 +48,7 @@ log = logging.getLogger(__name__)
 
 
 class ServerState:
-    """服务端持有的运行时:agent、会话、HITL 注册表、任务锁。"""
+    """服务端持有的运行时:agent、会话、HITL 注册表、任务锁、用量累计。"""
 
     def __init__(self, agent: Agent, work_dir: Path, providers: list | None = None) -> None:
         self.agent = agent
@@ -63,6 +63,37 @@ class ServerState:
         self._run_lock = asyncio.Lock()
         self._permissions: dict[str, asyncio.Future] = {}
         self._pending_permits: list[dict] = []  # 重连时重发的未决请求
+        self._usage = self._usage_from_meta()
+
+    # ── 用量累计(数据源:agent 每轮 yield 的 UsageEvent;持久层:.meta 索引)──
+
+    def _usage_from_meta(self) -> dict:
+        meta = self._session.meta if self._session else None
+        return {
+            "input": int(getattr(meta, "input_tokens", 0) or 0),
+            "output": int(getattr(meta, "output_tokens", 0) or 0),
+            "cache_read": int(getattr(meta, "cache_read_tokens", 0) or 0),
+            "cache_creation": int(getattr(meta, "cache_creation_tokens", 0) or 0),
+            "rounds": int(getattr(meta, "llm_rounds", 0) or 0),
+        }
+
+    def record_usage(self, event: UsageEvent, turn: dict) -> None:
+        """本轮 LLM 用量:进单轮小计 + 会话累计(落 .meta)。"""
+        fields = (
+            ("input", "input_tokens", event.input_tokens),
+            ("output", "output_tokens", event.output_tokens),
+            ("cache_read", "cache_read", event.cache_read),
+            ("cache_creation", "cache_creation", event.cache_creation),
+        )
+        for turn_key, _, value in fields:
+            turn[turn_key] += int(value)
+        self._usage["rounds"] += 1
+        turn["rounds"] += 1
+        if self._session is not None:
+            self._session.accumulate_usage(
+                event.input_tokens, event.output_tokens,
+                event.cache_read, event.cache_creation,
+            )
 
     # ── 会话 ──
 
@@ -76,6 +107,7 @@ class ServerState:
             old.close()
         log.info("session rotated: %s -> %s", old.id if old else "-", self._session.id)
         set_session_id(self._session.id)
+        self._usage = self._usage_from_meta()
         return self._session.id
 
     def resume_session(self, session_id: str) -> None:
@@ -90,6 +122,7 @@ class ServerState:
             old.close()
         log.info("session resumed: %s", session_id)
         set_session_id(session_id)
+        self._usage = self._usage_from_meta()
 
     def list_sessions(self) -> list[dict]:
         running = self._run_lock.locked()
@@ -152,7 +185,12 @@ _TYPE_MAP = {
     ),
     CompactFinished: (
         "compact_finished",
-        lambda e: {"success": e.success, "error": e.error, "dropped": e.dropped},
+        lambda e: {
+            "success": e.success,
+            "error": e.error,
+            "dropped": e.dropped,
+            "summary_preview": e.summary_preview,
+        },
     ),
 }
 
@@ -220,6 +258,7 @@ def api_state():
         "work_dir": str(STATE.work_dir),
         "model": getattr(provider, "model_name", ""),
         "permission_mode": checker.mode.value if checker else "default",
+        "plan_mode": bool(getattr(STATE.agent, "_plan_mode", False)),
     }
 
 
@@ -379,12 +418,18 @@ async def api_chat(body: dict):
                 yield _sse({"type": "done"})
             return
         async with STATE._run_lock:
+            turn_usage = {"input": 0, "output": 0, "cache_read": 0, "cache_creation": 0, "rounds": 0}
             try:
                 async for event in STATE.agent.run(text, STATE.conversation):
+                    if isinstance(event, UsageEvent):
+                        STATE.record_usage(event, turn_usage)
                     yield _sse(serialize_event(event))
             except Exception as e:  # 兜底:agent 内部抛错也走 SSE error
                 yield _sse({"type": "error", "message": str(e)})
             finally:
+                if turn_usage["rounds"] > 0:
+                    total = sum(turn_usage[k] for k in ("input", "output", "cache_read", "cache_creation"))
+                    yield _sse({"type": "turn_usage", **turn_usage, "total": total})
                 yield _sse({"type": "done"})
                 pending = list(STATE._permissions.items())
                 STATE._pending_permits = [
@@ -416,13 +461,51 @@ async def api_permission(request_id: str, body: dict):
 
 @app.get("/api/context")
 def api_context():
-    """上下文占用(§13-A4):percent = 当前 token / 窗口(provider 可配,缺省 128k)。"""
+    """上下文占用(§13-A4):percent = 当前 token / 窗口(provider 可配,缺省 128k)。
+
+    breakdown 为启发式分段估算(system prompt / 工具 schema / 消息),
+    供前端占用条做三段着色;数字是估算值,与 total 不强求精确闭合。
+    """
     assert STATE is not None
     total = STATE.conversation.current_tokens()
     provider = STATE.providers[0] if STATE.providers else None
     window = int(getattr(provider, "context_window", 0) or 0) or 131072
     percent = min(1.0, total / window) if window > 0 else 0.0
-    return {"total_tokens": total, "percent": percent, "window": window}
+
+    system_prompt = getattr(STATE.agent, "_system_prompt", "") or ""
+    system = int(len(system_prompt) / 3.5)
+    registry = getattr(STATE.agent, "_tool_registry", None)
+    tools = 0
+    if registry is not None:
+        for tool in getattr(registry, "_tools", {}).values():
+            try:
+                tools += int(len(json.dumps(tool.get_schema(), ensure_ascii=False)) / 3.5)
+            except Exception:
+                continue
+    messages = max(total - system - tools, 0)
+    return {
+        "total_tokens": total,
+        "percent": percent,
+        "window": window,
+        "breakdown": {"system": system, "tools": tools, "messages": messages},
+    }
+
+
+@app.get("/api/usage")
+def api_usage():
+    """会话累计 LLM 用量(.meta 索引持久化,resume 后可恢复)。"""
+    assert STATE is not None
+    u = STATE._usage
+    billed_input = u["input"] + u["cache_read"] + u["cache_creation"]
+    return {
+        "input_tokens": u["input"],
+        "output_tokens": u["output"],
+        "cache_read": u["cache_read"],
+        "cache_creation": u["cache_creation"],
+        "llm_rounds": u["rounds"],
+        "total_tokens": billed_input + u["output"],
+        "cache_hit": (u["cache_read"] / billed_input) if billed_input > 0 else None,
+    }
 
 
 # ── 设置(§9.2:作用域选择器;ruamel round-trip 保注释)───────────────────

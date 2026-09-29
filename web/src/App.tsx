@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { api, streamChat } from './api'
-import type { AgentState, ContextInfo, Item, PermissionState, SessionInfo, Usage, WireEvent } from './types'
+import type { AgentState, ContextInfo, Item, PermissionState, SessionInfo, UsageTotal, WireEvent } from './types'
 import Sidebar from './components/Sidebar'
 import Composer from './components/Composer'
 import PermissionDialog from './components/PermissionDialog'
@@ -35,6 +35,49 @@ function clampWidth(px: number, min: number, max: number): number {
   return Math.min(Math.round(max), Math.max(min, Math.round(px)))
 }
 
+/** /api/history → 渲染条目(工作区切换与 resume 共用):工具行按 tool_use_id 配对回填。 */
+function historyToItems(history: Array<Record<string, unknown>>): Item[] {
+  const restored: Item[] = []
+  for (const m of history) {
+    const role = m['role']
+    const content = String(m['content'] ?? '')
+    const ts = Number(m['created_at'] ?? 0) || undefined
+    const uses = Array.isArray(m['tool_uses']) ? m['tool_uses'] : []
+    for (const u of uses) {
+      restored.push({
+        kind: 'tool',
+        toolId: String(u['tool_use_id'] ?? ''),
+        toolName: String(u['tool_name'] ?? ''),
+        args: (u['arguments'] as Record<string, unknown>) ?? {},
+        output: '',
+        isError: false,
+        running: false,
+      })
+    }
+    const results = Array.isArray(m['tool_results']) ? m['tool_results'] : []
+    for (const r of results) {
+      const tool = [...restored]
+        .reverse()
+        .find((i) => i.kind === 'tool' && i.toolId === String(r['tool_use_id'] ?? ''))
+      if (tool && tool.kind === 'tool') {
+        tool.output = String(r['content'] ?? '')
+        tool.isError = Boolean(r['is_error'])
+      }
+    }
+    if (role === 'user' && content) restored.push({ kind: 'user', text: content, ts })
+    if (role === 'assistant' && content)
+      restored.push({ kind: 'assistant', text: content, running: false })
+  }
+  return restored
+}
+
+/** 流结束后把仍在转动的条目落定(仅这三类携带 running 标志)。 */
+function settleRunning(items: Item[]): void {
+  for (const item of items)
+    if (item.kind === 'reasoning' || item.kind === 'tool' || item.kind === 'assistant')
+      item.running = false
+}
+
 function loadWorkspaces(): string[] {
   try {
     const raw = JSON.parse(localStorage.getItem(WS_KEY) ?? '[]')
@@ -48,7 +91,7 @@ export default function App() {
   const [items, setItems] = useState<Item[]>([])
   const [running, setRunning] = useState(false)
   const [permission, setPermission] = useState<PermissionState | null>(null)
-  const [usage, setUsage] = useState<Usage | null>(null)
+  const [usage, setUsage] = useState<UsageTotal | null>(null)
   const [state, setState] = useState<AgentState | null>(null)
   const [sessions, setSessions] = useState<SessionInfo[]>([])
   const [settingsOpen, setSettingsOpen] = useState(false)
@@ -110,6 +153,7 @@ export default function App() {
       const m = await api.model()
       setProviders(m.providers)
       api.context().then(setContext).catch(() => {})
+      api.usage().then(setUsage).catch(() => {})
     } catch {
       /* 服务端未就绪时静默 */
     }
@@ -147,38 +191,7 @@ export default function App() {
         if (isHome) {
           const history = await api.history()
           if (cancelled) return
-          const restored: Item[] = []
-          for (const m of history) {
-            const role = m['role']
-            const content = String(m['content'] ?? '')
-            const ts = Number(m['created_at'] ?? 0) || undefined
-            // 恢复工具行(§13-A5):数据 /api/history 一直有,前端此前丢掉了
-            const uses = Array.isArray(m['tool_uses']) ? m['tool_uses'] : []
-            for (const u of uses) {
-              restored.push({
-                kind: 'tool',
-                toolId: String(u['tool_use_id'] ?? ''),
-                toolName: String(u['tool_name'] ?? ''),
-                args: (u['arguments'] as Record<string, unknown>) ?? {},
-                output: '',
-                isError: false,
-                running: false,
-              })
-            }
-            const results = Array.isArray(m['tool_results']) ? m['tool_results'] : []
-            for (const r of results) {
-              const tool = [...restored]
-                .reverse()
-                .find((i) => i.kind === 'tool' && i.toolId === String(r['tool_use_id'] ?? ''))
-              if (tool && tool.kind === 'tool') {
-                tool.output = String(r['content'] ?? '')
-                tool.isError = Boolean(r['is_error'])
-              }
-            }
-            if (role === 'user' && content) restored.push({ kind: 'user', text: content, ts })
-            if (role === 'assistant' && content)
-              restored.push({ kind: 'assistant', text: content, running: false })
-          }
+          const restored = historyToItems(history)
           itemsRef.current = restored
           setItems([...restored])
         } else {
@@ -236,7 +249,12 @@ export default function App() {
           if (last && last.kind === 'assistant' && last.running) {
             last.text += text
           } else {
-            list.push({ kind: 'assistant', text, running: true })
+            list.push({
+              kind: 'assistant',
+              text,
+              running: true,
+              ts: Number(event['ts'] ?? 0) || undefined,
+            })
           }
           break
         }
@@ -278,18 +296,84 @@ export default function App() {
           list.push({ kind: 'error', message: String(event['message'] ?? '') })
           break
         }
-        case 'usage': {
-          setUsage({
-            inputTokens: Number(event['input_tokens'] ?? 0),
-            outputTokens: Number(event['output_tokens'] ?? 0),
-            cacheRead: Number(event['cache_read'] ?? 0),
-            cacheCreation: Number(event['cache_creation'] ?? 0),
+        case 'notice': {
+          list.push({ kind: 'notice', text: String(event['text'] ?? '') })
+          break
+        }
+        case 'retry': {
+          const wait = Number(event['wait'] ?? 0)
+          list.push({
+            kind: 'notice',
+            text: `请求失败，${wait > 0 ? `${wait}s 后` : ''}自动重试：${String(event['reason'] ?? '')}`,
           })
           break
         }
+        case 'compact_started': {
+          list.push({
+            kind: 'compact',
+            state: 'running',
+            mode: String(event['mode'] ?? ''),
+            totalChars: 0,
+          })
+          break
+        }
+        case 'compact_progress': {
+          for (let i = list.length - 1; i >= 0; i--) {
+            const it = list[i]
+            if (it.kind === 'compact' && it.state === 'running') {
+              it.totalChars = Number(event['total_chars'] ?? 0)
+              break
+            }
+          }
+          break
+        }
+        case 'compact_finished': {
+          for (let i = list.length - 1; i >= 0; i--) {
+            const it = list[i]
+            if (it.kind === 'compact' && it.state === 'running') {
+              const success = Boolean(event['success'])
+              it.state = success ? 'done' : 'failed'
+              it.dropped = Number(event['dropped'] ?? 0)
+              it.summaryPreview = String(event['summary_preview'] ?? '')
+              it.error = String(event['error'] ?? '')
+              break
+            }
+          }
+          // 压缩会即时改写上下文占用,主动刷一次(不等下一次 refreshMeta)
+          api.context().then(setContext).catch(() => {})
+          break
+        }
+        case 'usage': {
+          // 增量累加做即时反馈;流结束后的 refreshMeta 会用 /api/usage 服务端真值对齐
+          setUsage((prev) => {
+            const next = {
+              input_tokens: (prev?.input_tokens ?? 0) + Number(event['input_tokens'] ?? 0),
+              output_tokens: (prev?.output_tokens ?? 0) + Number(event['output_tokens'] ?? 0),
+              cache_read: (prev?.cache_read ?? 0) + Number(event['cache_read'] ?? 0),
+              cache_creation: (prev?.cache_creation ?? 0) + Number(event['cache_creation'] ?? 0),
+              llm_rounds: (prev?.llm_rounds ?? 0) + 1,
+              total_tokens: 0,
+              cache_hit: null as number | null,
+            }
+            const billed = next.input_tokens + next.cache_read + next.cache_creation
+            next.total_tokens = billed + next.output_tokens
+            next.cache_hit = billed > 0 ? next.cache_read / billed : null
+            return next
+          })
+          break
+        }
+        case 'turn_usage': {
+          for (let i = list.length - 1; i >= 0; i--) {
+            const it = list[i]
+            if (it.kind === 'turnEnd') {
+              it.tokens = Number(event['total'] ?? 0)
+              break
+            }
+          }
+          break
+        }
         case 'loop_complete': {
-          for (const item of list)
-            if (item.kind !== 'user' && item.kind !== 'error' && item.kind !== 'turnEnd') item.running = false
+          settleRunning(list)
           list.push({
             kind: 'turnEnd',
             steps: Number(event['total_turns'] ?? 0),
@@ -321,8 +405,7 @@ export default function App() {
         ]
         setItems([...itemsRef.current])
       } finally {
-        for (const item of itemsRef.current)
-          if (item.kind !== 'user' && item.kind !== 'error' && item.kind !== 'turnEnd') item.running = false
+        settleRunning(itemsRef.current)
         setItems([...itemsRef.current])
         setRunning(false)
         refreshMeta()
@@ -358,14 +441,7 @@ export default function App() {
         await api.resumeSession(id)
         await refreshMeta()
         await api.history().then((history) => {
-          const restored: Item[] = []
-          for (const m of history) {
-            const role = m['role']
-            const content = String(m['content'] ?? '')
-            if (role === 'user' && content) restored.push({ kind: 'user', text: content })
-            if (role === 'assistant' && content)
-              restored.push({ kind: 'assistant', text: content, running: false })
-          }
+          const restored = historyToItems(history)
           itemsRef.current = restored
           setItems([...restored])
         })
@@ -536,6 +612,7 @@ export default function App() {
             disabled={!state || !isHome}
             usage={usage}
             permissionMode={state?.permission_mode ?? 'default'}
+            planMode={state?.plan_mode ?? false}
             modelName={state?.model ?? ''}
             providers={providers}
             onSend={send}

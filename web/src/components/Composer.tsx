@@ -1,13 +1,15 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { api } from '../api'
-import type { Usage } from '../types'
+import { fmtInt, fmtPercent, fmtTokens } from '../format'
+import type { UsageTotal } from '../types'
 import styles from './Composer.module.css'
 
 interface Props {
   running: boolean
   disabled: boolean
-  usage: Usage | null
+  usage: UsageTotal | null
   permissionMode: string
+  planMode: boolean
   modelName: string
   providers: Array<{ name: string; model: string; protocol: string }>
   onSend: (text: string) => void
@@ -31,6 +33,7 @@ export default function Composer({
   disabled,
   usage,
   permissionMode,
+  planMode,
   modelName,
   providers,
   onSend,
@@ -47,6 +50,7 @@ export default function Composer({
   const [atItems, setAtItems] = useState<string[]>([])
   const [modelOpen, setModelOpen] = useState(false)
   const [modeOpen, setModeOpen] = useState(false)
+  const [usageOpen, setUsageOpen] = useState(false)
   const [currentModel, setCurrentModel] = useState(modelName)
   const [skills, setSkills] = useState<Array<{ name: string; description: string }>>([])
   const editorRef = useRef<HTMLTextAreaElement>(null)
@@ -76,6 +80,7 @@ export default function Composer({
         setAtOpen(false)
         setModelOpen(false)
         setModeOpen(false)
+        setUsageOpen(false)
       }
     }
     window.addEventListener('pointerdown', onDown)
@@ -170,6 +175,7 @@ export default function Composer({
       setAtOpen(false)
       setModelOpen(false)
       setModeOpen(false)
+      setUsageOpen(false)
       return
     }
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -257,6 +263,11 @@ export default function Composer({
           >
             +
           </button>
+          {planMode && (
+            <span className={styles.planChip} title="Plan 模式开启中：只读探索并产出计划，输入 /plan 退出">
+              Plan
+            </span>
+          )}
           <div className={styles.menuAnchor}>
             <button
               className={styles.modeChip}
@@ -299,9 +310,36 @@ export default function Composer({
           </div>
         </div>
         <div className={styles.trailing}>
-          <span className={styles.usage}>
-            {usage ? `${usage.inputTokens + usage.outputTokens} tok` : ''}
-          </span>
+          <div className={styles.menuAnchor}>
+            {usage && usage.total_tokens > 0 && (
+              <button
+                className={styles.usageChip}
+                aria-expanded={usageOpen}
+                onClick={() => setUsageOpen((v) => !v)}
+                title="会话累计用量"
+              >
+                {fmtTokens(usage.total_tokens)} tok
+              </button>
+            )}
+            {usageOpen && usage && (
+              <div className={styles.usageMenu}>
+                <div className={styles.menuSection}>会话累计</div>
+                <div className={styles.usageGrid}>
+                  <span>输入(未缓存)</span>
+                  <span>{fmtInt(usage.input_tokens)}</span>
+                  <span>缓存读</span>
+                  <span>{fmtInt(usage.cache_read)}</span>
+                  <span>缓存写</span>
+                  <span>{fmtInt(usage.cache_creation)}</span>
+                  <span>输出</span>
+                  <span>{fmtInt(usage.output_tokens)}</span>
+                </div>
+                <div className={styles.usageFoot}>
+                  缓存命中 {fmtPercent(usage.cache_hit)} · LLM {usage.llm_rounds} 轮
+                </div>
+              </div>
+            )}
+          </div>
           <div className={styles.menuAnchor}>
             <button
               className={styles.modelChip}

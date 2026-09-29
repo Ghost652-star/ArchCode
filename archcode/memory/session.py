@@ -194,6 +194,13 @@ class SessionMeta:
     message_count: int = 0
     created_at_ms: int = field(default_factory=_now_ms)
     last_active_ms: int = field(default_factory=_now_ms)
+    # 会话累计 LLM 用量(webui 统计用;JSONL 正文不写 usage 记录,
+    # 避免插在 tool_use 与 tool_result 之间破坏恢复配对)。旧 .meta 文件缺省 0。
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cache_read_tokens: int = 0
+    cache_creation_tokens: int = 0
+    llm_rounds: int = 0
 
     def save(self, path: Path) -> None:
         payload = json.dumps(
@@ -203,6 +210,11 @@ class SessionMeta:
                 "message_count": self.message_count,
                 "created_at_ms": self.created_at_ms,
                 "last_active_ms": self.last_active_ms,
+                "input_tokens": self.input_tokens,
+                "output_tokens": self.output_tokens,
+                "cache_read_tokens": self.cache_read_tokens,
+                "cache_creation_tokens": self.cache_creation_tokens,
+                "llm_rounds": self.llm_rounds,
             },
             ensure_ascii=False,
             separators=(",", ":"),
@@ -225,6 +237,11 @@ class SessionMeta:
                 message_count=int(data.get("message_count", 0)),
                 created_at_ms=int(data["created_at_ms"]),
                 last_active_ms=int(data["last_active_ms"]),
+                input_tokens=int(data.get("input_tokens", 0)),
+                output_tokens=int(data.get("output_tokens", 0)),
+                cache_read_tokens=int(data.get("cache_read_tokens", 0)),
+                cache_creation_tokens=int(data.get("cache_creation_tokens", 0)),
+                llm_rounds=int(data.get("llm_rounds", 0)),
             )
         except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError):
             return None
@@ -277,6 +294,21 @@ class Session:
     def _touch_meta(self) -> None:
         self.meta.last_active_ms = _now_ms()
         self.meta.save(self.path.with_suffix(".meta"))
+
+    def accumulate_usage(
+        self,
+        input_tokens: int,
+        output_tokens: int,
+        cache_read: int = 0,
+        cache_creation: int = 0,
+    ) -> None:
+        """会话累计 LLM 用量:只进 .meta 索引,JSONL 正文不动(webui 统计用)。"""
+        self.meta.input_tokens += int(input_tokens)
+        self.meta.output_tokens += int(output_tokens)
+        self.meta.cache_read_tokens += int(cache_read)
+        self.meta.cache_creation_tokens += int(cache_creation)
+        self.meta.llm_rounds += 1
+        self._touch_meta()
 
     def close(self) -> None:
         """关闭活跃会话句柄；重复调用安全。"""

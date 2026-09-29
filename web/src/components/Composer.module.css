@@ -42,6 +42,21 @@
   position: relative;
 }
 
+/* ── Plan 模式指示 chip(蓝色,只读提示;退出走 /plan)── */
+.planChip {
+  display: inline-flex;
+  align-items: center;
+  height: 24px;
+  padding: 0 10px;
+  border-radius: 12px;
+  background: var(--ac-brand-50);
+  color: var(--ac-brand-500);
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.2px;
+  cursor: help;
+}
+
 /* ── 小方钮(+)── */
 .toolBtn {
   display: inline-flex;
@@ -286,9 +301,58 @@
   flex: none;
 }
 
-.usage {
+/* ── 用量 chip + 明细弹窗(会话累计:四桶 + 缓存命中率 + 轮次)── */
+.usageChip {
+  border: none;
+  background: none;
+  padding: 4px 8px;
+  border-radius: 10px;
   font-size: var(--ac-font-size-caption);
   font-variant-numeric: tabular-nums;
   color: var(--ac-label-caption);
   white-space: nowrap;
+  transition: background var(--ac-dur-fast) var(--ac-ease), color var(--ac-dur-fast) var(--ac-ease);
+}
+
+.usageChip:hover {
+  background: var(--ac-bg-hover);
+  color: var(--ac-label-secondary);
+}
+
+.usageMenu {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  right: 0;
+  z-index: 40;
+  min-width: 230px;
+  padding: 8px 12px 10px;
+  border-radius: 12px;
+  background: var(--ac-bg-menu);
+  border: 0.5px solid var(--ac-border-l2);
+  box-shadow: 0 8px 28px rgb(0 0 0 / 14%);
+}
+
+.usageGrid {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 4px 18px;
+  padding: 6px 0;
+  font-size: var(--ac-font-size-secondary);
+}
+
+.usageGrid span:nth-child(odd) {
+  color: var(--ac-label-tertiary);
+}
+
+.usageGrid span:nth-child(even) {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  color: var(--ac-label-primary);
+}
+
+.usageFoot {
+  padding-top: 6px;
+  border-top: 0.5px solid var(--ac-border-l2);
+  font-size: var(--ac-font-size-caption);
+  color: var(--ac-label-caption);
 }

@@ -2,6 +2,7 @@ import { useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import type { Item } from '../types'
+import { fmtTokens } from '../format'
 import CodeBlock from './CodeBlock'
 import styles from './ChatItems.module.css'
 
@@ -61,16 +62,21 @@ function ItemView({ item }: { item: Item }) {
           {item.ts ? <div className={styles.userTime}>{fmtTime(item.ts)}</div> : null}
         </div>
       )
-    case 'turnEnd':
+    case 'turnEnd': {
+      const parts = [`本轮完成`, `${item.steps} 步`, fmtElapsed(item.elapsed)]
+      if (item.tokens && item.tokens > 0) parts.push(`${fmtTokens(item.tokens)} tok`)
       return (
         <div className={styles.turnDivider}>
           <span className={styles.turnLine} />
-          <span className={styles.turnText}>
-            本轮完成 · {item.steps} 步 · {fmtElapsed(item.elapsed)}
-          </span>
+          <span className={styles.turnText}>{parts.join(' · ')}</span>
           <span className={styles.turnLine} />
         </div>
       )
+    }
+    case 'notice':
+      return <NoticeRow text={item.text} />
+    case 'compact':
+      return <CompactCard item={item} />
     case 'reasoning':
       return <ReasoningRow text={item.text} running={item.running} />
     case 'tool':
@@ -150,6 +156,82 @@ function ReasoningRow({ text, running }: { text: string; running: boolean }) {
       {expanded && (
         <div className={styles.reasoningBody}>
           <Markdown text={text} />
+        </div>
+      )}
+    </div>
+  )
+}
+
+/** 提示行:服务端 notice(斜杠命令反馈/自动重试等),居中 caption 弱化展示。 */
+function NoticeRow({ text }: { text: string }) {
+  return (
+    <div className={styles.noticeRow}>
+      <span className={styles.noticeLine} />
+      <span className={styles.noticeText}>{text}</span>
+      <span className={styles.noticeLine} />
+    </div>
+  )
+}
+
+/** 上下文压缩卡:running 进度 → done(可展开摘要预览)/ failed(错误原因)。 */
+function CompactCard({ item }: { item: Extract<Item, { kind: 'compact' }> }) {
+  const [expanded, setExpanded] = useState(false)
+  const hasDetail =
+    item.state === 'done' && Boolean(item.summaryPreview) && item.summaryPreview !== ''
+  return (
+    <div className={styles.compactRoot} data-state={item.state}>
+      <button
+        type="button"
+        className={styles.compactRow}
+        onClick={() => hasDetail && setExpanded((v) => !v)}
+        disabled={item.state === 'running'}
+      >
+        {item.state === 'running' ? (
+          <span className={styles.toolSpinner} />
+        ) : (
+          <svg width={13} height={13} viewBox="0 0 16 16" fill="none" aria-hidden>
+            {item.state === 'done' ? (
+              <path
+                d="M3 8.5l3.5 3.5L13 5"
+                stroke="var(--ac-state-success)"
+                strokeWidth="1.6"
+                strokeLinecap="round"
+              />
+            ) : (
+              <path
+                d="M4 4l8 8M12 4l-8 8"
+                stroke="var(--ac-state-error)"
+                strokeWidth="1.6"
+                strokeLinecap="round"
+              />
+            )}
+          </svg>
+        )}
+        <span className={styles.compactTitle}>
+          {item.state === 'running' && '上下文压缩中…'}
+          {item.state === 'done' && `上下文压缩完成 · 释放 ${item.dropped ?? 0} 条消息`}
+          {item.state === 'failed' && `压缩失败：${item.error || '未知原因'}`}
+        </span>
+        {item.state === 'running' && item.totalChars > 0 && (
+          <span className={styles.compactMeta}>已生成 {item.totalChars} 字符</span>
+        )}
+        {hasDetail && (
+          <svg
+            className={styles.toolChevron}
+            width={11}
+            height={11}
+            viewBox="0 0 16 16"
+            fill="none"
+            aria-hidden
+            data-open={expanded || undefined}
+          >
+            <path d="M3 6l5 5 5-5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+          </svg>
+        )}
+      </button>
+      {expanded && hasDetail && (
+        <div className={styles.compactBody}>
+          <Markdown text={item.summaryPreview ?? ''} />
         </div>
       )}
     </div>
