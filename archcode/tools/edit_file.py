@@ -6,7 +6,7 @@ from pathlib import Path
 
 from pydantic import BaseModel, Field
 
-from archcode.tools.base import Tool, ToolResult
+from archcode.tools.base import Tool, ToolResult, unified_diff_snippet
 
 
 class EditFile(Tool):
@@ -45,4 +45,6 @@ class EditFile(Tool):
             path.write_text(new_content, encoding="utf-8")
         except Exception as e:
             return ToolResult(output=f"Error writing file: {e}", is_error=True)
-        return ToolResult(output=f"Successfully edited {params.file_path}")
+        return ToolResult(
+            output=f"Successfully edited {params.file_path}\n\n{unified_diff_snippet(content, new_content)}"
+        )

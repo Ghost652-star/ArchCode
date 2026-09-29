@@ -365,6 +365,37 @@ def api_resume_session(session_id: str):
     return {"session_id": session_id}
 
 
+@app.get("/api/sessions/search")
+def api_sessions_search(q: str, limit: int = 8):
+    """跨会话内容搜索:扫描 .jsonl 正文(每文件前 2MB),返回首次命中摘要。
+
+    只读;搜索范围 = 当前工作区的会话目录,超大文件截断,不求全文精确计数。
+    """
+    assert STATE is not None
+    needle = q.strip().lower()
+    if len(needle) < 2:
+        return {"results": []}
+    results: list[dict] = []
+    for meta in STATE.session_manager.list_sessions():
+        path = STATE.session_manager.sessions_dir / f"{meta.id}.jsonl"
+        try:
+            if path.stat().st_size > 8 * 1024 * 1024:
+                continue
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        idx = text.lower().find(needle)
+        if idx < 0:
+            continue
+        start = max(0, idx - 60)
+        end = min(len(text), idx + len(needle) + 80)
+        excerpt = text[start:end].replace("\n", " ").strip()
+        results.append({"id": meta.id, "title": meta.title, "excerpt": excerpt})
+        if len(results) >= max(1, min(limit, 20)):
+            break
+    return {"results": results}
+
+
 @app.get("/api/history")
 def api_history():
     """当前会话全量历史(刷新恢复用):按消息角色返回。

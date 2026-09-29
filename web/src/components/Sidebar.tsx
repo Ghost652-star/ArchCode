@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { api } from '../api'
 import type { AgentState, SessionInfo } from '../types'
 import styles from './Sidebar.module.css'
@@ -58,6 +58,9 @@ export default function Sidebar({
   const [newPath, setNewPath] = useState('')
   const [renamingId, setRenamingId] = useState<string | null>(null)
   const [renameValue, setRenameValue] = useState('')
+  const [contentResults, setContentResults] = useState<
+    Array<{ id: string; title: string; excerpt: string }>
+  >([])
 
   const serverDir = state?.work_dir ?? ''
   const filtered = useMemo(
@@ -70,6 +73,22 @@ export default function Sidebar({
       ),
     [sessions, query],
   )
+
+  // 内容搜索(≥2 字符触发,防抖 300ms):服务端扫会话 JSONL,返回首次命中摘要
+  useEffect(() => {
+    const q = query.trim()
+    if (q.length < 2) {
+      setContentResults([])
+      return
+    }
+    const timer = setTimeout(() => {
+      api
+        .sessionsSearch(q)
+        .then((r) => setContentResults(r.results))
+        .catch(() => setContentResults([]))
+    }, 300)
+    return () => clearTimeout(timer)
+  }, [query])
 
   const commitRename = useCallback(
     async (id: string) => {
@@ -159,13 +178,14 @@ export default function Sidebar({
       {searchOpen && (
         <input
           className={styles.search}
-          placeholder="搜索会话(标题 / ID)"
+          placeholder="搜索会话(标题 / ID / 内容)"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === 'Escape') {
               setSearchOpen(false)
               setQuery('')
+              setContentResults([])
             }
           }}
           autoFocus
@@ -297,6 +317,24 @@ export default function Sidebar({
                       </div>
                     )
                   })}
+                  {contentResults.length > 0 && (
+                    <div className={styles.contentResults}>
+                      <div className={styles.groupLabel}>内容匹配</div>
+                      {contentResults.map((r) => (
+                        <button
+                          key={r.id}
+                          className={styles.contentRow}
+                          onClick={() => isServer && onResume(r.id)}
+                          title={r.excerpt}
+                        >
+                          <span className={styles.sessionTitle}>
+                            {r.title || r.id.slice(0, 18)}
+                          </span>
+                          <span className={styles.contentExcerpt}>{r.excerpt}</span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
                 </div>
               )}
             </div>

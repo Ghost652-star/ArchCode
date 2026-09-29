@@ -4,6 +4,7 @@ import remarkGfm from 'remark-gfm'
 import type { Item } from '../types'
 import { fmtTokens } from '../format'
 import CodeBlock from './CodeBlock'
+import DiffBlock, { extractDiff } from './DiffBlock'
 import styles from './ChatItems.module.css'
 
 /** 最近一个已完成段落的首行(流式摘要,DSH ReasoningRow 同款逻辑)。 */
@@ -58,7 +59,10 @@ function ItemView({ item }: { item: Item }) {
     case 'user':
       return (
         <div className={styles.userRow}>
-          <div className={styles.bubble}>{item.text}</div>
+          <div className={styles.userLine}>
+            <CopyButton text={item.text} className={styles.userCopy} />
+            <div className={styles.bubble}>{renderUserText(item.text)}</div>
+          </div>
           {item.ts ? <div className={styles.userTime}>{fmtTime(item.ts)}</div> : null}
         </div>
       )
@@ -85,6 +89,7 @@ function ItemView({ item }: { item: Item }) {
       return (
         <div className={styles.assistant}>
           <Markdown text={item.text} />
+          <CopyButton text={item.text} className={styles.assistantCopy} />
         </div>
       )
     case 'error':
@@ -238,15 +243,93 @@ function CompactCard({ item }: { item: Extract<Item, { kind: 'compact' }> }) {
   )
 }
 
+/** 用户消息里的 @文件引用渲染成 chip(纯展示,消息内容不变)。 */
+function renderUserText(text: string) {
+  const parts = text.split(/(@[\w\-./\\]+)/g)
+  if (parts.length === 1) return text
+  return parts.map((part, i) =>
+    part.startsWith('@') && part.length > 1 ? (
+      <span key={i} className={styles.atChip}>
+        {part}
+      </span>
+    ) : (
+      <span key={i}>{part}</span>
+    ),
+  )
+}
+
+/** 复制按钮:悬停浮现,点击写入剪贴板,短暂显示成功态。 */
+function CopyButton({ text, className }: { text: string; className?: string }) {
+  const [copied, setCopied] = useState(false)
+  return (
+    <button
+      type="button"
+      className={`${styles.copyBtn} ${className ?? ''}`}
+      data-copied={copied || undefined}
+      title={copied ? '已复制' : '复制'}
+      onClick={async () => {
+        try {
+          await navigator.clipboard.writeText(text)
+          setCopied(true)
+          window.setTimeout(() => setCopied(false), 1500)
+        } catch {
+          /* 剪贴板不可用(权限/非安全上下文)时静默 */
+        }
+      }}
+    >
+      {copied ? (
+        <svg width={13} height={13} viewBox="0 0 16 16" fill="none" aria-hidden>
+          <path d="M3 8.5l3.5 3.5L13 5" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+        </svg>
+      ) : (
+        <svg width={13} height={13} viewBox="0 0 16 16" fill="none" aria-hidden>
+          <rect x="5.5" y="5.5" width="8" height="8" rx="1.5" stroke="currentColor" strokeWidth="1.2" />
+          <path d="M10.5 5.5V4a1.5 1.5 0 0 0-1.5-1.5H4A1.5 1.5 0 0 0 2.5 4v5A1.5 1.5 0 0 0 4 10.5h1.5" stroke="currentColor" strokeWidth="1.2" fill="none" />
+        </svg>
+      )}
+    </button>
+  )
+}
+
+/** 按工具定制的折叠摘要(bash 显示命令,文件类显示路径,搜索类显示 pattern)。 */
+function toolSummary(item: Extract<Item, { kind: 'tool' }>): string {
+  const a = item.args
+  const s = (v: unknown) => (typeof v === 'string' ? v : JSON.stringify(v) ?? '')
+  switch (item.toolName) {
+    case 'Bash':
+      return s(a.command)
+    case 'ReadFile':
+      return s(a.file_path) + (a.offset != null ? ` (offset ${s(a.offset)})` : '')
+    case 'WriteFile':
+    case 'EditFile':
+      return s(a.file_path)
+    case 'Grep':
+      return s(a.pattern) + (a.path ? ` in ${s(a.path)}` : '')
+    case 'Glob':
+      return s(a.pattern)
+    case 'Agent':
+      return s(a.name) || s(a.description) || 'subagent'
+    default: {
+      const summary = Object.entries(a)
+        .map(([k, v]) => `${k}=${typeof v === 'string' ? v : JSON.stringify(v)}`)
+        .join('  ')
+      return summary
+    }
+  }
+}
+
 function ToolCallRow({
   item,
 }: {
   item: Extract<Item, { kind: 'tool' }>
 }) {
   const [expanded, setExpanded] = useState(false)
-  const argsSummary = Object.entries(item.args)
-    .map(([k, v]) => `${k}=${typeof v === 'string' ? v : JSON.stringify(v)}`)
-    .join('  ')
+  const summary = toolSummary(item)
+  // 文件修改类工具:output 自带统一 diff 段,展开时用 DiffBlock 渲染
+  const showDiff = item.toolName === 'EditFile' || item.toolName === 'WriteFile'
+  const { summary: outputHead, diff } = showDiff
+    ? extractDiff(item.output)
+    : { summary: item.output, diff: null }
   return (
     <div className={styles.toolRoot}>
       <button
@@ -257,7 +340,7 @@ function ToolCallRow({
       >
         <span className={styles.toolName}>{item.toolName}</span>
         {item.running && <span className={styles.toolSpinner} />}
-        <span className={styles.toolArgs}>{argsSummary}</span>
+        <span className={styles.toolArgs}>{summary}</span>
         {item.elapsed !== undefined && item.elapsed > 0 && (
           <span className={styles.toolElapsed}>{item.elapsed.toFixed(1)}s</span>
         )}
@@ -278,7 +361,14 @@ function ToolCallRow({
           {Object.entries(item.args).length > 0 && (
             <pre className={styles.toolPre}>{JSON.stringify(item.args, null, 2)}</pre>
           )}
-          {item.output && <pre className={styles.toolPre}>{item.output}</pre>}
+          {diff ? (
+            <>
+              <div className={styles.toolOutputHead}>{outputHead}</div>
+              <DiffBlock diff={diff} />
+            </>
+          ) : (
+            item.output && <pre className={styles.toolPre}>{item.output}</pre>
+          )}
         </div>
       )}
     </div>

@@ -249,6 +249,39 @@
   color: var(--ac-label-secondary);
 }
 
+/* ── 会话内容匹配(搜索下拉结果)────────────────────────── */
+.contentResults {
+  margin-top: 4px;
+}
+
+.contentRow {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  padding: 6px 8px;
+  border: none;
+  border-radius: 8px;
+  background: none;
+  text-align: left;
+  transition: background var(--ac-dur-fast) var(--ac-ease);
+}
+
+.contentRow:hover {
+  background: var(--ac-bg-hover);
+}
+
+.contentExcerpt {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  font-size: var(--ac-font-size-caption);
+  line-height: 1.4;
+  color: var(--ac-label-caption);
+  overflow-wrap: anywhere;
+}
+
 .sessionTime {
   flex: none;
   padding: 0 8px;

@@ -1,0 +1,52 @@
+/* 统一 diff 块:增行绿 / 删行红 / hunk 头与文件头弱化。 */
+
+.root {
+  margin: 0;
+  padding: 8px 0;
+  border-radius: 10px;
+  background: var(--ac-bg-code);
+  border: 0.5px solid var(--ac-border-l1);
+  font-family: var(--ac-font-code);
+  font-size: var(--ac-font-size-caption);
+  line-height: var(--ac-line-height-secondary);
+  overflow-x: auto;
+  color: var(--ac-label-secondary);
+}
+
+.line {
+  display: flex;
+  min-width: max-content;
+  padding: 0 12px;
+}
+
+.sign {
+  flex: none;
+  width: 14px;
+  user-select: none;
+  color: var(--ac-label-caption);
+}
+
+.text {
+  white-space: pre;
+}
+
+.line[data-type='add'] {
+  background: color-mix(in srgb, var(--ac-state-success) 12%, transparent);
+}
+
+.line[data-type='add'] .text {
+  color: var(--ac-state-success);
+}
+
+.line[data-type='del'] {
+  background: color-mix(in srgb, var(--ac-state-error) 12%, transparent);
+}
+
+.line[data-type='del'] .text {
+  color: var(--ac-state-error);
+}
+
+.line[data-type='hunk'],
+.line[data-type='meta'] {
+  color: var(--ac-label-caption);
+}

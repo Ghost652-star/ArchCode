@@ -6,7 +6,7 @@ from pathlib import Path
 
 from pydantic import BaseModel, Field
 
-from archcode.tools.base import Tool, ToolResult
+from archcode.tools.base import Tool, ToolResult, unified_diff_snippet
 
 
 class WriteFile(Tool):
@@ -25,9 +25,19 @@ class WriteFile(Tool):
 
     async def execute(self, params: Params) -> ToolResult:
         path = self._work_dir / params.file_path
+        old_content = ""
+        if path.exists():
+            try:
+                old_content = path.read_text(encoding="utf-8")
+            except Exception:
+                old_content = ""  # 旧内容读不出(二进制/编码问题)时不阻塞写入
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(params.content, encoding="utf-8")
         except Exception as e:
             return ToolResult(output=f"Error writing file: {e}", is_error=True)
-        return ToolResult(output=f"Successfully wrote to {params.file_path}")
+        diff = unified_diff_snippet(old_content, params.content)
+        output = f"Successfully wrote to {params.file_path}"
+        if diff:
+            output += f"\n\n{diff}"
+        return ToolResult(output=output)

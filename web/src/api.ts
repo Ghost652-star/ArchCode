@@ -36,6 +36,11 @@ export const api = {
 
   sessions: () => jsonFetch<SessionInfo[]>('/api/sessions'),
 
+  sessionsSearch: (q: string) =>
+    jsonFetch<{ results: Array<{ id: string; title: string; excerpt: string }> }>(
+      `/api/sessions/search?q=${encodeURIComponent(q)}`,
+    ),
+
   newSession: () => jsonFetch<{ session_id: string }>('/api/sessions', { method: 'POST' }),
 
   resumeSession: (id: string) =>

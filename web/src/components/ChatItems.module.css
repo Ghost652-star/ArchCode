@@ -8,6 +8,65 @@
   padding: 2px 0;
 }
 
+.userLine {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+}
+
+/* 复制钮:悬停气泡行时浮现(用户行在气泡左侧,助手行在卡片右上角) */
+.copyBtn {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: none;
+  border-radius: 7px;
+  background: none;
+  color: var(--ac-label-caption);
+  opacity: 0;
+  transition: opacity var(--ac-dur-fast) var(--ac-ease), background var(--ac-dur-fast) var(--ac-ease);
+}
+
+.copyBtn:hover {
+  background: var(--ac-bg-hover);
+  color: var(--ac-label-primary);
+}
+
+.userCopy {
+  order: -1;
+}
+
+.userLine:hover .copyBtn,
+.assistant:hover .copyBtn,
+.copyBtn[data-copied] {
+  opacity: 1;
+}
+
+/* @文件引用 chip(用户气泡内纯展示) */
+.atChip {
+  display: inline-block;
+  padding: 0 6px;
+  border-radius: 6px;
+  background: var(--ac-brand-50);
+  color: var(--ac-brand-500);
+  font-size: 0.92em;
+}
+
+/* 助手区复制钮:右上角悬停浮现 */
+.assistant {
+  position: relative;
+}
+
+.assistantCopy {
+  position: absolute;
+  top: 0;
+  right: 0;
+}
+
 .bubble {
   max-width: min(var(--ac-bubble-max), 82%);
   background: var(--ac-bg-bubble);
@@ -333,6 +392,12 @@
   min-width: 0;
   display: grid;
   gap: 6px;
+}
+
+/* diff 前的摘要行(Successfully edited xxx) */
+.toolOutputHead {
+  font-size: var(--ac-font-size-secondary);
+  color: var(--ac-label-tertiary);
 }
 
 .toolPre {

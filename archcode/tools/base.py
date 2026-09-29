@@ -80,3 +80,25 @@ class Tool(ABC):
     async def execute(self, params: BaseModel) -> ToolResult:
         """执行工具的入口。子类必须实现。"""
         ...
+
+
+def unified_diff_snippet(old_text: str, new_text: str, *, max_lines: int = 80) -> str:
+    """生成统一 diff 文本(文件修改类工具的 output 附加段,LLM 与 Web UI 共用)。
+
+    超过 max_lines 行截断并注明剩余行数;无差异时返回空串。
+    """
+    import difflib
+
+    diff = list(
+        difflib.unified_diff(
+            old_text.splitlines(keepends=True),
+            new_text.splitlines(keepends=True),
+            fromfile="before",
+            tofile="after",
+        )
+    )
+    if not diff:
+        return ""
+    if len(diff) > max_lines:
+        diff = diff[:max_lines] + [f"... (diff truncated, {len(diff) - max_lines} more lines)\n"]
+    return "".join(diff)
