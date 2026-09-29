@@ -287,7 +287,10 @@ def main() -> None:
             )
             agent = _build_agent_sync(config, work_dir, tool_registry)
             _wire_hooks(config, work_dir, agent)
-            _wire_skills(agent, tool_registry, work_dir)
+            skill_executor = _wire_skills(agent, tool_registry, work_dir)
+            # 子 agent 接线(Agent/TaskList/TaskGet + 后台通知 + _task_manager):
+            # 此前 web 分支漏掉这步,Agent 工具在 Web 端根本不存在
+            _wire_agents(agent, tool_registry, work_dir, skill_executor)
             run_web(agent, work_dir, args.port, config.mcp_servers, config.providers)
         else:
             # TUI 路径:build 同步做(create_default_registry 不需要 await),
