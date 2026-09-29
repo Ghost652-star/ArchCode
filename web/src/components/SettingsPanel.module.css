@@ -11,8 +11,8 @@
 .panel {
   display: flex;
   flex-direction: column;
-  width: min(800px, calc(100vw - 48px));
-  height: min(560px, calc(100vh - 48px));
+  width: min(1080px, calc(100vw - 48px));
+  height: min(760px, calc(100vh - 48px));
   border-radius: 20px;
   background: var(--ac-bg-layer-1);
   box-shadow: var(--ac-shadow-prominent);
@@ -242,4 +242,150 @@
   border-color: var(--ac-label-primary);
   color: var(--ac-bg-base);
   font-weight: 500;
+}
+
+/* ── 主从视图(列表 → 详情/编辑,ZCode 式)────────────────── */
+
+/* 列表头:计数 + 右侧新建按钮 */
+.listHeadRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 0 2px;
+}
+
+.listHead {
+  font-size: var(--ac-font-size-caption);
+  color: var(--ac-label-caption);
+}
+
+/* 可点击列表行(带 hover 与右缘 chevron) */
+.rowClickable {
+  width: 100%;
+  border: none;
+  background: none;
+  text-align: left;
+  cursor: pointer;
+}
+
+.rowClickable:hover {
+  background: var(--ac-bg-hover);
+  border-radius: 10px;
+}
+
+.rowChevron {
+  flex: none;
+  color: var(--ac-label-caption);
+  font-size: 16px;
+  line-height: 1;
+}
+
+/* 返回按钮 + 详情标题 */
+.backBtn {
+  display: inline-flex;
+  align-items: center;
+  border: none;
+  background: none;
+  padding: 4px 8px 4px 0;
+  margin-bottom: 4px;
+  color: var(--ac-label-tertiary);
+  font-size: var(--ac-font-size-caption);
+  cursor: pointer;
+  transition: color var(--ac-dur-fast) var(--ac-ease);
+}
+
+.backBtn:hover {
+  color: var(--ac-label-primary);
+}
+
+.detailTitle {
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--ac-label-primary);
+  padding: 2px 0 12px;
+}
+
+/* 详情字段网格:两列(label / value) */
+.detailGrid {
+  display: grid;
+  grid-template-columns: 96px 1fr;
+  gap: 12px 16px;
+  padding: 4px 0 8px;
+}
+
+.detailLabel {
+  font-size: var(--ac-font-size-secondary);
+  color: var(--ac-label-tertiary);
+}
+
+.detailValue {
+  font-size: var(--ac-font-size-secondary);
+  line-height: var(--ac-line-height-secondary);
+  color: var(--ac-label-primary);
+  overflow-wrap: anywhere;
+}
+
+.mono {
+  font-family: var(--ac-font-code);
+  font-size: var(--ac-font-size-caption);
+  background: var(--ac-bg-code);
+  border-radius: 5px;
+  padding: 1px 6px;
+  overflow-wrap: anywhere;
+}
+
+.copyMini {
+  margin-left: 8px;
+  border: none;
+  background: none;
+  padding: 2px 6px;
+  border-radius: 6px;
+  font-size: var(--ac-font-size-caption);
+  color: var(--ac-brand-500);
+  cursor: pointer;
+}
+
+.copyMini:hover {
+  background: var(--ac-bg-hover);
+}
+
+/* 编辑表单(MCP 新建/编辑视图) */
+.editForm {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-width: 460px;
+  padding: 4px 0 12px;
+}
+
+.fieldLabel {
+  margin-top: 6px;
+  font-size: var(--ac-font-size-secondary);
+  color: var(--ac-label-tertiary);
+}
+
+.editActions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding-top: 8px;
+}
+
+.spring {
+  flex: 1;
+}
+
+.cancelBtn {
+  border: none;
+  background: none;
+  padding: 7px 14px;
+  border-radius: 10px;
+  font-size: var(--ac-font-size-secondary);
+  color: var(--ac-label-secondary);
+  cursor: pointer;
+}
+
+.cancelBtn:hover {
+  background: var(--ac-bg-hover);
 }

@@ -37,9 +37,12 @@ export default function SettingsPanel({ onClose }: { onClose: () => void }) {
   const [exists, setExists] = useState(true)
   const [notice, setNotice] = useState('')
   const [skills, setSkills] = useState<
-    Array<{ name: string; description: string; source: string; path: string }>
+    Array<{ name: string; description: string; source: string; path: string; is_directory: boolean }>
   >([])
   const [agents, setAgents] = useState<AgentDefInfo[]>([])
+  // 主从视图:列表 → 详情(详情态存主键,切区块即清空)
+  const [skillDetail, setSkillDetail] = useState<string | null>(null)
+  const [agentDetail, setAgentDetail] = useState<string | null>(null)
   const [mode, setMode] = useState('default')
   const [theme, setTheme] = useState(document.documentElement.dataset.theme ?? 'light')
 
@@ -115,7 +118,11 @@ export default function SettingsPanel({ onClose }: { onClose: () => void }) {
               <button
                 key={s.id}
                 className={`${styles.navItem} ${section === s.id ? styles.navActive : ''}`}
-                onClick={() => setSection(s.id)}
+                onClick={() => {
+                  setSection(s.id)
+                  setSkillDetail(null)
+                  setAgentDetail(null)
+                }}
               >
                 {s.label}
               </button>
@@ -138,56 +145,68 @@ export default function SettingsPanel({ onClose }: { onClose: () => void }) {
                 onSave={(items) => save('mcp_servers', items)}
               />
             )}
-            {section === 'skills' && (
-              <div>
-                {skills.length === 0 && <div className={styles.hint}>未加载任何技能</div>}
-                {skills.map((s) => (
-                  <div key={s.name} className={styles.row}>
-                    <div className={styles.rowMain}>
-                      <div className={styles.rowTitle}>/{s.name}</div>
-                      <div className={styles.rowDesc}>{s.description}</div>
-                    </div>
-                    <span className={styles.tag}>{s.source}</span>
-                  </div>
-                ))}
-                <div className={styles.hint}>编辑技能请直接修改 SKILL.md 文件。</div>
-              </div>
-            )}
-            {section === 'agents' && (
-              <div>
-                {agents.length === 0 && (
-                  <div className={styles.hint}>未加载任何子 agent 定义(内置定义缺失?)</div>
-                )}
-                {agents.map((a) => (
-                  <div key={a.agent_type} className={styles.row}>
-                    <div className={styles.rowMain}>
-                      <div className={styles.rowTitle}>{a.agent_type}</div>
-                      <div className={styles.rowDesc}>{a.when_to_use}</div>
-                      <div className={styles.agentMeta}>
-                        <span className={styles.tag}>{a.source}</span>
-                        <span className={styles.tag}>
-                          {a.background ? '后台' : '前台'}
-                        </span>
-                        <span className={styles.tag}>{a.permission_mode}</span>
-                        <span className={styles.tag}>
-                          {a.model && a.model !== 'inherit' ? a.model : '沿用主模型'}
-                        </span>
-                        <span className={styles.tag}>≤{a.max_turns} 轮</span>
-                        {a.tools.length > 0 && (
-                          <span className={styles.tag}>工具 {a.tools.length} 项</span>
-                        )}
+            {section === 'skills' && (() => {
+              const detail = skills.find((s) => s.name === skillDetail)
+              if (detail) return <SkillDetail skill={detail} onBack={() => setSkillDetail(null)} />
+              return (
+                <div>
+                  {skills.length === 0 && <div className={styles.hint}>未加载任何技能</div>}
+                  <div className={styles.listHead}>已加载 {skills.length} 个</div>
+                  {skills.map((s) => (
+                    <button
+                      key={s.name}
+                      type="button"
+                      className={`${styles.row} ${styles.rowClickable}`}
+                      onClick={() => setSkillDetail(s.name)}
+                    >
+                      <div className={styles.rowMain}>
+                        <div className={styles.rowTitle}>/{s.name}</div>
+                        <div className={styles.rowDesc}>{s.description}</div>
                       </div>
-                    </div>
+                      <span className={styles.tag}>{sourceLabel(s.source)}</span>
+                      <span className={styles.rowChevron}>›</span>
+                    </button>
+                  ))}
+                  <div className={styles.hint}>
+                    点击条目查看详情;编辑技能请修改对应 SKILL.md 文件。
                   </div>
-                ))}
-                <div className={styles.hint}>
-                  添加子 agent:在 项目 `.archcode/agents/&lt;名字&gt;.md`(或用户级同名目录)创建
-                  Markdown 定义——frontmatter 写 name / description / tools / maxTurns /
-                  permissionMode / background,正文即该子 agent 的 system prompt;
-                  新任务边界自动重载生效。
                 </div>
-              </div>
-            )}
+              )
+            })()}
+            {section === 'agents' && (() => {
+              const detail = agents.find((a) => a.agent_type === agentDetail)
+              if (detail) return <AgentDetail agent={detail} onBack={() => setAgentDetail(null)} />
+              return (
+                <div>
+                  {agents.length === 0 && (
+                    <div className={styles.hint}>未加载任何子 agent 定义(内置定义缺失?)</div>
+                  )}
+                  <div className={styles.listHead}>生效定义 {agents.length} 个</div>
+                  {agents.map((a) => (
+                    <button
+                      key={a.agent_type}
+                      type="button"
+                      className={`${styles.row} ${styles.rowClickable}`}
+                      onClick={() => setAgentDetail(a.agent_type)}
+                    >
+                      <div className={styles.rowMain}>
+                        <div className={styles.rowTitle}>{a.agent_type}</div>
+                        <div className={styles.rowDesc}>{a.when_to_use}</div>
+                      </div>
+                      <span className={styles.tag}>{sourceLabel(a.source)}</span>
+                      <span className={styles.tag}>{a.background ? '后台' : '前台'}</span>
+                      <span className={styles.rowChevron}>›</span>
+                    </button>
+                  ))}
+                  <div className={styles.hint}>
+                    添加子 agent:在 项目 `.archcode/agents/&lt;名字&gt;.md`(或用户级同名目录)创建
+                    Markdown 定义——frontmatter 写 name / description / tools / maxTurns /
+                    permissionMode / background,正文即该子 agent 的 system prompt;
+                    新任务边界自动重载生效。
+                  </div>
+                </div>
+              )
+            })()}
             {section === 'hooks' && (
               <div>
                 {hooks.length === 0 && <div className={styles.hint}>当前作用域未声明 hook</div>}
@@ -339,13 +358,144 @@ function McpSection({
   readOnlyItems: Array<Record<string, unknown>>
   onSave: (items: unknown[]) => void
 }) {
-  const [form, setForm] = useState({ name: '', command: '', url: '' })
+  // 编辑态:列表 ↔ 表单两个视图;null = 列表,'new' = 新建,数字 = 编辑第 idx 项
+  const [editing, setEditing] = useState<number | 'new' | null>(null)
+  const [form, setForm] = useState({ name: '', type: 'stdio', command: '', args: '', url: '' })
   const set = (k: string, v: string) => setForm((f) => ({ ...f, [k]: v }))
+
+  const startEdit = (idx: number | 'new') => {
+    setEditing(idx)
+    if (idx === 'new') {
+      setForm({ name: '', type: 'stdio', command: '', args: '', url: '' })
+      return
+    }
+    const s = items[idx] as Record<string, unknown>
+    const isHttp = Boolean(s['url'])
+    setForm({
+      name: String(s['name'] ?? ''),
+      type: isHttp ? 'http' : 'stdio',
+      command: String(s['command'] ?? ''),
+      args: ((s['args'] as string[]) ?? []).join(' '),
+      url: String(s['url'] ?? ''),
+    })
+  }
+
+  if (editing !== null) {
+    const isNew = editing === 'new'
+    const canSave =
+      form.name.trim() !== '' &&
+      (form.type === 'http' ? form.url.trim() !== '' : form.command.trim() !== '')
+    return (
+      <div>
+        <button type="button" className={styles.backBtn} onClick={() => setEditing(null)}>
+          ‹ 返回列表
+        </button>
+        <div className={styles.detailTitle}>{isNew ? '新建 MCP 服务器' : `编辑 · ${form.name}`}</div>
+        <div className={styles.editForm}>
+          <label className={styles.fieldLabel}>名称</label>
+          <input
+            className={styles.input}
+            placeholder="如 ocr-tool"
+            value={form.name}
+            onChange={(e) => set('name', e.target.value)}
+          />
+          <label className={styles.fieldLabel}>类型</label>
+          <select
+            className={styles.input}
+            value={form.type}
+            onChange={(e) => set('type', e.target.value)}
+          >
+            <option value="stdio">stdio(本地命令)</option>
+            <option value="http">http(远程服务)</option>
+          </select>
+          {form.type === 'stdio' ? (
+            <>
+              <label className={styles.fieldLabel}>命令</label>
+              <input
+                className={styles.input}
+                placeholder="如 python"
+                value={form.command}
+                onChange={(e) => set('command', e.target.value)}
+              />
+              <label className={styles.fieldLabel}>参数(空格分隔)</label>
+              <input
+                className={styles.input}
+                placeholder="如 server.py --port 8080"
+                value={form.args}
+                onChange={(e) => set('args', e.target.value)}
+              />
+            </>
+          ) : (
+            <>
+              <label className={styles.fieldLabel}>URL</label>
+              <input
+                className={styles.input}
+                placeholder="如 http://127.0.0.1:8000/mcp"
+                value={form.url}
+                onChange={(e) => set('url', e.target.value)}
+              />
+            </>
+          )}
+        </div>
+        <div className={styles.editActions}>
+          {!isNew && (
+            <button
+              type="button"
+              className={styles.deleteBtn}
+              onClick={() => {
+                onSave(items.filter((_, j) => j !== editing))
+                setEditing(null)
+              }}
+            >
+              删除
+            </button>
+          )}
+          <span className={styles.spring} />
+          <button type="button" className={styles.cancelBtn} onClick={() => setEditing(null)}>
+            取消
+          </button>
+          <button
+            type="button"
+            className={styles.addBtn}
+            disabled={!canSave}
+            onClick={() => {
+              const entry =
+                form.type === 'http'
+                  ? { name: form.name.trim(), url: form.url.trim() }
+                  : {
+                      name: form.name.trim(),
+                      command: form.command.trim(),
+                      args: form.args.trim() ? form.args.trim().split(/\s+/) : [],
+                    }
+              const next = isNew
+                ? [...items, entry]
+                : items.map((it, j) => (j === editing ? entry : it))
+              onSave(next)
+              setEditing(null)
+            }}
+          >
+            保存
+          </button>
+        </div>
+        <div className={styles.hint}>保存写入 {`{作用域}`} config.yaml;MCP 变更需重启生效。</div>
+      </div>
+    )
+  }
+
   return (
     <div>
       {items.length === 0 && readOnlyItems.length > 0 && (
         <div className={styles.hint}>当前作用域未配置,以下为生效的 用户级 配置(只读)。</div>
       )}
+      {items.length === 0 && readOnlyItems.length === 0 && (
+        <div className={styles.hint}>当前作用域未配置 MCP 服务器。</div>
+      )}
+      <div className={styles.listHeadRow}>
+        <span className={styles.listHead}>已配置 {items.length} 个</span>
+        <button type="button" className={styles.addBtn} onClick={() => startEdit('new')}>
+          + 新建
+        </button>
+      </div>
       {readOnlyItems.map((s, i) => {
         const isHttp = Boolean(s['url'])
         return (
@@ -353,7 +503,9 @@ function McpSection({
             <div className={styles.rowMain}>
               <div className={styles.rowTitle}>{String(s['name'] ?? '')}</div>
               <div className={styles.rowDesc}>
-                {isHttp ? String(s['url']) : `${String(s['command'] ?? '')} ${(s['args'] as string[])?.join(' ') ?? ''}`}
+                {isHttp
+                  ? String(s['url'])
+                  : `${String(s['command'] ?? '')} ${(s['args'] as string[])?.join(' ') ?? ''}`}
               </div>
             </div>
             <span className={styles.tag}>{isHttp ? 'http' : 'stdio'}</span>
@@ -364,41 +516,139 @@ function McpSection({
       {items.map((s, i) => {
         const isHttp = Boolean(s['url'])
         return (
-          <div key={i} className={styles.row}>
+          <button
+            key={i}
+            type="button"
+            className={`${styles.row} ${styles.rowClickable}`}
+            onClick={() => startEdit(i)}
+          >
             <div className={styles.rowMain}>
               <div className={styles.rowTitle}>{String(s['name'] ?? '')}</div>
               <div className={styles.rowDesc}>
-                {isHttp ? String(s['url']) : `${String(s['command'] ?? '')} ${(s['args'] as string[])?.join(' ') ?? ''}`}
+                {isHttp
+                  ? String(s['url'])
+                  : `${String(s['command'] ?? '')} ${(s['args'] as string[])?.join(' ') ?? ''}`}
               </div>
             </div>
             <span className={styles.tag}>{isHttp ? 'http' : 'stdio'}</span>
-            <button
-              className={styles.deleteBtn}
-              onClick={() => onSave(items.filter((_, j) => j !== i))}
-            >
-              删除
-            </button>
-          </div>
+            <span className={styles.rowChevron}>›</span>
+          </button>
         )
       })}
-      <div className={styles.addForm}>
-        <input className={styles.input} placeholder="名称" value={form.name} onChange={(e) => set('name', e.target.value)} />
-        <input className={styles.input} placeholder="stdio: command" value={form.command} onChange={(e) => set('command', e.target.value)} />
-        <input className={styles.input} placeholder="或 http: url" value={form.url} onChange={(e) => set('url', e.target.value)} />
-        <button
-          className={styles.addBtn}
-          disabled={!form.name || (!form.command && !form.url)}
-          onClick={() => {
-            const entry = form.url
-              ? { name: form.name, url: form.url }
-              : { name: form.name, command: form.command, args: [] }
-            onSave([...items, entry])
-            setForm({ name: '', command: '', url: '' })
-          }}
-        >
-          添加
-        </button>
+      <div className={styles.hint}>点击条目编辑;变更需重启 ArchCode 生效。</div>
+    </div>
+  )
+}
+
+function sourceLabel(source: string): string {
+  if (source === 'user') return '用户级'
+  if (source === 'project') return '项目级'
+  if (source === 'builtin') return '内置'
+  return source
+}
+
+/** 详情视图:技能(描述全文/来源/类型/文件路径 + 复制)。 */
+function SkillDetail({
+  skill,
+  onBack,
+}: {
+  skill: { name: string; description: string; source: string; path: string; is_directory: boolean }
+  onBack: () => void
+}) {
+  return (
+    <div>
+      <button type="button" className={styles.backBtn} onClick={onBack}>
+        ‹ 返回列表
+      </button>
+      <div className={styles.detailTitle}>/{skill.name}</div>
+      <div className={styles.detailGrid}>
+        <span className={styles.detailLabel}>描述</span>
+        <span className={styles.detailValue}>{skill.description || '(无描述)'}</span>
+        <span className={styles.detailLabel}>来源</span>
+        <span className={styles.detailValue}>{sourceLabel(skill.source)}</span>
+        <span className={styles.detailLabel}>类型</span>
+        <span className={styles.detailValue}>{skill.is_directory ? '目录型技能' : '单文件技能'}</span>
+        <span className={styles.detailLabel}>文件路径</span>
+        <span className={styles.detailValue}>
+          <code className={styles.mono}>{skill.path}</code>
+          <CopyMini text={skill.path} />
+        </span>
+      </div>
+      <div className={styles.hint}>
+        编辑技能请修改对应 SKILL.md 文件,改动在新任务边界生效。
       </div>
     </div>
+  )
+}
+
+/** 详情视图:子 agent 定义(全部 frontmatter 字段 + 工具清单 + 路径)。 */
+function AgentDetail({ agent, onBack }: { agent: AgentDefInfo; onBack: () => void }) {
+  return (
+    <div>
+      <button type="button" className={styles.backBtn} onClick={onBack}>
+        ‹ 返回列表
+      </button>
+      <div className={styles.detailTitle}>{agent.agent_type}</div>
+      <div className={styles.detailGrid}>
+        <span className={styles.detailLabel}>选用依据</span>
+        <span className={styles.detailValue}>{agent.when_to_use || '(无描述)'}</span>
+        <span className={styles.detailLabel}>来源</span>
+        <span className={styles.detailValue}>{sourceLabel(agent.source)}</span>
+        <span className={styles.detailLabel}>模型</span>
+        <span className={styles.detailValue}>
+          {agent.model && agent.model !== 'inherit' ? agent.model : '沿用主对话模型'}
+        </span>
+        <span className={styles.detailLabel}>轮次预算</span>
+        <span className={styles.detailValue}>最多 {agent.max_turns} 轮</span>
+        <span className={styles.detailLabel}>权限模式</span>
+        <span className={styles.detailValue}>{agent.permission_mode}</span>
+        <span className={styles.detailLabel}>运行方式</span>
+        <span className={styles.detailValue}>{agent.background ? '后台运行' : '前台(阻塞)'}</span>
+        <span className={styles.detailLabel}>工具白名单</span>
+        <span className={styles.detailValue}>
+          {agent.tools.length > 0 ? agent.tools.join('、') : '不限制(全部工具)'}
+        </span>
+        {agent.disallowed_tools.length > 0 && (
+          <>
+            <span className={styles.detailLabel}>禁用工具</span>
+            <span className={styles.detailValue}>{agent.disallowed_tools.join('、')}</span>
+          </>
+        )}
+        {agent.path && (
+          <>
+            <span className={styles.detailLabel}>文件路径</span>
+            <span className={styles.detailValue}>
+              <code className={styles.mono}>{agent.path}</code>
+              <CopyMini text={agent.path} />
+            </span>
+          </>
+        )}
+      </div>
+      <div className={styles.hint}>
+        修改定义请编辑对应 Markdown 文件,新任务边界自动重载生效。
+      </div>
+    </div>
+  )
+}
+
+/** 复制小按钮(路径旁,带成功态)。 */
+function CopyMini({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false)
+  return (
+    <button
+      type="button"
+      className={styles.copyMini}
+      onClick={async () => {
+        try {
+          await navigator.clipboard.writeText(text)
+          setCopied(true)
+          window.setTimeout(() => setCopied(false), 1500)
+        } catch {
+          /* 剪贴板不可用时静默 */
+        }
+      }}
+    >
+      {copied ? '已复制' : '复制'}
+    </button>
   )
 }

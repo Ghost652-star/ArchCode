@@ -245,7 +245,7 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: var(--ac-font-size-caption);
+  font-size: var(--ac-font-size-secondary);
   color: var(--ac-label-secondary);
 }
 
