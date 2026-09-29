@@ -54,27 +54,63 @@ class ToolSearchTool(Tool):
         if query.startswith("select:"):
             names = [n.strip() for n in query[len("select:"):].split(",") if n.strip()]
             schemas = self._registry.find_deferred_by_names(names, self._protocol)
+            skipped_builtin = [
+                name
+                for name in names
+                if (tool := self._registry.get(name)) is not None
+                and not getattr(tool, "should_defer", False)
+            ]
         else:
             schemas = self._registry.search_deferred(
                 query, max_results, self._protocol
             )
+            skipped_builtin = self._match_builtin_tools(query)
 
         if not schemas:
             deferred_names = self._registry.get_deferred_tool_names()
-            return ToolResult(
-                output=(
-                    f'No matching deferred tools for "{query}".\n'
-                    f"Available: {', '.join(deferred_names)}"
+            lines = [f'No matching deferred tools for "{query}".']
+            if deferred_names:
+                lines.append(f"Deferred tools available: {', '.join(deferred_names)}")
+            else:
+                lines.append("No deferred tools are registered at all.")
+            if skipped_builtin:
+                lines.append(
+                    "These builtin tools already match and are ALWAYS visible "
+                    "(no ToolSearch needed): " + ", ".join(skipped_builtin)
                 )
+            lines.append(
+                "Note: ToolSearch only covers deferred (MCP) tools. "
+                "Builtin tools like Bash/ReadFile/Agent are always in your tool list."
             )
+            return ToolResult(output="\n".join(lines))
 
         for s in schemas:
             if "name" in s:
                 self._registry.mark_discovered(s["name"])
 
+        note = (
+            "\n\nAlso matched always-visible builtin tools (no loading needed): "
+            + ", ".join(skipped_builtin)
+            if skipped_builtin
+            else ""
+        )
         return ToolResult(
             output=(
                 f"Found {len(schemas)} tool(s). Their full schemas are now loaded:\n\n"
-                f"{json.dumps(schemas, indent=2, ensure_ascii=False)}"
+                f"{json.dumps(schemas, indent=2, ensure_ascii=False)}{note}"
             )
         )
+
+    def _match_builtin_tools(self, query: str) -> list[str]:
+        """关键词命中的"始终可见"内建工具名(防止模型误判内建工具不存在)。"""
+        words = [w for w in query.lower().split() if w]
+        if not words:
+            return []
+        hits: list[str] = []
+        for name, tool in getattr(self._registry, "_tools", {}).items():
+            if getattr(tool, "should_defer", False):
+                continue
+            name_lower = name.lower()
+            if any(word in name_lower or name_lower in word for word in words):
+                hits.append(name)
+        return hits

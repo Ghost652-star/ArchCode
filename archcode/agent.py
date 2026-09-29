@@ -22,7 +22,6 @@ from archcode.llm.events import (
     ToolCallDelta,
     ToolCallStart,
 )
-from archcode.llm.serializer import build_anthropic_tools, build_openai_tools
 from archcode.permissions import Decision, PermissionChecker, PermissionMode
 from archcode.permissions.checker import extract_content
 from archcode.hooks.models import HookContext, ToolRejectedError
@@ -513,17 +512,15 @@ class Agent:
     def _tool_schemas(self) -> list[dict[str, Any]] | None:
         """根据 client protocol 返回对应格式的工具 schema 列表。
 
-        有激活 Skill 声明 allowedTools 时做 schema 收窄(建议性层,0.6):
-        集合外工具对模型不可见;强制力由 _execute_tool 的守卫保证。
-        系统工具(LoadSkill 等)豁免,始终可见。
+        延迟工具(should_defer)未发现时不发 schema——由 ToolSearch 按需加载,
+        system-reminder 每轮提示名字清单。有激活 Skill 声明 allowedTools 时
+        再收窄(建议性层,0.6):集合外工具对模型不可见;强制力由 _execute_tool
+        的守卫保证。系统工具(LoadSkill 等)豁免,始终可见。
         """
         if self._tool_registry is None:
             return None
         protocol = self._client.protocol
-        if protocol in ("openai", "openai-compat"):
-            schemas = build_openai_tools(self._tool_registry.list_tools())
-        else:
-            schemas = build_anthropic_tools(self._tool_registry.list_tools())
+        schemas = self._tool_registry.get_all_schemas(protocol)
         effective = self._effective_allowed_tools()
         if effective is not None and schemas:
             schemas = [
