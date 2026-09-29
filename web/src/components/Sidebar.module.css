@@ -154,6 +154,8 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  font-size: 15px;
+  font-weight: 500;
 }
 
 .wsLive {
@@ -245,8 +247,8 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: var(--ac-font-size-secondary);
-  color: var(--ac-label-secondary);
+  font-size: 15px;
+  color: var(--ac-label-primary);
 }
 
 /* ── 会话内容匹配(搜索下拉结果)────────────────────────── */

@@ -75,6 +75,7 @@ export default function SettingsPanel({ onClose }: { onClose: () => void }) {
   useEffect(() => {
     api.skills().then(setSkills).catch(() => {})
     api.agents().then(setAgents).catch(() => {})
+    api.state().then((s) => setMode(s.permission_mode ?? 'default')).catch(() => {})
   }, [])
 
   const save = useCallback(
@@ -140,6 +141,7 @@ export default function SettingsPanel({ onClose }: { onClose: () => void }) {
               <ProviderSection
                 items={providers}
                 readOnlyItems={(userData['providers'] as Array<Record<string, unknown>>) ?? []}
+                scope={scope}
                 onSave={(items) => save('providers', items)}
               />
             )}
@@ -314,22 +316,47 @@ export default function SettingsPanel({ onClose }: { onClose: () => void }) {
             })()}
             {section === 'permissions' && (
               <div>
-                <div className={styles.modeRow}>
-                  {['default', 'accept', 'bypass'].map((m) => (
-                    <button
-                      key={m}
-                      className={`${styles.modeChip} ${mode === m ? styles.modeChipActive : ''}`}
-                      onClick={async () => {
-                        setMode(m)
-                        await api.setPermissionMode(m)
-                      }}
-                    >
-                      {m}
-                    </button>
-                  ))}
+                <div className={styles.formCard}>
+                  <div className={styles.permList}>
+                    {(
+                      [
+                        ['default', '默认', '写操作需要逐次确认,读取不受限'],
+                        ['accept', '自动接受', '写操作自动通过,不再逐次确认(谨慎使用)'],
+                        ['bypass', '全部放行', '不做任何确认,风险自担'],
+                      ] as Array<[string, string, string]>
+                    ).map(([m, title, desc]) => (
+                      <button
+                        key={m}
+                        type="button"
+                        className={`${styles.permRow} ${mode === m ? styles.permRowActive : ''}`}
+                        onClick={async () => {
+                          setMode(m)
+                          await api.setPermissionMode(m)
+                        }}
+                      >
+                        <span className={styles.permRadio} data-on={mode === m || undefined} />
+                        <div className={styles.rowMain}>
+                          <div className={styles.rowTitle}>
+                            {m} · {title}
+                          </div>
+                          <div className={styles.rowDesc}>{desc}</div>
+                        </div>
+                        {mode === m && (
+                          <svg width={15} height={15} viewBox="0 0 16 16" fill="none" aria-hidden>
+                            <path
+                              d="M3 8.5l3.5 3.5L13 5"
+                              stroke="var(--ac-brand-500)"
+                              strokeWidth="1.8"
+                              strokeLinecap="round"
+                            />
+                          </svg>
+                        )}
+                      </button>
+                    ))}
+                  </div>
                 </div>
                 <div className={styles.hint}>
-                  default:写操作需确认;accept:自动接受;bypass:全部放行。即时生效。
+                  切换即时生效,composer 右下角的模式标签与此处联动。
                 </div>
               </div>
             )}
@@ -358,21 +385,214 @@ export default function SettingsPanel({ onClose }: { onClose: () => void }) {
 }
 
 /** Provider 行列表 + 添加表单(§9.1 ModelsSection 的极简版)。 */
+/** 供应商管理:列表 ↔ 编辑表单(字段对应 ProviderConfig,重启生效)。 */
 function ProviderSection({
   items,
   readOnlyItems,
+  scope,
   onSave,
 }: {
   items: Array<Record<string, unknown>>
   readOnlyItems: Array<Record<string, unknown>>
+  scope: string
   onSave: (items: unknown[]) => void
 }) {
-  const [form, setForm] = useState({ name: '', protocol: 'openai-compat', base_url: '', model: '', api_key: '' })
-  const set = (k: string, v: string) => setForm((f) => ({ ...f, [k]: v }))
+  const [editing, setEditing] = useState<number | 'new' | null>(null)
+  const [form, setForm] = useState({
+    name: '',
+    protocol: 'openai-compat',
+    base_url: '',
+    model: '',
+    api_key: '',
+    max_output_tokens: '16384',
+    context_window: '0',
+    thinking: false,
+  })
+  const set = (k: string, v: string | boolean) => setForm((f) => ({ ...f, [k]: v }))
+
+  const startEdit = (idx: number | 'new') => {
+    setEditing(idx)
+    if (idx === 'new') {
+      setForm({
+        name: '',
+        protocol: 'openai-compat',
+        base_url: '',
+        model: '',
+        api_key: '',
+        max_output_tokens: '16384',
+        context_window: '0',
+        thinking: false,
+      })
+      return
+    }
+    const p = items[idx] as Record<string, unknown>
+    setForm({
+      name: String(p['name'] ?? ''),
+      protocol: String(p['protocol'] ?? 'openai-compat'),
+      base_url: String(p['base_url'] ?? ''),
+      model: String(p['model'] ?? ''),
+      api_key: String(p['api_key'] ?? ''),
+      max_output_tokens: String(p['max_output_tokens'] ?? 16384),
+      context_window: String(p['context_window'] ?? 0),
+      thinking: Boolean(p['thinking']),
+    })
+  }
+
+  if (editing !== null) {
+    const isNew = editing === 'new'
+    const canSave =
+      form.name.trim() !== '' && form.base_url.trim() !== '' && form.model.trim() !== ''
+    const save = () => {
+      const entry: Record<string, unknown> = {
+        ...(isNew ? {} : (items[editing] as Record<string, unknown>)),
+        name: form.name.trim(),
+        protocol: form.protocol,
+        base_url: form.base_url.trim(),
+        model: form.model.trim(),
+        api_key: form.api_key.trim(),
+        max_output_tokens: parseInt(form.max_output_tokens, 10) || 16384,
+        context_window: parseInt(form.context_window, 10) || 0,
+        thinking: form.thinking,
+      }
+      onSave(isNew ? [...items, entry] : items.map((p, j) => (j === editing ? entry : p)))
+      setEditing(null)
+    }
+    return (
+      <div>
+        <button type="button" className={styles.backBtn} onClick={() => setEditing(null)}>
+          ‹ 返回列表
+        </button>
+        <div className={styles.detailTitle}>
+          {isNew ? '添加供应商' : `编辑 · ${form.name}`}
+        </div>
+        <div className={styles.formCard}>
+          <div className={styles.formScope}>作用域: {scope === 'project' ? '项目' : '用户'}</div>
+          <div className={styles.fieldRow}>
+            <div>
+              <label className={styles.fieldLabel}>名称</label>
+              <input
+                className={styles.input}
+                placeholder="如 deepseek"
+                value={form.name}
+                disabled={!isNew}
+                onChange={(e) => set('name', e.target.value)}
+              />
+            </div>
+            <div>
+              <label className={styles.fieldLabel}>协议</label>
+              <select
+                className={styles.input}
+                value={form.protocol}
+                onChange={(e) => set('protocol', e.target.value)}
+              >
+                <option value="openai-compat">openai-compat</option>
+                <option value="openai">openai</option>
+                <option value="anthropic">anthropic</option>
+              </select>
+            </div>
+          </div>
+          <label className={styles.fieldLabel}>base_url</label>
+          <input
+            className={styles.input}
+            placeholder="如 https://api.deepseek.com"
+            value={form.base_url}
+            onChange={(e) => set('base_url', e.target.value)}
+          />
+          <label className={styles.fieldLabel}>模型名</label>
+          <input
+            className={styles.input}
+            placeholder="如 deepseek-v4-flash"
+            value={form.model}
+            onChange={(e) => set('model', e.target.value)}
+          />
+          <label className={styles.fieldLabel}>API Key</label>
+          <input
+            className={styles.input}
+            type="password"
+            placeholder="留空则读取环境变量"
+            value={form.api_key}
+            onChange={(e) => set('api_key', e.target.value)}
+          />
+          <div className={styles.fieldRow}>
+            <div>
+              <label className={styles.fieldLabel}>最大输出 tokens</label>
+              <input
+                className={styles.input}
+                type="number"
+                min={1024}
+                value={form.max_output_tokens}
+                onChange={(e) => set('max_output_tokens', e.target.value)}
+              />
+            </div>
+            <div>
+              <label className={styles.fieldLabel}>上下文窗口(0 = 默认 128k)</label>
+              <input
+                className={styles.input}
+                type="number"
+                min={0}
+                value={form.context_window}
+                onChange={(e) => set('context_window', e.target.value)}
+              />
+            </div>
+          </div>
+          <div className={styles.toggleRow}>
+            <span className={styles.toggleLabel}>开启思考模式(thinking,模型需支持)</span>
+            <input
+              type="checkbox"
+              checked={form.thinking}
+              onChange={(e) => set('thinking', e.target.checked)}
+            />
+          </div>
+          <div className={styles.editActions}>
+            {!isNew && (
+              <button
+                type="button"
+                className={styles.deleteBtn}
+                onClick={() => {
+                  onSave(items.filter((_, j) => j !== editing))
+                  setEditing(null)
+                }}
+              >
+                删除
+              </button>
+            )}
+            <span className={styles.spring} />
+            <button type="button" className={styles.cancelBtn} onClick={() => setEditing(null)}>
+              取消
+            </button>
+            <button
+              type="button"
+              className={styles.addBtn}
+              disabled={!canSave}
+              onClick={save}
+            >
+              保存
+            </button>
+          </div>
+        </div>
+        <div className={styles.hint}>
+          保存写入当前作用域 config.yaml 的 providers 列表;重启 ArchCode 后生效。
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div>
       {items.length === 0 && readOnlyItems.length > 0 && (
         <div className={styles.hint}>当前作用域未配置,以下为生效的 用户级 配置(只读,编辑请切换作用域)。</div>
+      )}
+      <div className={styles.listHeadRow}>
+        <span className={styles.listHead}>当前作用域已配置 {items.length} 个</span>
+        <button type="button" className={styles.addBtn} onClick={() => startEdit('new')}>
+          + 添加供应商
+        </button>
+      </div>
+      {items.length === 0 && readOnlyItems.length === 0 && (
+        <div className={styles.emptyState}>
+          <div className={styles.emptyTitle}>还没有配置供应商</div>
+          <div className={styles.emptyDesc}>填写名称、协议、base_url 和模型名,保存后重启生效。</div>
+        </div>
       )}
       {readOnlyItems.map((p, i) => (
         <div key={`ro-${i}`} className={styles.row}>
@@ -389,7 +609,12 @@ function ProviderSection({
         </div>
       ))}
       {items.map((p, i) => (
-        <div key={i} className={styles.row}>
+        <button
+          key={i}
+          type="button"
+          className={`${styles.row} ${styles.rowClickable}`}
+          onClick={() => startEdit(i)}
+        >
           <div className={styles.rowMain}>
             <div className={styles.rowTitle}>
               {String(p['name'] ?? '')} · {String(p['model'] ?? '')}
@@ -399,35 +624,12 @@ function ProviderSection({
             </div>
           </div>
           <span className={styles.tag}>{p['api_key'] ? 'key ✓' : 'key 缺失'}</span>
-          <button
-            className={styles.deleteBtn}
-            onClick={() => onSave(items.filter((_, j) => j !== i))}
-          >
-            删除
-          </button>
-        </div>
-      ))}
-      <div className={styles.addForm}>
-        <input className={styles.input} placeholder="名称" value={form.name} onChange={(e) => set('name', e.target.value)} />
-        <select className={styles.input} value={form.protocol} onChange={(e) => set('protocol', e.target.value)}>
-          <option value="openai-compat">openai-compat</option>
-          <option value="openai">openai</option>
-          <option value="anthropic">anthropic</option>
-        </select>
-        <input className={styles.input} placeholder="base_url" value={form.base_url} onChange={(e) => set('base_url', e.target.value)} />
-        <input className={styles.input} placeholder="模型名" value={form.model} onChange={(e) => set('model', e.target.value)} />
-        <input className={styles.input} placeholder="API Key" type="password" value={form.api_key} onChange={(e) => set('api_key', e.target.value)} />
-        <button
-          className={styles.addBtn}
-          disabled={!form.name || !form.base_url || !form.model}
-          onClick={() => {
-            onSave([...items, { ...form, max_output_tokens: 16384 }])
-            setForm({ name: '', protocol: 'openai-compat', base_url: '', model: '', api_key: '' })
-          }}
-        >
-          添加
+          <span className={styles.rowChevron}>›</span>
         </button>
-      </div>
+      ))}
+      {items.length > 0 && (
+        <div className={styles.hint}>点击条目编辑;变更需重启 ArchCode 生效。</div>
+      )}
     </div>
   )
 }

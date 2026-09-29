@@ -477,3 +477,48 @@
   text-align: center;
   max-width: 420px;
 }
+
+/* ── 权限模式选择(ZCode 式:整行可选卡片 + 单选点)────────────── */
+.permList {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.permRow {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 13px 16px;
+  border: 0.5px solid var(--ac-border-l2);
+  border-radius: 12px;
+  background: none;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color var(--ac-dur-fast) var(--ac-ease), background var(--ac-dur-fast) var(--ac-ease);
+}
+
+.permRow:hover {
+  background: var(--ac-bg-hover);
+}
+
+.permRowActive {
+  border-color: var(--ac-brand-400);
+  background: color-mix(in srgb, var(--ac-brand-50) 55%, transparent);
+}
+
+.permRadio {
+  flex: none;
+  width: 15px;
+  height: 15px;
+  border-radius: 50%;
+  border: 1.5px solid var(--ac-border-l3);
+  transition: all var(--ac-dur-fast) var(--ac-ease);
+}
+
+.permRadio[data-on] {
+  border-color: var(--ac-brand-500);
+  background: var(--ac-brand-500);
+  box-shadow: inset 0 0 0 3px var(--ac-bg-menu);
+}
