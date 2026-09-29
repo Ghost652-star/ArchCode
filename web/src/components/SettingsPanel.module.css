@@ -164,6 +164,14 @@
   color: var(--ac-label-tertiary);
 }
 
+/* 子 agent 定义的元信息标签行 */
+.agentMeta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 5px;
+}
+
 .deleteBtn {
   flex: none;
   padding: 4px 10px;

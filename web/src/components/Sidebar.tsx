@@ -346,7 +346,6 @@ export default function Sidebar({
         <button className={styles.settingsBtn} onClick={onOpenSettings}>
           ⚙ 设置
         </button>
-        <div className={styles.workDir}>{serverDir || ''}</div>
       </div>
     </div>
   )

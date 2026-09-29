@@ -680,6 +680,30 @@ def api_tasks():
     return {"tasks": tasks}
 
 
+@app.get("/api/agents")
+def api_agents():
+    """子 agent 定义清单(AgentLoader 三层合并后的生效集合:project > user > builtin)。"""
+    assert STATE is not None
+    loader = getattr(STATE.agent, "_agent_loader", None)
+    if loader is None:
+        return []
+    return [
+        {
+            "agent_type": d.agent_type,
+            "when_to_use": d.when_to_use,
+            "source": d.source,
+            "path": str(d.file_path) if d.file_path else "",
+            "model": d.model,
+            "max_turns": d.max_turns,
+            "permission_mode": d.permission_mode,
+            "background": d.background,
+            "tools": d.tools,
+            "disallowed_tools": d.disallowed_tools,
+        }
+        for d in loader.manifests().values()
+    ]
+
+
 @app.get("/api/skills")
 def api_skills():
     assert STATE is not None

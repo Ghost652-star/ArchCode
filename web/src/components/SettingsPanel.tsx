@@ -3,18 +3,32 @@ import { api } from '../api'
 import styles from './SettingsPanel.module.css'
 
 type Scope = 'user' | 'project'
-type Section = 'models' | 'mcp' | 'skills' | 'hooks' | 'permissions' | 'appearance'
+type Section = 'models' | 'mcp' | 'skills' | 'agents' | 'hooks' | 'permissions' | 'appearance'
 
 const SECTIONS: Array<{ id: Section; label: string }> = [
   { id: 'models', label: '模型' },
   { id: 'mcp', label: 'MCP 服务器' },
   { id: 'skills', label: 'Skills' },
+  { id: 'agents', label: '子 Agent' },
   { id: 'hooks', label: 'Hooks' },
   { id: 'permissions', label: '权限' },
   { id: 'appearance', label: '外观' },
 ]
 
-/** 设置面板:800×560 Modal,作用域选择器 + 六节(§9.2)。 */
+export interface AgentDefInfo {
+  agent_type: string
+  when_to_use: string
+  source: string
+  path: string
+  model: string
+  max_turns: number
+  permission_mode: string
+  background: boolean
+  tools: string[]
+  disallowed_tools: string[]
+}
+
+/** 设置面板:800×560 Modal,作用域选择器 + 七节(§9.2)。 */
 export default function SettingsPanel({ onClose }: { onClose: () => void }) {
   const [scope, setScope] = useState<Scope>('project')
   const [section, setSection] = useState<Section>('models')
@@ -25,6 +39,7 @@ export default function SettingsPanel({ onClose }: { onClose: () => void }) {
   const [skills, setSkills] = useState<
     Array<{ name: string; description: string; source: string; path: string }>
   >([])
+  const [agents, setAgents] = useState<AgentDefInfo[]>([])
   const [mode, setMode] = useState('default')
   const [theme, setTheme] = useState(document.documentElement.dataset.theme ?? 'light')
 
@@ -53,6 +68,7 @@ export default function SettingsPanel({ onClose }: { onClose: () => void }) {
 
   useEffect(() => {
     api.skills().then(setSkills).catch(() => {})
+    api.agents().then(setAgents).catch(() => {})
   }, [])
 
   const save = useCallback(
@@ -135,6 +151,41 @@ export default function SettingsPanel({ onClose }: { onClose: () => void }) {
                   </div>
                 ))}
                 <div className={styles.hint}>编辑技能请直接修改 SKILL.md 文件。</div>
+              </div>
+            )}
+            {section === 'agents' && (
+              <div>
+                {agents.length === 0 && (
+                  <div className={styles.hint}>未加载任何子 agent 定义(内置定义缺失?)</div>
+                )}
+                {agents.map((a) => (
+                  <div key={a.agent_type} className={styles.row}>
+                    <div className={styles.rowMain}>
+                      <div className={styles.rowTitle}>{a.agent_type}</div>
+                      <div className={styles.rowDesc}>{a.when_to_use}</div>
+                      <div className={styles.agentMeta}>
+                        <span className={styles.tag}>{a.source}</span>
+                        <span className={styles.tag}>
+                          {a.background ? '后台' : '前台'}
+                        </span>
+                        <span className={styles.tag}>{a.permission_mode}</span>
+                        <span className={styles.tag}>
+                          {a.model && a.model !== 'inherit' ? a.model : '沿用主模型'}
+                        </span>
+                        <span className={styles.tag}>≤{a.max_turns} 轮</span>
+                        {a.tools.length > 0 && (
+                          <span className={styles.tag}>工具 {a.tools.length} 项</span>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+                <div className={styles.hint}>
+                  添加子 agent:在 项目 `.archcode/agents/&lt;名字&gt;.md`(或用户级同名目录)创建
+                  Markdown 定义——frontmatter 写 name / description / tools / maxTurns /
+                  permissionMode / background,正文即该子 agent 的 system prompt;
+                  新任务边界自动重载生效。
+                </div>
               </div>
             )}
             {section === 'hooks' && (

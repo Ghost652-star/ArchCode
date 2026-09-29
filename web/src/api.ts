@@ -64,6 +64,22 @@ export const api = {
       Array<{ name: string; description: string; source: string; path: string; is_directory: boolean }>
     >('/api/skills'),
 
+  agents: () =>
+    jsonFetch<
+      Array<{
+        agent_type: string
+        when_to_use: string
+        source: string
+        path: string
+        model: string
+        max_turns: number
+        permission_mode: string
+        background: boolean
+        tools: string[]
+        disallowed_tools: string[]
+      }>
+    >('/api/agents'),
+
   answerPermission: (requestId: string, body: { allowed?: boolean; answer?: string }) =>
     jsonFetch<{ ok: boolean }>(`/api/permission/${requestId}`, {
       method: 'POST',
