@@ -109,12 +109,19 @@ export interface FileContent {
   binary: boolean
 }
 
-/** 上下文占用(§13-A4):percent 为 0~1;breakdown 为启发式分段估算。 */
+/** 上下文占用(§13-A4):percent 为 0~1;breakdown 为启发式分段估算(token 数)。 */
 export interface ContextInfo {
   total_tokens: number
   percent: number
   window: number
-  breakdown?: { system: number; tools: number; messages: number }
+  breakdown?: {
+    messages: number
+    system: number
+    tools_builtin: number
+    tools_mcp: number
+    skills: number
+    memory: number
+  }
 }
 
 /** 会话任务清单(TodoWrite 工具维护,面板可视化)。 */

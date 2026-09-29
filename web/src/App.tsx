@@ -620,6 +620,7 @@ export default function App() {
               running={running}
               disabled={!state || !isHome}
               usage={usage}
+              context={context}
               permissionMode={state?.permission_mode ?? 'default'}
               planMode={state?.plan_mode ?? false}
               modelName={state?.model ?? ''}
@@ -637,7 +638,7 @@ export default function App() {
             />
           </div>
         </div>
-        <StatusBar model={state?.model ?? ''} running={running} context={context} />
+        <StatusBar model={state?.model ?? ''} running={running} />
       </div>
       {filesOpen && serverDir && (
         <div className={styles.filesCol}>

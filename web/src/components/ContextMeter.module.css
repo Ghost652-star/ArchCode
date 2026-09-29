@@ -1,0 +1,139 @@
+/* 上下文占用圈 + 悬停标签卡(composer 右下,与用量 chip 同区)。 */
+
+.root {
+  position: relative;
+  display: inline-flex;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: none;
+  background: none;
+  padding: 4px 8px;
+  border-radius: 10px;
+  color: var(--ac-label-tertiary);
+  font-size: var(--ac-font-size-caption);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  transition: background var(--ac-dur-fast) var(--ac-ease), color var(--ac-dur-fast) var(--ac-ease);
+}
+
+.chip:hover,
+.chip[data-open] {
+  background: var(--ac-bg-hover);
+  color: var(--ac-label-secondary);
+}
+
+.chip[data-warn] {
+  color: var(--ac-state-warn);
+}
+
+.chipText {
+  line-height: 1;
+}
+
+/* ── 标签卡 ── */
+.card {
+  position: absolute;
+  bottom: calc(100% + 10px);
+  right: 0;
+  z-index: 50;
+  width: 300px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: var(--ac-bg-menu);
+  border: 0.5px solid var(--ac-border-l2);
+  box-shadow: 0 8px 28px rgb(0 0 0 / 16%);
+  cursor: default;
+}
+
+.cardHead {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: var(--ac-font-size-secondary);
+  font-weight: 600;
+  color: var(--ac-label-primary);
+}
+
+.cardHeadNum {
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+  font-size: var(--ac-font-size-caption);
+  color: var(--ac-label-secondary);
+}
+
+.bar {
+  margin: 10px 0 12px;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--ac-border-l2);
+  overflow: hidden;
+}
+
+.barFill {
+  height: 100%;
+  border-radius: 2px;
+  background: var(--ac-brand-400);
+  transition: width var(--ac-dur-fast) var(--ac-ease);
+}
+
+.barFill[data-warn] {
+  background: var(--ac-state-warn);
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3.5px 0;
+  font-size: var(--ac-font-size-secondary);
+  color: var(--ac-label-secondary);
+}
+
+.dot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 4px;
+}
+
+.label {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.value {
+  flex: none;
+  font-variant-numeric: tabular-nums;
+  color: var(--ac-label-primary);
+}
+
+.valueAbs {
+  display: inline-block;
+  min-width: 52px;
+  margin-left: 10px;
+  text-align: right;
+  font-size: var(--ac-font-size-caption);
+  color: var(--ac-label-caption);
+}
+
+.foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 8px;
+  padding-top: 10px;
+  border-top: 0.5px solid var(--ac-border-l2);
+  font-size: var(--ac-font-size-secondary);
+  color: var(--ac-label-secondary);
+}
+
+.footNum {
+  font-variant-numeric: tabular-nums;
+  color: var(--ac-label-primary);
+  font-weight: 500;
+}

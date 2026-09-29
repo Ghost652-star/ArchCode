@@ -516,8 +516,9 @@ async def api_permission(request_id: str, body: dict):
 def api_context():
     """上下文占用(§13-A4):percent = 当前 token / 窗口(provider 可配,缺省 128k)。
 
-    breakdown 为启发式分段估算(system prompt / 工具 schema / 消息),
-    供前端占用条做三段着色;数字是估算值,与 total 不强求精确闭合。
+    breakdown 为启发式分段估算,供 composer 旁的占用卡做分类着色:
+    系统提示词 / 内建工具 schema / MCP(延迟)工具 schema / 激活 Skill 钉住段 /
+    记忆索引段 / 消息(= 总量减去其余,保证闭合)。数字是估算值。
     """
     assert STATE is not None
     total = STATE.conversation.current_tokens()
@@ -525,22 +526,41 @@ def api_context():
     window = int(getattr(provider, "context_window", 0) or 0) or 131072
     percent = min(1.0, total / window) if window > 0 else 0.0
 
-    system_prompt = getattr(STATE.agent, "_system_prompt", "") or ""
-    system = int(len(system_prompt) / 3.5)
+    def _est(text: str | None) -> int:
+        return int(len(text or "") / 3.5)
+
+    system = _est(getattr(STATE.agent, "_system_prompt", ""))
+    tools_builtin = tools_mcp = 0
     registry = getattr(STATE.agent, "_tool_registry", None)
-    tools = 0
     if registry is not None:
         for tool in getattr(registry, "_tools", {}).values():
             try:
-                tools += int(len(json.dumps(tool.get_schema(), ensure_ascii=False)) / 3.5)
+                est = _est(json.dumps(tool.get_schema(), ensure_ascii=False))
             except Exception:
                 continue
-    messages = max(total - system - tools, 0)
+            if getattr(tool, "should_defer", False):
+                tools_mcp += est
+            else:
+                tools_builtin += est
+    conversation = STATE.conversation
+    skills = _est(getattr(conversation, "_active_skills_message", None) and
+                  conversation._active_skills_message.content)
+    memory = _est(getattr(conversation, "_memory_context_message", None) and
+                  conversation._memory_context_message.content)
+    fixed = system + tools_builtin + tools_mcp + skills + memory
+    messages = max(total - fixed, 0)
     return {
         "total_tokens": total,
         "percent": percent,
         "window": window,
-        "breakdown": {"system": system, "tools": tools, "messages": messages},
+        "breakdown": {
+            "messages": messages,
+            "system": system,
+            "tools_builtin": tools_builtin,
+            "tools_mcp": tools_mcp,
+            "skills": skills,
+            "memory": memory,
+        },
     }
 
 

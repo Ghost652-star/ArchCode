@@ -1,13 +1,15 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { api } from '../api'
 import { fmtInt, fmtPercent, fmtTokens } from '../format'
-import type { UsageTotal } from '../types'
+import type { ContextInfo, UsageTotal } from '../types'
+import ContextMeter from './ContextMeter'
 import styles from './Composer.module.css'
 
 interface Props {
   running: boolean
   disabled: boolean
   usage: UsageTotal | null
+  context: ContextInfo | null
   permissionMode: string
   planMode: boolean
   modelName: string
@@ -32,6 +34,7 @@ export default function Composer({
   running,
   disabled,
   usage,
+  context,
   permissionMode,
   planMode,
   modelName,
@@ -310,6 +313,7 @@ export default function Composer({
           </div>
         </div>
         <div className={styles.trailing}>
+          <ContextMeter context={context} cacheHit={usage?.cache_hit ?? null} />
           <div className={styles.menuAnchor}>
             {usage && usage.total_tokens > 0 && (
               <button
