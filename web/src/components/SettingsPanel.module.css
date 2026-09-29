@@ -193,15 +193,18 @@
 }
 
 .input {
-  padding: 7px 10px;
+  padding: 9px 12px;
   border-radius: 10px;
   border: 0.5px solid var(--ac-border-l2);
   background: var(--ac-bg-layer-2);
   font-size: var(--ac-font-size-secondary);
+  font-family: inherit;
+  color: var(--ac-label-primary);
 }
 
 .input:focus {
   border-color: var(--ac-border-l3);
+  outline: none;
 }
 
 .addBtn {
@@ -388,4 +391,89 @@
 
 .cancelBtn:hover {
   background: var(--ac-bg-hover);
+}
+
+/* ── 表单卡(新建/编辑视图,ZCode 式:作用域角标 + 字段分组)────── */
+.formCard {
+  position: relative;
+  border: 0.5px solid var(--ac-border-l2);
+  border-radius: 14px;
+  padding: 40px 18px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.formScope {
+  position: absolute;
+  top: 14px;
+  right: 16px;
+  font-size: var(--ac-font-size-caption);
+  color: var(--ac-label-caption);
+}
+
+/* 同行字段组(名称/预算/模式 等) */
+.fieldRow {
+  display: grid;
+  grid-template-columns: 1fr 110px 150px;
+  gap: 12px;
+}
+
+/* 双列字段组(工具白名单/禁用工具) */
+.fieldRow2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+/* 开关行(hook 的 reject/once/async) */
+.toggleRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 5px 0;
+  border-bottom: 0.5px solid var(--ac-border-l1);
+}
+
+.toggleLabel {
+  font-size: var(--ac-font-size-secondary);
+  color: var(--ac-label-secondary);
+}
+
+.toggleRow input[type='checkbox'] {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--ac-brand-500);
+}
+
+.errorText {
+  padding: 6px 0;
+  font-size: var(--ac-font-size-secondary);
+  color: var(--ac-state-error);
+  overflow-wrap: anywhere;
+}
+
+/* 空状态(ZCode 式:虚线框 + 居中引导) */
+.emptyState {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 40px 20px;
+  border: 1.5px dashed var(--ac-border-l2);
+  border-radius: 14px;
+}
+
+.emptyTitle {
+  font-size: var(--ac-font-size);
+  font-weight: 600;
+  color: var(--ac-label-primary);
+}
+
+.emptyDesc {
+  font-size: var(--ac-font-size-secondary);
+  color: var(--ac-label-caption);
+  text-align: center;
+  max-width: 420px;
 }

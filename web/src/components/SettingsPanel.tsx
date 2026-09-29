@@ -26,6 +26,7 @@ export interface AgentDefInfo {
   background: boolean
   tools: string[]
   disallowed_tools: string[]
+  system_prompt: string
 }
 
 /** 设置面板:800×560 Modal,作用域选择器 + 七节(§9.2)。 */
@@ -40,9 +41,11 @@ export default function SettingsPanel({ onClose }: { onClose: () => void }) {
     Array<{ name: string; description: string; source: string; path: string; is_directory: boolean }>
   >([])
   const [agents, setAgents] = useState<AgentDefInfo[]>([])
-  // 主从视图:列表 → 详情(详情态存主键,切区块即清空)
+  // 主从视图:列表 → 详情/编辑(详情态存主键,切区块即清空)
   const [skillDetail, setSkillDetail] = useState<string | null>(null)
   const [agentDetail, setAgentDetail] = useState<string | null>(null)
+  const [agentEdit, setAgentEdit] = useState<string | 'new' | null>(null)
+  const [hookEdit, setHookEdit] = useState<number | 'new' | null>(null)
   const [mode, setMode] = useState('default')
   const [theme, setTheme] = useState(document.documentElement.dataset.theme ?? 'light')
 
@@ -122,6 +125,8 @@ export default function SettingsPanel({ onClose }: { onClose: () => void }) {
                   setSection(s.id)
                   setSkillDetail(null)
                   setAgentDetail(null)
+                  setAgentEdit(null)
+                  setHookEdit(null)
                 }}
               >
                 {s.label}
@@ -174,60 +179,139 @@ export default function SettingsPanel({ onClose }: { onClose: () => void }) {
               )
             })()}
             {section === 'agents' && (() => {
+              if (agentEdit !== null) {
+                const editing = agentEdit === 'new' ? null : agents.find((a) => a.agent_type === agentEdit) ?? null
+                return (
+                  <AgentEditForm
+                    initial={editing}
+                    scope={scope}
+                    onBack={() => setAgentEdit(null)}
+                    onSaved={(msg) => {
+                      api.agents().then(setAgents).catch(() => {})
+                      setNotice(msg)
+                      window.setTimeout(() => setNotice(''), 4000)
+                      setAgentEdit(null)
+                    }}
+                  />
+                )
+              }
               const detail = agents.find((a) => a.agent_type === agentDetail)
               if (detail) return <AgentDetail agent={detail} onBack={() => setAgentDetail(null)} />
               return (
                 <div>
-                  {agents.length === 0 && (
-                    <div className={styles.hint}>未加载任何子 agent 定义(内置定义缺失?)</div>
-                  )}
-                  <div className={styles.listHead}>生效定义 {agents.length} 个</div>
-                  {agents.map((a) => (
-                    <button
-                      key={a.agent_type}
-                      type="button"
-                      className={`${styles.row} ${styles.rowClickable}`}
-                      onClick={() => setAgentDetail(a.agent_type)}
-                    >
-                      <div className={styles.rowMain}>
-                        <div className={styles.rowTitle}>{a.agent_type}</div>
-                        <div className={styles.rowDesc}>{a.when_to_use}</div>
+                  {agents.length === 0 ? (
+                    <div className={styles.emptyState}>
+                      <div className={styles.emptyTitle}>没有找到子 agent 定义</div>
+                      <div className={styles.emptyDesc}>
+                        填写名称、工具白名单和系统提示词,保存后写入定义文件。
                       </div>
-                      <span className={styles.tag}>{sourceLabel(a.source)}</span>
-                      <span className={styles.tag}>{a.background ? '后台' : '前台'}</span>
-                      <span className={styles.rowChevron}>›</span>
-                    </button>
-                  ))}
+                      <button type="button" className={styles.addBtn} onClick={() => setAgentEdit('new')}>
+                        + 新建
+                      </button>
+                    </div>
+                  ) : (
+                    <>
+                      <div className={styles.listHeadRow}>
+                        <span className={styles.listHead}>生效定义 {agents.length} 个</span>
+                        <button type="button" className={styles.addBtn} onClick={() => setAgentEdit('new')}>
+                          + 新建
+                        </button>
+                      </div>
+                      {agents.map((a) => (
+                        <button
+                          key={a.agent_type}
+                          type="button"
+                          className={`${styles.row} ${styles.rowClickable}`}
+                          onClick={() => {
+                            if (a.source === 'builtin') setAgentDetail(a.agent_type)
+                            else setAgentEdit(a.agent_type)
+                          }}
+                        >
+                          <div className={styles.rowMain}>
+                            <div className={styles.rowTitle}>{a.agent_type}</div>
+                            <div className={styles.rowDesc}>{a.when_to_use}</div>
+                          </div>
+                          <span className={styles.tag}>{sourceLabel(a.source)}</span>
+                          <span className={styles.tag}>{a.background ? '后台' : '前台'}</span>
+                          <span className={styles.rowChevron}>›</span>
+                        </button>
+                      ))}
+                    </>
+                  )}
                   <div className={styles.hint}>
-                    添加子 agent:在 项目 `.archcode/agents/&lt;名字&gt;.md`(或用户级同名目录)创建
-                    Markdown 定义——frontmatter 写 name / description / tools / maxTurns /
-                    permissionMode / background,正文即该子 agent 的 system prompt;
-                    新任务边界自动重载生效。
+                    点击可编辑(内置定义只读);新建写入 当前作用域 的 `.archcode/agents/&lt;名字&gt;.md`,
+                    重启 ArchCode 后生效。
                   </div>
                 </div>
               )
             })()}
-            {section === 'hooks' && (
-              <div>
-                {hooks.length === 0 && <div className={styles.hint}>当前作用域未声明 hook</div>}
-                {hooks.map((h, i) => (
-                  <div key={i} className={styles.row}>
-                    <div className={styles.rowMain}>
-                      <div className={styles.rowTitle}>
-                        {String(h['id'] ?? `#${i}`)} · {String(h['event'] ?? '')}
-                      </div>
-                      <div className={styles.rowDesc}>
-                        {String((h['action'] as Record<string, unknown>)?.['type'] ?? '')}
-                        {h['reject'] ? ' · reject' : ''}
-                        {h['once'] ? ' · once' : ''}
-                      </div>
-                    </div>
-                    <span className={styles.tag}>{String(h['__source__'] ?? '')}</span>
+            {section === 'hooks' && (() => {
+              if (hookEdit !== null) {
+                return (
+                  <HookEditForm
+                    hooks={hooks}
+                    editing={hookEdit}
+                    scope={scope}
+                    onSave={(items) => {
+                      save('hooks', items)
+                      setHookEdit(null)
+                    }}
+                    onBack={() => setHookEdit(null)}
+                  />
+                )
+              }
+              return (
+                <div>
+                  <div className={styles.listHeadRow}>
+                    <span className={styles.listHead}>当前作用域声明 {hooks.length} 条</span>
+                    <button type="button" className={styles.addBtn} onClick={() => setHookEdit('new')}>
+                      + 新建钩子
+                    </button>
                   </div>
-                ))}
-                <div className={styles.hint}>编辑 hooks 请修改 config.yaml(改动需重启生效)。</div>
-              </div>
-            )}
+                  {hooks.length === 0 && (
+                    <div className={styles.hint}>当前作用域未声明 hook</div>
+                  )}
+                  {hooks.map((h, i) => {
+                    const action = (h['action'] as Record<string, unknown>) ?? {}
+                    const type = String(action['type'] ?? '')
+                    const main =
+                      type === 'command'
+                        ? String(action['command'] ?? '')
+                        : type === 'http'
+                          ? String(action['url'] ?? '')
+                          : type === 'prompt'
+                            ? String(action['message'] ?? '')
+                            : String(action['prompt'] ?? '')
+                    return (
+                      <button
+                        key={i}
+                        type="button"
+                        className={`${styles.row} ${styles.rowClickable}`}
+                        onClick={() => setHookEdit(i)}
+                      >
+                        <div className={styles.rowMain}>
+                          <div className={styles.rowTitle}>
+                            {String(h['id'] ?? `#${i}`)} · {String(h['event'] ?? '')}
+                          </div>
+                          <div className={styles.rowDesc}>
+                            {type} · {main}
+                            {h['if'] ? ` · if: ${String(h['if'])}` : ''}
+                          </div>
+                        </div>
+                        <span className={styles.tag}>{String(h['__source__'] ?? '')}</span>
+                        {h['reject'] ? <span className={styles.tag}>reject</span> : null}
+                        {h['once'] ? <span className={styles.tag}>once</span> : null}
+                        <span className={styles.rowChevron}>›</span>
+                      </button>
+                    )
+                  })}
+                  <div className={styles.hint}>
+                    8 类生命周期事件 × 4 种执行方式(命令/注入提示/HTTP/子 agent);保存写入当前作用域
+                    config.yaml,重启 ArchCode 后生效。条件用 if 表达式,留空 = 总是触发。
+                  </div>
+                </div>
+              )
+            })()}
             {section === 'permissions' && (
               <div>
                 <div className={styles.modeRow}>
@@ -360,23 +444,25 @@ function McpSection({
 }) {
   // 编辑态:列表 ↔ 表单两个视图;null = 列表,'new' = 新建,数字 = 编辑第 idx 项
   const [editing, setEditing] = useState<number | 'new' | null>(null)
-  const [form, setForm] = useState({ name: '', type: 'stdio', command: '', args: '', url: '' })
+  const [form, setForm] = useState({ name: '', type: 'stdio', command: '', args: '', url: '', env: '' })
   const set = (k: string, v: string) => setForm((f) => ({ ...f, [k]: v }))
 
   const startEdit = (idx: number | 'new') => {
     setEditing(idx)
     if (idx === 'new') {
-      setForm({ name: '', type: 'stdio', command: '', args: '', url: '' })
+      setForm({ name: '', type: 'stdio', command: '', args: '', url: '', env: '' })
       return
     }
     const s = items[idx] as Record<string, unknown>
     const isHttp = Boolean(s['url'])
+    const env = String((s['env'] as Record<string, unknown>) ? Object.entries(s['env'] as Record<string, unknown>).map(([k, v]) => `${k}=${String(v)}`).join('\n') : '')
     setForm({
       name: String(s['name'] ?? ''),
       type: isHttp ? 'http' : 'stdio',
       command: String(s['command'] ?? ''),
       args: ((s['args'] as string[]) ?? []).join(' '),
       url: String(s['url'] ?? ''),
+      env,
     })
   }
 
@@ -424,6 +510,14 @@ function McpSection({
                 value={form.args}
                 onChange={(e) => set('args', e.target.value)}
               />
+              <label className={styles.fieldLabel}>环境变量(可选,每行 KEY=VALUE)</label>
+              <textarea
+                className={styles.input}
+                rows={3}
+                placeholder={'如 API_KEY=sk-xxx'}
+                value={form.env}
+                onChange={(e) => set('env', e.target.value)}
+              />
             </>
           ) : (
             <>
@@ -466,6 +560,16 @@ function McpSection({
                       name: form.name.trim(),
                       command: form.command.trim(),
                       args: form.args.trim() ? form.args.trim().split(/\s+/) : [],
+                      env: Object.fromEntries(
+                        form.env
+                          .split('\n')
+                          .map((l) => l.trim())
+                          .filter((l) => l.includes('='))
+                          .map((l) => {
+                            const eq = l.indexOf('=')
+                            return [l.slice(0, eq).trim(), l.slice(eq + 1).trim()]
+                          }),
+                      ),
                     }
               const next = isNew
                 ? [...items, entry]
@@ -575,7 +679,7 @@ function SkillDetail({
         </span>
       </div>
       <div className={styles.hint}>
-        编辑技能请修改对应 SKILL.md 文件,改动在新任务边界生效。
+        编辑技能请修改对应 SKILL.md 文件,重启 ArchCode 后生效。
       </div>
     </div>
   )
@@ -650,5 +754,404 @@ function CopyMini({ text }: { text: string }) {
     >
       {copied ? '已复制' : '复制'}
     </button>
+  )
+}
+
+/** 新建/编辑子 agent:表单字段严格对应 AgentDef 的 frontmatter + 正文。 */
+function AgentEditForm({
+  initial,
+  scope,
+  onSaved,
+  onBack,
+}: {
+  initial: AgentDefInfo | null
+  scope: string
+  onSaved: (msg: string) => void
+  onBack: () => void
+}) {
+  const isNew = initial === null
+  const [name, setName] = useState(initial?.agent_type ?? '')
+  const [whenToUse, setWhenToUse] = useState(initial?.when_to_use ?? '')
+  const [systemPrompt, setSystemPrompt] = useState(initial?.system_prompt ?? '')
+  const [tools, setTools] = useState((initial?.tools ?? []).join(', '))
+  const [disallowed, setDisallowed] = useState((initial?.disallowed_tools ?? []).join(', '))
+  const [model, setModel] = useState(
+    initial?.model && initial.model !== 'inherit' ? initial.model : '',
+  )
+  const [maxTurns, setMaxTurns] = useState(String(initial?.max_turns ?? 50))
+  const [perm, setPerm] = useState(initial?.permission_mode ?? 'default')
+  const [background, setBackground] = useState(initial?.background ?? false)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const nameValid = /^[A-Za-z][A-Za-z0-9_-]{1,63}$/.test(name.trim())
+  const canSave = nameValid && whenToUse.trim() !== '' && systemPrompt.trim() !== ''
+
+  const save = async () => {
+    setBusy(true)
+    setError('')
+    try {
+      const res = await api.saveAgent(scope, {
+        agent_type: name.trim(),
+        when_to_use: whenToUse.trim(),
+        system_prompt: systemPrompt.trim(),
+        tools: tools.split(',').map((s) => s.trim()).filter(Boolean),
+        disallowed_tools: disallowed.split(',').map((s) => s.trim()).filter(Boolean),
+        model: model.trim(),
+        max_turns: Number(maxTurns) || 50,
+        permission_mode: perm,
+        background,
+      })
+      onSaved(`已写入 ${res.path},重启 ArchCode 后生效`)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+      setBusy(false)
+    }
+  }
+
+  const remove = async () => {
+    if (!initial) return
+    if (!window.confirm(`删除子 agent 定义 "${initial.agent_type}"?`)) return
+    setBusy(true)
+    setError('')
+    try {
+      await api.deleteAgent(scope, initial.agent_type)
+      onSaved(`已删除 ${initial.agent_type},重启 ArchCode 后生效`)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div>
+      <button type="button" className={styles.backBtn} onClick={onBack}>
+        ‹ 返回列表
+      </button>
+      <div className={styles.detailTitle}>{isNew ? '新建子 Agent' : `编辑 · ${initial!.agent_type}`}</div>
+      <div className={styles.formCard}>
+        <div className={styles.formScope}>作用域: {scope === 'project' ? '项目' : '用户'}</div>
+        <div className={styles.fieldRow}>
+          <div>
+            <label className={styles.fieldLabel}>名称</label>
+            <input
+              className={styles.input}
+              placeholder="如 code-reviewer(字母开头)"
+              value={name}
+              disabled={!isNew}
+              onChange={(e) => setName(e.target.value)}
+            />
+          </div>
+          <div>
+            <label className={styles.fieldLabel}>轮次预算</label>
+            <input
+              className={styles.input}
+              type="number"
+              min={1}
+              max={500}
+              value={maxTurns}
+              onChange={(e) => setMaxTurns(e.target.value)}
+            />
+          </div>
+          <div>
+            <label className={styles.fieldLabel}>权限模式</label>
+            <select className={styles.input} value={perm} onChange={(e) => setPerm(e.target.value)}>
+              <option value="default">default</option>
+              <option value="acceptEdits">acceptEdits</option>
+              <option value="dontAsk">dontAsk</option>
+            </select>
+          </div>
+        </div>
+        <label className={styles.fieldLabel}>描述(选用依据,展示给主模型)</label>
+        <input
+          className={styles.input}
+          placeholder="何时应该使用这个子 agent"
+          value={whenToUse}
+          onChange={(e) => setWhenToUse(e.target.value)}
+        />
+        <label className={styles.fieldLabel}>模型</label>
+        <input
+          className={styles.input}
+          placeholder="留空沿用主对话模型"
+          value={model}
+          onChange={(e) => setModel(e.target.value)}
+        />
+        <div className={styles.fieldRow2}>
+          <div>
+            <label className={styles.fieldLabel}>工具白名单</label>
+            <input
+              className={styles.input}
+              placeholder="逗号分隔,留空 = 全部工具"
+              value={tools}
+              onChange={(e) => setTools(e.target.value)}
+            />
+          </div>
+          <div>
+            <label className={styles.fieldLabel}>禁用工具</label>
+            <input
+              className={styles.input}
+              placeholder="逗号分隔,可留空"
+              value={disallowed}
+              onChange={(e) => setDisallowed(e.target.value)}
+            />
+          </div>
+        </div>
+        <label className={styles.fieldLabel}>运行方式</label>
+        <select
+          className={styles.input}
+          value={background ? 'bg' : 'fg'}
+          onChange={(e) => setBackground(e.target.value === 'bg')}
+        >
+          <option value="fg">前台(阻塞主对话)</option>
+          <option value="bg">后台运行</option>
+        </select>
+        <label className={styles.fieldLabel}>系统提示词(该子 agent 的身份与规则)</label>
+        <textarea
+          className={styles.input}
+          rows={8}
+          placeholder="描述这个子 agent 的角色、边界和规则..."
+          value={systemPrompt}
+          onChange={(e) => setSystemPrompt(e.target.value)}
+        />
+        {error && <div className={styles.errorText}>{error}</div>}
+        <div className={styles.editActions}>
+          {!isNew && (
+            <button type="button" className={styles.deleteBtn} disabled={busy} onClick={remove}>
+              删除
+            </button>
+          )}
+          <span className={styles.spring} />
+          <button type="button" className={styles.cancelBtn} onClick={onBack}>
+            取消
+          </button>
+          <button
+            type="button"
+            className={styles.addBtn}
+            disabled={!canSave || busy}
+            onClick={save}
+          >
+            保存
+          </button>
+        </div>
+      </div>
+      <div className={styles.hint}>
+        保存写入当前作用域的 `.archcode/agents/&lt;名称&gt;.md`;与内置定义同名会遮蔽内置版本。
+      </div>
+    </div>
+  )
+}
+
+/** hook 常量(与 archcode/hooks/models.py 的合法值同步)。 */
+const HOOK_EVENTS: Array<[string, string]> = [
+  ['session_start', '会话开始'],
+  ['turn_start', '轮次开始'],
+  ['pre_tool_use', '工具执行前'],
+  ['permission_request', '权限询问时'],
+  ['post_tool_use', '工具执行后'],
+  ['post_tool_use_failure', '工具执行失败'],
+  ['turn_end', '轮次结束'],
+  ['session_end', '会话结束'],
+]
+const HOOK_GATE_EVENTS = new Set(['pre_tool_use', 'permission_request'])
+const HOOK_EXECUTORS: Array<[string, string]> = [
+  ['command', '命令(本地进程)'],
+  ['prompt', '注入提示'],
+  ['http', 'HTTP 请求'],
+  ['agent', '子 agent'],
+]
+const HOOK_MAIN_FIELD: Record<string, string> = {
+  command: 'command',
+  prompt: 'message',
+  http: 'url',
+  agent: 'prompt',
+}
+
+/** 新建/编辑 hook:保存走 settings PUT(config.yaml hooks 键,重启生效)。 */
+function HookEditForm({
+  hooks,
+  editing,
+  scope,
+  onSave,
+  onBack,
+}: {
+  hooks: Array<Record<string, unknown>>
+  editing: number | 'new'
+  scope: string
+  onSave: (items: Array<Record<string, unknown>>) => void
+  onBack: () => void
+}) {
+  const isNew = editing === 'new'
+  const orig: Record<string, unknown> = isNew ? {} : (hooks[editing as number] ?? {})
+  const origAction = (orig['action'] as Record<string, unknown>) ?? {}
+  const [event, setEvent] = useState(String(orig['event'] ?? 'pre_tool_use'))
+  const [actionType, setActionType] = useState(String(origAction['type'] ?? 'command'))
+  const [mainValue, setMainValue] = useState(
+    String(origAction[HOOK_MAIN_FIELD[String(origAction['type'] ?? 'command')] ?? 'command'] ?? ''),
+  )
+  const [condition, setCondition] = useState(String(orig['if'] ?? ''))
+  const [reject, setReject] = useState(Boolean(orig['reject']))
+  const [once, setOnce] = useState(Boolean(orig['once']))
+  const [asyncExec, setAsyncExec] = useState(Boolean(orig['async']))
+  const [timeout, setTimeoutSec] = useState(String(origAction['timeout'] ?? 60))
+  const [error, setError] = useState('')
+  const gate = HOOK_GATE_EVENTS.has(event)
+  const mainField = HOOK_MAIN_FIELD[actionType]
+  const canSave = mainValue.trim() !== ''
+
+  const switchEvent = (next: string) => {
+    setEvent(next)
+    if (!HOOK_GATE_EVENTS.has(next)) setReject(false)
+    if (HOOK_GATE_EVENTS.has(next) || actionType === 'prompt') setAsyncExec(false)
+  }
+  const switchActionType = (next: string) => {
+    setActionType(next)
+    setMainValue(String(origAction[HOOK_MAIN_FIELD[next]] ?? ''))
+    if (next === 'prompt') setAsyncExec(false)
+  }
+
+  const save = () => {
+    if (!canSave) return
+    const action: Record<string, unknown> = {
+      ...origAction,
+      type: actionType,
+      [mainField]: mainValue.trim(),
+      timeout: parseInt(timeout, 10) || 60,
+    }
+    const entry: Record<string, unknown> = { ...orig, event, action }
+    if (isNew) delete entry['id']
+    if (condition.trim()) entry['if'] = condition.trim()
+    else delete entry['if']
+    if (reject) entry['reject'] = true
+    else delete entry['reject']
+    if (once) entry['once'] = true
+    else delete entry['once']
+    if (asyncExec) entry['async'] = true
+    else delete entry['async']
+    delete entry['__source__']
+    const items = isNew
+      ? [...hooks, entry]
+      : hooks.map((h, j) => (j === editing ? entry : h))
+    onSave(items)
+  }
+
+  return (
+    <div>
+      <button type="button" className={styles.backBtn} onClick={onBack}>
+        ‹ 返回列表
+      </button>
+      <div className={styles.detailTitle}>{isNew ? '新建钩子' : `编辑 · ${String(orig['id'] ?? event)}`}</div>
+      <div className={styles.formCard}>
+        <div className={styles.formScope}>作用域: {scope === 'project' ? '项目' : '用户'}</div>
+        <div className={styles.fieldRow}>
+          <div>
+            <label className={styles.fieldLabel}>事件</label>
+            <select className={styles.input} value={event} onChange={(e) => switchEvent(e.target.value)}>
+              {HOOK_EVENTS.map(([v, label]) => (
+                <option key={v} value={v}>
+                  {v}({label})
+                </option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label className={styles.fieldLabel}>执行方式</label>
+            <select
+              className={styles.input}
+              value={actionType}
+              onChange={(e) => switchActionType(e.target.value)}
+            >
+              {HOOK_EXECUTORS.map(([v, label]) => (
+                <option key={v} value={v}>
+                  {label}
+                </option>
+              ))}
+            </select>
+          </div>
+        </div>
+        <label className={styles.fieldLabel}>
+          {actionType === 'command'
+            ? '命令'
+            : actionType === 'http'
+              ? 'URL'
+              : actionType === 'prompt'
+                ? '注入的提示内容'
+                : '子 agent 任务提示词'}
+        </label>
+        {actionType === 'prompt' || actionType === 'agent' ? (
+          <textarea
+            className={styles.input}
+            rows={3}
+            value={mainValue}
+            onChange={(e) => setMainValue(e.target.value)}
+          />
+        ) : (
+          <input
+            className={styles.input}
+            placeholder={actionType === 'command' ? "例如 uv run .archcode/hooks/check.py" : '例如 http://127.0.0.1:9000/hook'}
+            value={mainValue}
+            onChange={(e) => setMainValue(e.target.value)}
+          />
+        )}
+        <label className={styles.fieldLabel}>条件(if 表达式,可选)</label>
+        <input
+          className={styles.input}
+          placeholder={`例如 tool_name == 'Bash',留空 = 总是触发`}
+          value={condition}
+          onChange={(e) => setCondition(e.target.value)}
+        />
+        <div className={styles.toggleRow}>
+          <span className={styles.toggleLabel}>拒绝执行(reject,仅 {[...HOOK_GATE_EVENTS].join(' / ')})</span>
+          <input
+            type="checkbox"
+            checked={reject}
+            disabled={!gate}
+            onChange={(e) => setReject(e.target.checked)}
+          />
+        </div>
+        <div className={styles.toggleRow}>
+          <span className={styles.toggleLabel}>仅触发一次(once)</span>
+          <input type="checkbox" checked={once} onChange={(e) => setOnce(e.target.checked)} />
+        </div>
+        <div className={styles.toggleRow}>
+          <span className={styles.toggleLabel}>异步执行(async,gate 事件与注入提示不可用)</span>
+          <input
+            type="checkbox"
+            checked={asyncExec}
+            disabled={gate || actionType === 'prompt'}
+            onChange={(e) => setAsyncExec(e.target.checked)}
+          />
+        </div>
+        <div className={styles.fieldRow}>
+          <div>
+            <label className={styles.fieldLabel}>超时(秒)</label>
+            <input
+              className={styles.input}
+              type="number"
+              min={1}
+              value={timeout}
+              onChange={(e) => setTimeoutSec(e.target.value)}
+            />
+          </div>
+        </div>
+        {error && <div className={styles.errorText}>{error}</div>}
+        <div className={styles.editActions}>
+          <span className={styles.spring} />
+          <button type="button" className={styles.cancelBtn} onClick={onBack}>
+            取消
+          </button>
+          <button
+            type="button"
+            className={styles.addBtn}
+            disabled={!canSave}
+            onClick={save}
+          >
+            保存
+          </button>
+        </div>
+      </div>
+      <div className={styles.hint}>
+        保存写入当前作用域 config.yaml 的 hooks 列表(仅本作用域条目,不合并其他层);重启 ArchCode
+        后生效。
+      </div>
+    </div>
   )
 }

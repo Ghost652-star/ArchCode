@@ -699,9 +699,104 @@ def api_agents():
             "background": d.background,
             "tools": d.tools,
             "disallowed_tools": d.disallowed_tools,
+            "system_prompt": d.system_prompt,
         }
         for d in loader.manifests().values()
     ]
+
+
+_AGENT_NAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{1,63}$")
+
+
+def _agents_dir_for(scope: str) -> Path:
+    """子 agent 定义文件的作用域目录(与 AgentLoader._layer_dirs 同源)。"""
+    assert STATE is not None
+    from archcode.paths import application_agents_dir, project_agents_dir
+
+    if scope == "project":
+        return project_agents_dir(STATE.work_dir)
+    if scope == "user":
+        return application_agents_dir()
+    raise HTTPException(400, f"unknown scope: {scope}")
+
+
+def _yaml_str(v: str) -> str:
+    """JSON 字符串是合法 YAML 标量:免手写转义。"""
+    return json.dumps(v, ensure_ascii=False)
+
+
+@app.post("/api/agents/{scope}")
+def api_agents_save(scope: str, body: dict):
+    """新建/覆盖一个子 agent 定义(渲染 frontmatter Markdown 写入作用域目录)。
+
+    写文件即止,不热重载——loader 在下次启动时重新扫描(与设置面板口径一致)。
+    同名文件直接覆盖;与内置定义同名会形成遮蔽(loader 优先级语义,允许)。
+    """
+    assert STATE is not None
+    body = body or {}
+    name = str(body.get("agent_type", "")).strip()
+    if not _AGENT_NAME_RE.match(name):
+        raise HTTPException(400, "名称必须以字母开头,仅含字母/数字/_/-")
+    description = str(body.get("when_to_use", "")).strip()
+    system_prompt = str(body.get("system_prompt", "")).strip()
+    if not description:
+        raise HTTPException(400, "描述(选用依据)必填")
+    if not system_prompt:
+        raise HTTPException(400, "系统提示词必填")
+    tools = [str(t).strip() for t in (body.get("tools") or []) if str(t).strip()]
+    disallowed = [
+        str(t).strip() for t in (body.get("disallowed_tools") or []) if str(t).strip()
+    ]
+    model = str(body.get("model", "")).strip()
+    try:
+        max_turns = int(body.get("max_turns", 50))
+    except (TypeError, ValueError):
+        raise HTTPException(400, "轮次预算必须是正整数")
+    if not 1 <= max_turns <= 500:
+        raise HTTPException(400, "轮次预算取值 1~500")
+    permission_mode = str(body.get("permission_mode", "default"))
+    if permission_mode not in ("default", "acceptEdits", "dontAsk"):
+        raise HTTPException(400, "权限模式非法")
+    background = bool(body.get("background", False))
+
+    lines = ["---", f"name: {_yaml_str(name)}", f"description: {_yaml_str(description)}"]
+    if tools:
+        lines.append("tools: [" + ", ".join(_yaml_str(t) for t in tools) + "]")
+    if disallowed:
+        lines.append("disallowedTools: [" + ", ".join(_yaml_str(t) for t in disallowed) + "]")
+    if model and model != "inherit":
+        lines.append(f"model: {_yaml_str(model)}")
+    if max_turns != 50:
+        lines.append(f"maxTurns: {max_turns}")
+    if permission_mode != "default":
+        lines.append(f"permissionMode: {permission_mode}")
+    if background:
+        lines.append("background: true")
+    lines.append("---")
+    md = "\n".join(lines) + "\n\n" + system_prompt + "\n"
+
+    target_dir = _agents_dir_for(scope)
+    target_dir.mkdir(parents=True, exist_ok=True)
+    path = target_dir / f"{name}.md"
+    path.write_text(md, encoding="utf-8")
+    log.info("agent definition saved: %s", path)
+    return {"ok": True, "path": str(path), "restart_required": True}
+
+
+@app.delete("/api/agents/{scope}/{agent_type}")
+def api_agents_delete(scope: str, agent_type: str):
+    """删除一个子 agent 定义文件;只允许删当前作用域目录内的文件(内置不可删)。"""
+    assert STATE is not None
+    loader = getattr(STATE.agent, "_agent_loader", None)
+    defn = loader.get(agent_type) if loader is not None else None
+    if defn is None:
+        raise HTTPException(404, f"agent not found: {agent_type}")
+    scope_dir = _agents_dir_for(scope).resolve()
+    if defn.file_path is None or not defn.file_path.resolve().is_relative_to(scope_dir):
+        raise HTTPException(400, "只能删除当前作用域目录内的定义(内置定义不可删)")
+    defn.file_path.unlink()
+    log.info("agent definition deleted: %s", defn.file_path)
+    return {"ok": True, "restart_required": True}
 
 
 @app.get("/api/skills")

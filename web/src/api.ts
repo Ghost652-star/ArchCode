@@ -77,8 +77,33 @@ export const api = {
         background: boolean
         tools: string[]
         disallowed_tools: string[]
+        system_prompt: string
       }>
     >('/api/agents'),
+
+  saveAgent: (
+    scope: string,
+    payload: {
+      agent_type: string
+      when_to_use: string
+      system_prompt: string
+      tools: string[]
+      disallowed_tools: string[]
+      model: string
+      max_turns: number
+      permission_mode: string
+      background: boolean
+    },
+  ) =>
+    jsonFetch<{ ok: boolean; path: string; restart_required: boolean }>(
+      `/api/agents/${scope}`,
+      { method: 'POST', body: JSON.stringify(payload) },
+    ),
+
+  deleteAgent: (scope: string, agentType: string) =>
+    jsonFetch<{ ok: boolean }>(`/api/agents/${scope}/${agentType}`, {
+      method: 'DELETE',
+    }),
 
   answerPermission: (requestId: string, body: { allowed?: boolean; answer?: string }) =>
     jsonFetch<{ ok: boolean }>(`/api/permission/${requestId}`, {
