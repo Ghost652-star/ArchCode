@@ -9,89 +9,24 @@ from pathlib import Path
 
 from archcode.agent import Agent
 from archcode.conversation.manager import ConversationManager
-from archcode.llm.client import AuthenticationError, LLMError, create_client
+from archcode.llm.client import AuthenticationError, LLMError
 from archcode.config import ConfigError, load_config
 from archcode.mcp import MCPManager
 from archcode.memory import (
-    InstructionDocumentLoader,
     SessionManager,
     format_instruction_diagnostics,
 )
-from archcode.hooks import HookEngine
-from archcode.permissions import PermissionChecker, PermissionMode, PathSandbox
 from archcode.paths import debug_log_path, project_data_dir
-from archcode.prompts import build_system_prompt
-from archcode.skills import SkillExecutor, SkillLoader
-from archcode.tools import create_default_registry
-from archcode.tools.tool_search import ToolSearchTool
+from archcode.runtime import (
+    _wire_agents,
+    _wire_hooks,
+    _wire_skills,
+    build_agent_sync as _build_agent_sync,
+    build_tool_registry,
+    connect_mcp as _connect_mcp,
+)
 
 _log = logging.getLogger("archcode")  # 运行时 __name__=="__main__",显式包级名
-
-
-def _wire_hooks(config, work_dir: Path, agent: Agent) -> None:
-    """创建 HookEngine 并接线(hooks-design §8)。诊断打 stderr。"""
-    engine, diagnostics = HookEngine.from_config(
-        config.hooks, work_dir=work_dir,
-    )
-    agent._hook_engine = engine
-    for diagnostic in diagnostics:
-        print(diagnostic, file=sys.stderr)
-
-
-def _wire_skills(agent: Agent, tool_registry, work_dir: Path) -> SkillExecutor:
-    """创建 SkillLoader / SkillExecutor 并接线(skills-design.md 7)。
-
-    - loader 扫描三层目录,诊断打 stderr(遮蔽/解析失败);
-    - LoadSkill 工具经 set_executor 接线(注册发生在 create_default_registry);
-    - agent._skill_loader 供 Task 边界刷新 catalog。
-    """
-    loader = SkillLoader(work_dir=work_dir)
-    executor = SkillExecutor(
-        agent=agent,
-        loader=loader,
-        recovery=getattr(agent, "_recovery_state", None),
-    )
-    agent._skill_loader = loader
-    tool = tool_registry.get("LoadSkill")
-    if tool is not None and hasattr(tool, "set_executor"):
-        tool.set_executor(executor)
-    for diagnostic in loader.diagnostics:
-        print(diagnostic, file=sys.stderr)
-    return executor
-
-
-def _wire_agents(agent: Agent, tool_registry, work_dir: Path, skill_executor=None) -> None:
-    """创建 AgentLoader / TaskManager / AgentTool 并接线(sub-agent-design §11/§13)。
-
-    - loader 扫描三层 agent 定义,诊断打 stderr;
-    - AgentTool / TaskList / TaskGet 注册进主注册表;
-    - agent._background_notifier 接后台通知 drain(§9.2),agent._agent_loader 供
-      Task 边界刷新 <agent-catalog>(§2.5);
-    - skill_executor.task_manager 供 skill fork 后台启动(§13)。
-    """
-    from archcode.agents.loader import AgentLoader
-    from archcode.agents.notification import make_background_notifier
-    from archcode.agents.task_manager import TaskManager
-    from archcode.tools.agent_tool import AgentTool
-    from archcode.tools.task_tools import register_task_tools
-
-    loader = AgentLoader(work_dir=work_dir)
-    loader.load_all()
-    for diagnostic in loader.diagnostics:
-        print(diagnostic, file=sys.stderr)
-
-    task_manager = TaskManager()
-    agent_tool = AgentTool(
-        agent_loader=loader, task_manager=task_manager, parent_agent=agent
-    )
-    tool_registry.register(agent_tool)
-    register_task_tools(tool_registry, task_manager)
-
-    agent._agent_loader = loader
-    agent._background_notifier = make_background_notifier(task_manager)
-    agent._task_manager = task_manager  # Web 端任务面板的只读数据源
-    if skill_executor is not None:
-        skill_executor.task_manager = task_manager
 
 
 async def _build_runtime(config, work_dir, protocol):
@@ -99,22 +34,10 @@ async def _build_runtime(config, work_dir, protocol):
 
     Returns: (tool_registry, mcp_manager_or_None, mcp_errors, mcp_successes)
     """
-    tool_registry = create_default_registry(work_dir=work_dir)
-    tool_registry.register(ToolSearchTool(tool_registry, protocol=protocol))
-
-    mcp_manager: MCPManager | None = None
-    mcp_errors: list[str] = []
-    mcp_successes: list[tuple[str, int]] = []
-    if config.mcp_servers:
-        mcp_manager = MCPManager()
-        mcp_manager.load_configs(config.mcp_servers)
-        try:
-            mcp_errors, mcp_successes = await mcp_manager.register_all_tools(
-                tool_registry
-            )
-        except Exception as e:
-            print(f"[MCP init error] {e}", file=sys.stderr)
-
+    tool_registry = build_tool_registry(work_dir=work_dir, protocol=protocol)
+    mcp_manager, mcp_errors, mcp_successes = await _connect_mcp(
+        config.mcp_servers, tool_registry
+    )
     return tool_registry, mcp_manager, mcp_errors, mcp_successes
 
 
@@ -136,30 +59,6 @@ async def _run_prompt(
         session.close()
         if mcp_manager is not None:
             await mcp_manager.shutdown()
-
-
-def _build_agent_sync(config, work_dir, tool_registry):
-    """TUI 路径的同步构建 agent(不开新 event loop)。"""
-    provider = config.providers[0]
-    sandbox = PathSandbox(project_root=str(work_dir))
-    permission_checker = PermissionChecker(
-        sandbox=sandbox,
-        mode=PermissionMode.DEFAULT,
-    )
-    system_prompt = build_system_prompt(
-        work_dir=str(work_dir),
-        extra=config.system_prompt,
-    )
-    return Agent(
-        client=create_client(provider),
-        system_prompt=system_prompt,
-        tool_registry=tool_registry,
-        permission_checker=permission_checker,
-        max_output_tokens=provider.max_output_tokens,
-        work_dir=work_dir,
-        compression=config.compression,
-        instruction_loader=InstructionDocumentLoader(),
-    )
 
 
 def _setup_logging(work_dir: Path) -> None:
@@ -281,10 +180,7 @@ def main() -> None:
             from archcode.webui.server import run_web
 
             provider = config.providers[0]
-            tool_registry = create_default_registry(work_dir=work_dir)
-            tool_registry.register(
-                ToolSearchTool(tool_registry, protocol=provider.protocol)
-            )
+            tool_registry = build_tool_registry(work_dir, provider.protocol)
             agent = _build_agent_sync(config, work_dir, tool_registry)
             _wire_hooks(config, work_dir, agent)
             skill_executor = _wire_skills(agent, tool_registry, work_dir)
@@ -300,10 +196,7 @@ def main() -> None:
             from archcode.driver import NoAltScreenDriver
 
             provider = config.providers[0]
-            tool_registry = create_default_registry(work_dir=work_dir)
-            tool_registry.register(
-                ToolSearchTool(tool_registry, protocol=provider.protocol)
-            )
+            tool_registry = build_tool_registry(work_dir, provider.protocol)
 
             agent = _build_agent_sync(config, work_dir, tool_registry)
             _wire_hooks(config, work_dir, agent)

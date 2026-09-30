@@ -41,6 +41,7 @@ from archcode.agent import (
 from archcode.conversation.manager import ConversationManager
 from archcode.logctx import set_session_id
 from archcode.memory import SessionManager
+from archcode.runtime import build_agent_runtime, connect_mcp
 
 log = logging.getLogger(__name__)
 
@@ -155,6 +156,85 @@ class ServerState:
         if future is None or future.done():
             raise HTTPException(404, f"unknown or resolved permission: {request_id}")
         future.set_result(value)
+
+    # ── 工作区切换(单激活重建:收旧造新)────────────────────────────
+
+    async def switch_workspace(self, target: Path) -> dict:
+        """关闭旧运行时,按新目录重建整套运行时并恢复该目录最近会话。
+
+        前置校验(运行中锁/后台任务/目录存在)由端点完成;这里的收尾顺序:
+        关会话句柄(Windows 文件锁)→ 作废未决权限 → 旧 MCP shutdown →
+        load_config(新目录分层) → build_agent_runtime + connect_mcp →
+        替换绑定 → 恢复最近会话。
+        """
+        from archcode.config import load_config
+
+        # ── 旧运行时收尾 ──
+        if self._session is not None:
+            self._session.close()
+        self._permissions.clear()
+        self._pending_permits = []
+        old_mcp = getattr(self, "mcp_manager", None)
+        if old_mcp is not None:
+            try:
+                await old_mcp.shutdown()
+            except Exception as e:
+                log.warning("[switch] 旧 MCP 收尾失败(忽略): %s", e)
+
+        # ── 按新目录重建 ──
+        config = load_config(None, project_dir=target)
+        protocol = (
+            self.providers[0].protocol
+            if self.providers
+            else (config.providers[0].protocol if config.providers else "anthropic")
+        )
+        registry, agent, _executor = build_agent_runtime(config, target, protocol)
+        mcp_manager, mcp_errors, mcp_successes = await connect_mcp(
+            config.mcp_servers, registry
+        )
+        for name, count in mcp_successes:
+            log.info("[MCP] %s: %d tools", name, count)
+        for err in mcp_errors:
+            log.warning("[MCP] %s", err)
+
+        conversation = ConversationManager()
+        session_manager = SessionManager(target)
+        session = None
+        resumed: str | None = None
+
+        # ── 会话:恢复最近一个"非空"历史会话,没有才创建新会话 ──
+        # 候选必须 message_count>0:启动时自动创建的空会话 last_active 永远最新,
+        # 不排除会把刚建的空会话自己"恢复"一遍,真正的历史永远轮不上
+        metas = [m for m in session_manager.list_sessions() if m.message_count > 0]
+        if metas:
+            latest = max(metas, key=lambda m: m.last_active_ms)
+            try:
+                restored = session_manager.open(latest.id)
+                if restored is not None:
+                    conversation = restored.conversation
+                    session = restored.session
+                    resumed = latest.id
+            except HTTPException:
+                log.warning("[switch] 恢复最近会话失败: %s", latest.id)
+        if session is None:
+            session = session_manager.create()
+        session.bind(conversation)
+
+        # ── 替换绑定 ──
+        self.agent = agent
+        self.work_dir = target
+        self.providers = config.providers or self.providers
+        self.conversation = conversation
+        self.session_manager = session_manager
+        self._session = session
+        self.mcp_manager = mcp_manager  # type: ignore[attr-defined]
+        set_session_id(session.id)
+        self._usage = self._usage_from_meta()
+        store = _todo_store()
+        if store is not None:
+            store.clear()
+        log.info("workspace switched: %s (session %s, resumed=%s)", target, session.id, resumed)
+        return {"resumed": resumed, "mcp_errors": mcp_errors}
 
 
 STATE: ServerState | None = None
@@ -492,6 +572,43 @@ async def api_chat(body: dict):
     return StreamingResponse(
         stream(), media_type="text/event-stream", headers={"Cache-Control": "no-cache"}
     )
+
+
+@app.post("/api/workspace/switch")
+async def api_workspace_switch(body: dict):
+    """切换工作区(单激活重建):收旧运行时,按新目录重建,恢复最近会话。
+
+    运行中 / 后台任务未完成时 409;同目录重复切换幂等返回。
+    """
+    assert STATE is not None
+    raw = str((body or {}).get("path", "")).strip()
+    if not raw:
+        raise HTTPException(400, "path is required")
+    target = Path(raw)
+    if not target.exists() or not target.is_dir():
+        raise HTTPException(400, f"目录不存在: {raw}")
+    resolved = target.resolve()
+    if resolved == STATE.work_dir.resolve():
+        return {
+            "ok": True,
+            "unchanged": True,
+            "work_dir": str(STATE.work_dir),
+            "session_id": STATE._session.id if STATE._session else None,
+        }
+    if STATE._run_lock.locked():
+        raise HTTPException(409, "Agent 运行中,请先停止再切换工作区")
+    task_manager = getattr(STATE.agent, "_task_manager", None)
+    if task_manager is not None and any(
+        t.status == "running" for t in task_manager.list_tasks()
+    ):
+        raise HTTPException(409, "有后台任务运行中,完成后再切换工作区")
+    result = await STATE.switch_workspace(resolved)
+    return {
+        "ok": True,
+        "work_dir": str(STATE.work_dir),
+        "session_id": STATE._session.id if STATE._session else None,
+        "resumed": result["resumed"],
+    }
 
 
 @app.post("/api/abort")
@@ -950,11 +1067,9 @@ def create_web_server(
         # MCP 初始化(镜像 app.on_mount:连接 + 注册,同 uvicorn loop)
         if not mcp_server_configs:
             return
-        from archcode.mcp import MCPManager
-
-        manager = MCPManager()
-        manager.load_configs(mcp_server_configs)
-        errors, successes = await manager.register_all_tools(agent._tool_registry)
+        manager, errors, successes = await connect_mcp(
+            mcp_server_configs, agent._tool_registry
+        )
         STATE.mcp_manager = manager  # type: ignore[attr-defined]
         for name, count in successes:
             log.info("[MCP] %s: %d tools", name, count)

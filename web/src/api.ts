@@ -139,6 +139,18 @@ export const api = {
 
   context: () => jsonFetch<ContextInfo>('/api/context'),
 
+  switchWorkspace: (path: string) =>
+    jsonFetch<{
+      ok: boolean
+      unchanged?: boolean
+      work_dir: string
+      session_id: string | null
+      resumed: string | null
+    }>('/api/workspace/switch', {
+      method: 'POST',
+      body: JSON.stringify({ path }),
+    }),
+
   usage: () => jsonFetch<UsageTotal>('/api/usage'),
 
   todo: () => jsonFetch<{ todos: TodoItem[] }>('/api/todo'),

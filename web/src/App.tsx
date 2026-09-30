@@ -484,10 +484,25 @@ export default function App() {
     setActiveWorkspace(normalized)
   }, [])
 
-  const switchWorkspace = useCallback((path: string) => {
-    localStorage.setItem(ACTIVE_WS_KEY, path)
-    setActiveWorkspace(path)
-  }, [])
+  const switchWorkspace = useCallback(
+    async (path: string) => {
+      const norm = (p: string) => p.replace(/\\/g, '/').toLowerCase()
+      if (!activeWorkspace || norm(path) !== norm(activeWorkspace)) {
+        try {
+          // 单激活重建:后端收旧运行时、按新目录重建并恢复其最近会话
+          await api.switchWorkspace(path)
+          setPermission(null)
+        } catch (e) {
+          alert(e instanceof Error ? e.message : String(e))
+          return
+        }
+        await refreshMeta()
+      }
+      localStorage.setItem(ACTIVE_WS_KEY, path)
+      setActiveWorkspace(path)
+    },
+    [activeWorkspace, refreshMeta],
+  )
 
   // ── 三栏交互(设计 §11.3/§11.4)────────────────────────────────
   // 折叠/展开是离散切换:才给轨道过渡动画;拖拽与窗口缩放一律瞬时。

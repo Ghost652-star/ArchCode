@@ -71,7 +71,8 @@ class MCPManager:
 
     async def shutdown(self) -> None:
         """关闭所有 client,清理 _clients。"""
-        for name, client in self._clients.items():
+        # 快照迭代:client.close() 可能回写 _clients(移除自身),直迭代会 RuntimeError
+        for name, client in list(self._clients.items()):
             try:
                 await client.close()
             except Exception:
