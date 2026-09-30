@@ -931,7 +931,7 @@ function AgentDetail({ agent, onBack }: { agent: AgentDefInfo; onBack: () => voi
         )}
       </div>
       <div className={styles.hint}>
-        修改定义请编辑对应 Markdown 文件,新任务边界自动重载生效。
+        修改定义请编辑对应 Markdown 文件,或直接在界面新建/编辑同目录定义,重启 ArchCode 后生效。
       </div>
     </div>
   )
