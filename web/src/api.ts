@@ -151,6 +151,11 @@ export const api = {
       body: JSON.stringify({ path }),
     }),
 
+  pickDirectory: () =>
+    jsonFetch<{ ok: boolean; path: string | null }>('/api/workspace/pick', {
+      method: 'POST',
+    }),
+
   usage: () => jsonFetch<UsageTotal>('/api/usage'),
 
   todo: () => jsonFetch<{ todos: TodoItem[] }>('/api/todo'),

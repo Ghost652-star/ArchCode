@@ -1,17 +1,19 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { api } from '../api'
 import type { AgentState, SessionInfo } from '../types'
 import styles from './Sidebar.module.css'
 
 interface Props {
-  sessions: SessionInfo[]
+  /** 全部工作区的会话清单(各组同时展示,键 = 工作区路径)。 */
+  sessionsByWs: Record<string, SessionInfo[]>
   state: AgentState | null
   workspaces: string[]
   activeWorkspace: string
   collapsed: boolean
   onToggleCollapse: () => void
   onNewSession: () => void
-  onResume: (id: string) => void
+  /** 打开会话:跨项目时先切换工作区再恢复(App 内编排)。 */
+  onOpenSession: (ws: string, id: string) => void | Promise<void>
   onOpenSettings: () => void
   onAddWorkspace: (path: string) => void
   onSwitchWorkspace: (path: string) => void
@@ -37,16 +39,16 @@ function relTime(ms?: number): string {
   return new Date(ms).toLocaleDateString()
 }
 
-/** 侧栏:工作区(项目)树 + 活动工作区下的会话清单(§10.5/§10.9-4)。 */
+/** 侧栏:工作区分组树,每组同时展示各自会话,可折叠;点击跨项目会话自动切换(§10.5/§10.9-4)。 */
 export default function Sidebar({
-  sessions,
+  sessionsByWs,
   state,
   workspaces,
   activeWorkspace,
   collapsed,
   onToggleCollapse,
   onNewSession,
-  onResume,
+  onOpenSession,
   onOpenSettings,
   onAddWorkspace,
   onSwitchWorkspace,
@@ -56,22 +58,40 @@ export default function Sidebar({
   const [searchOpen, setSearchOpen] = useState(false)
   const [adding, setAdding] = useState(false)
   const [newPath, setNewPath] = useState('')
+  const [picking, setPicking] = useState(false)
   const [renamingId, setRenamingId] = useState<string | null>(null)
   const [renameValue, setRenameValue] = useState('')
   const [contentResults, setContentResults] = useState<
     Array<{ id: string; title: string; excerpt: string }>
   >([])
+  // 折叠的分组(持久化;默认全展开)
+  const [folded, setFolded] = useState<string[]>(() => {
+    try {
+      const raw = JSON.parse(localStorage.getItem('ac-ws-folded') ?? '[]')
+      return Array.isArray(raw) ? raw : []
+    } catch {
+      return []
+    }
+  })
 
   const serverDir = state?.work_dir ?? ''
-  const filtered = useMemo(
-    () =>
-      sessions.filter(
+  const toggleFold = (ws: string) => {
+    setFolded((prev) => {
+      const next = prev.includes(ws) ? prev.filter((p) => p !== ws) : [...prev, ws]
+      localStorage.setItem('ac-ws-folded', JSON.stringify(next))
+      return next
+    })
+  }
+
+  const groupSessions = useCallback(
+    (ws: string) =>
+      (sessionsByWs[ws] ?? []).filter(
         (s) =>
           !query ||
           s.id.toLowerCase().includes(query.toLowerCase()) ||
           (s.title ?? '').toLowerCase().includes(query.toLowerCase()),
       ),
-    [sessions, query],
+    [sessionsByWs, query],
   )
 
   // 内容搜索(≥2 字符触发,防抖 300ms):服务端扫会话 JSONL,返回首次命中摘要
@@ -194,33 +214,55 @@ export default function Sidebar({
 
       {adding && (
         <div className={styles.addWs}>
-          <input
-            className={styles.addWsInput}
-            placeholder="输入目录路径,如 F:\Projects\demo"
-            value={newPath}
-            onChange={(e) => setNewPath(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && newPath.trim()) {
-                onAddWorkspace(newPath.trim())
-                setNewPath('')
-                setAdding(false)
-              }
-            }}
-            autoFocus
-          />
           <button
-            className={styles.addWsBtn}
-            disabled={!newPath.trim()}
-            onClick={() => {
-              if (newPath.trim()) {
-                onAddWorkspace(newPath.trim())
-                setNewPath('')
-                setAdding(false)
+            type="button"
+            className={styles.pickBtn}
+            disabled={picking}
+            onClick={async () => {
+              setPicking(true)
+              try {
+                const r = await api.pickDirectory()
+                if (r.path) {
+                  onAddWorkspace(r.path)
+                  setAdding(false)
+                }
+              } catch (e) {
+                alert(e instanceof Error ? e.message : String(e))
+              } finally {
+                setPicking(false)
               }
             }}
           >
-            添加
+            {picking ? '请在弹出的窗口中选择…' : '📂 选择文件夹…'}
           </button>
+          <div className={styles.addWsRow}>
+            <input
+              className={styles.addWsInput}
+              placeholder="或手动输入路径,如 F:\Projects\demo"
+              value={newPath}
+              onChange={(e) => setNewPath(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && newPath.trim()) {
+                  onAddWorkspace(newPath.trim())
+                  setNewPath('')
+                  setAdding(false)
+                }
+              }}
+            />
+            <button
+              className={styles.addWsBtn}
+              disabled={!newPath.trim()}
+              onClick={() => {
+                if (newPath.trim()) {
+                  onAddWorkspace(newPath.trim())
+                  setNewPath('')
+                  setAdding(false)
+                }
+              }}
+            >
+              添加
+            </button>
+          </div>
         </div>
       )}
 
@@ -228,13 +270,35 @@ export default function Sidebar({
         {workspaces.map((ws) => {
           const active = ws === activeWorkspace
           const isServer = ws === serverDir
+          const group = groupSessions(ws)
+          const foldedGroup = folded.includes(ws)
           return (
             <div key={ws}>
-              <button
+              <div
                 className={`${styles.wsRow} ${active ? styles.wsActive : ''}`}
                 onClick={() => onSwitchWorkspace(ws)}
                 title={ws}
               >
+                <button
+                  type="button"
+                  className={styles.wsFold}
+                  aria-label={foldedGroup ? '展开会话列表' : '折叠会话列表'}
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    toggleFold(ws)
+                  }}
+                >
+                  <svg
+                    width={10}
+                    height={10}
+                    viewBox="0 0 16 16"
+                    fill="none"
+                    aria-hidden
+                    data-open={!foldedGroup || undefined}
+                  >
+                    <path d="M6 3l5 5-5 5" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+                  </svg>
+                </button>
                 <svg width={14} height={14} viewBox="0 0 16 16" fill="none" aria-hidden>
                   <path
                     d="M2 4.5A1.5 1.5 0 0 1 3.5 3h3l1.5 2h4.5A1.5 1.5 0 0 1 14 6.5v5A1.5 1.5 0 0 1 12.5 13h-9A1.5 1.5 0 0 1 2 11.5v-7z"
@@ -242,18 +306,18 @@ export default function Sidebar({
                     strokeWidth="1.2"
                   />
                 </svg>
-                <span className={styles.wsName}>{baseName(ws)}</span>
+                <button type="button" className={styles.wsNameBtn} onClick={() => onSwitchWorkspace(ws)}>
+                  <span className={styles.wsName}>{baseName(ws)}</span>
+                </button>
                 {isServer && <span className={styles.wsLive}>●</span>}
-              </button>
-              {active && (
+              </div>
+              {!foldedGroup && (
                 <div className={styles.sessionList}>
-                  {filtered.length === 0 && (
-                    <div className={styles.empty}>
-                      {isServer ? '暂无会话' : '该工作区未接入后端(仅浏览)'}
-                    </div>
+                  {group.length === 0 && (
+                    <div className={styles.empty}>暂无会话</div>
                   )}
-                  {filtered.map((s) => {
-                    const renaming = renamingId === s.id
+                  {group.map((s) => {
+                    const renaming = isServer && renamingId === s.id
                     return (
                       <div
                         key={s.id}
@@ -276,7 +340,7 @@ export default function Sidebar({
                           <>
                             <button
                               className={styles.sessionMain}
-                              onClick={() => isServer && !s.current && onResume(s.id)}
+                              onClick={() => onOpenSession(ws, s.id)}
                               title={s.id}
                             >
                               <span
@@ -317,29 +381,29 @@ export default function Sidebar({
                       </div>
                     )
                   })}
-                  {contentResults.length > 0 && (
-                    <div className={styles.contentResults}>
-                      <div className={styles.groupLabel}>内容匹配</div>
-                      {contentResults.map((r) => (
-                        <button
-                          key={r.id}
-                          className={styles.contentRow}
-                          onClick={() => isServer && onResume(r.id)}
-                          title={r.excerpt}
-                        >
-                          <span className={styles.sessionTitle}>
-                            {r.title || r.id.slice(0, 18)}
-                          </span>
-                          <span className={styles.contentExcerpt}>{r.excerpt}</span>
-                        </button>
-                      ))}
-                    </div>
-                  )}
                 </div>
               )}
             </div>
           )
         })}
+        {contentResults.length > 0 && (
+          <div className={styles.contentResults}>
+            <div className={styles.groupLabel}>内容匹配(当前工作区)</div>
+            {contentResults.map((r) => (
+              <button
+                key={r.id}
+                className={styles.contentRow}
+                onClick={() => onOpenSession(serverDir, r.id)}
+                title={r.excerpt}
+              >
+                <span className={styles.sessionTitle}>
+                  {r.title || r.id.slice(0, 18)}
+                </span>
+                <span className={styles.contentExcerpt}>{r.excerpt}</span>
+              </button>
+            ))}
+          </div>
+        )}
       </div>
 
       <div className={styles.foot}>

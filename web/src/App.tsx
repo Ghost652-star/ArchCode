@@ -96,7 +96,7 @@ export default function App() {
   const [usage, setUsage] = useState<UsageTotal | null>(null)
   const [todos, setTodos] = useState<TodoItem[]>([])
   const [state, setState] = useState<AgentState | null>(null)
-  const [sessions, setSessions] = useState<SessionInfo[]>([])
+  const [sessionsByWs, setSessionsByWs] = useState<Record<string, SessionInfo[]>>({})
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [providers, setProviders] = useState<
     Array<{ name: string; model: string; protocol: string }>
@@ -149,10 +149,24 @@ export default function App() {
     })
   }, [])
 
+  /** 拉取全部工作区的会话清单(侧栏各组同时展示,不再只看激活目录)。 */
+  const refreshSessions = useCallback(async () => {
+    const rows = await Promise.all(
+      workspaces.map(async (ws) => {
+        try {
+          return [ws, await api.sessionsByWorkspace(ws || undefined)] as const
+        } catch {
+          return [ws, [] as SessionInfo[]] as const
+        }
+      }),
+    )
+    setSessionsByWs(Object.fromEntries(rows))
+  }, [workspaces])
+
   const refreshMeta = useCallback(async () => {
     try {
       setState(await api.state())
-      setSessions(await api.sessionsByWorkspace(activeWorkspace || undefined))
+      await refreshSessions()
       const m = await api.model()
       setProviders(m.providers)
       api.context().then(setContext).catch(() => {})
@@ -161,7 +175,7 @@ export default function App() {
     } catch {
       /* 服务端未就绪时静默 */
     }
-  }, [activeWorkspace])
+  }, [refreshSessions])
 
   useEffect(() => {
     refreshMeta()
@@ -182,26 +196,23 @@ export default function App() {
     })
   }, [serverDir])
 
-  // 切换工作区:刷新该工作区的会话清单;恢复其历史(仅 home 可恢复)
+  // 切换工作区后:加载该目录的历史对话(会话清单由 refreshSessions 全量覆盖)
   useEffect(() => {
     if (!activeWorkspace) return
     localStorage.setItem(ACTIVE_WS_KEY, activeWorkspace)
     let cancelled = false
     ;(async () => {
+      if (!isHome) {
+        itemsRef.current = []
+        setItems([])
+        return
+      }
       try {
-        const list = await api.sessionsByWorkspace(activeWorkspace || undefined)
+        const history = await api.history()
         if (cancelled) return
-        setSessions(list)
-        if (isHome) {
-          const history = await api.history()
-          if (cancelled) return
-          const restored = historyToItems(history)
-          itemsRef.current = restored
-          setItems([...restored])
-        } else {
-          itemsRef.current = []
-          setItems([])
-        }
+        const restored = historyToItems(history)
+        itemsRef.current = restored
+        setItems([...restored])
       } catch {
         /* ignore */
       }
@@ -440,35 +451,29 @@ export default function App() {
     }
   }, [isHome, refreshMeta])
 
+  /** 打开一个当前工作区内的会话:恢复 + 刷新元数据 + 重建对话区。 */
+  const openSession = useCallback(
+    async (id: string) => {
+      await api.resumeSession(id)
+      await refreshMeta()
+      const history = await api.history()
+      const restored = historyToItems(history)
+      itemsRef.current = restored
+      setItems([...restored])
+    },
+    [refreshMeta],
+  )
+
   const resumeSession = useCallback(
     async (id: string) => {
       if (!isHome) return
       try {
-        await api.resumeSession(id)
-        await refreshMeta()
-        await api.history().then((history) => {
-          const restored = historyToItems(history)
-          itemsRef.current = restored
-          setItems([...restored])
-        })
+        await openSession(id)
       } catch {
         /* ignore */
       }
     },
-    [isHome, refreshMeta],
-  )
-
-  const answerPermission = useCallback(
-    async (body: { allowed?: boolean; answer?: string }) => {
-      if (!permission) return
-      try {
-        await api.answerPermission(permission.requestId, body)
-      } catch {
-        /* ignore */
-      }
-      setPermission(null)
-    },
-    [permission],
+    [isHome, openSession],
   )
 
   const addWorkspace = useCallback((path: string) => {
@@ -485,7 +490,7 @@ export default function App() {
   }, [])
 
   const switchWorkspace = useCallback(
-    async (path: string) => {
+    async (path: string): Promise<boolean> => {
       const norm = (p: string) => p.replace(/\\/g, '/').toLowerCase()
       if (!activeWorkspace || norm(path) !== norm(activeWorkspace)) {
         try {
@@ -494,14 +499,45 @@ export default function App() {
           setPermission(null)
         } catch (e) {
           alert(e instanceof Error ? e.message : String(e))
-          return
+          return false
         }
         await refreshMeta()
       }
       localStorage.setItem(ACTIVE_WS_KEY, path)
       setActiveWorkspace(path)
+      return true
     },
     [activeWorkspace, refreshMeta],
+  )
+
+  /** 跨项目打开会话:目标非激活工作区时先切换(收旧造新),再恢复该会话。 */
+  const openWorkspaceSession = useCallback(
+    async (ws: string, id: string) => {
+      const norm = (p: string) => p.replace(/\\/g, '/').toLowerCase()
+      if (!isHome || norm(ws) !== norm(activeWorkspace)) {
+        const ok = await switchWorkspace(ws)
+        if (!ok) return
+      }
+      try {
+        await openSession(id)
+      } catch {
+        /* ignore */
+      }
+    },
+    [isHome, activeWorkspace, switchWorkspace, openSession],
+  )
+
+  const answerPermission = useCallback(
+    async (body: { allowed?: boolean; answer?: string }) => {
+      if (!permission) return
+      try {
+        await api.answerPermission(permission.requestId, body)
+      } catch {
+        /* ignore */
+      }
+      setPermission(null)
+    },
+    [permission],
   )
 
   // ── 三栏交互(设计 §11.3/§11.4)────────────────────────────────
@@ -582,14 +618,14 @@ export default function App() {
     >
       <div className={styles.sidebarCol}>
         <Sidebar
-          sessions={sessions}
+          sessionsByWs={sessionsByWs}
           state={state}
           workspaces={workspaces}
           activeWorkspace={activeWorkspace}
           collapsed={sidebarCollapsed}
           onToggleCollapse={toggleSidebarCollapsed}
           onNewSession={newSession}
-          onResume={resumeSession}
+          onOpenSession={openWorkspaceSession}
           onOpenSettings={() => setSettingsOpen(true)}
           onAddWorkspace={addWorkspace}
           onSwitchWorkspace={switchWorkspace}

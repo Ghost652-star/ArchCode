@@ -611,6 +611,39 @@ async def api_workspace_switch(body: dict):
     }
 
 
+@app.post("/api/workspace/pick")
+def api_workspace_pick():
+    """弹原生目录选择框(tkinter),返回所选绝对路径。
+
+    服务仅绑定 127.0.0.1,与浏览器同机——所以服务端弹的窗口就是用户屏幕上
+    的窗口。tkinter 建在一次性线程里(避免污染 uvicorn 工作线程);同步端点
+    跑在 FastAPI 线程池,阻塞不占事件循环。
+    """
+    import threading
+
+    def _pick() -> None:
+        import tkinter as tk
+        from tkinter import filedialog
+
+        root = tk.Tk()
+        root.withdraw()
+        root.attributes("-topmost", True)
+        try:
+            picked["path"] = filedialog.askdirectory(title="选择工作区文件夹") or ""
+        finally:
+            root.destroy()
+
+    picked: dict = {}
+    try:
+        t = threading.Thread(target=_pick, daemon=True)
+        t.start()
+        t.join()
+    except Exception as e:
+        raise HTTPException(500, f"目录选择器不可用: {e}")
+    path = (picked.get("path") or "").strip()
+    return {"ok": bool(path), "path": path or None}
+
+
 @app.post("/api/abort")
 async def api_abort():
     assert STATE is not None
