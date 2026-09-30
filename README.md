@@ -1,6 +1,6 @@
 # ArchCode
 
-ArchCode 是一个 AI 编程助手，提供 **Textual TUI** 与 **Web** 两种界面。支持流式对话、对话历史管理、5 层权限系统、HITL 权限弹窗、可插拔工具、计划模式（Plan Mode）、上下文自动压缩、MCP 协议接入任意外部工具 server、项目指令文档（AGENTS.md）、Skill 系统（单文件 + 目录型 + 专属工具 + allowedTools）、Hook 系统（事件 + 条件 + 动作的生命周期钩子），以及子 Agent 系统（定义式 + Fork 双模式、四道防线工具过滤、后台任务与 `<task-notification>` 回传）。
+ArchCode 是一个 AI 编程助手，提供 **Textual TUI** 与 **Web** 两种界面。支持流式对话、对话历史管理、5 层权限系统、HITL 权限弹窗、可插拔工具、计划模式（Plan Mode）、上下文自动压缩、MCP 协议接入任意外部工具 server、项目指令文档（AGENTS.md）、Skill 系统（单文件 + 目录型 + 专属工具 + allowedTools）、Hook 系统（事件 + 条件 + 动作的生命周期钩子），以及子 Agent 系统（定义式 + Fork 双模式、四道防线工具过滤、后台任务与 `<task-notification>` 回传）。Web 界面支持多工作区切换、设置面板在线编辑（模型 / MCP / Hooks / 子 Agent）、token 用量统计、后台任务面板与 TodoWrite 任务清单。
 
 ## 快速开始
 
@@ -82,11 +82,14 @@ uv run archcode --web
 uv run archcode --web --port 9000 -w F:/myproject
 ```
 
-- **项目 / 会话树**：左侧浏览工作区会话，新建 / 恢复（复用 SessionManager）
-- **对话流**：流式回复、推理过程与工具调用分行展示、Markdown 渲染
+- **工作区切换**：侧栏分组展示所有已添加项目及各自会话（分组可折叠、状态持久化）；点其他项目名即切换——后端按新目录重建整套运行时（工具 / 沙箱 / 指令 / 技能 / MCP）并恢复该目录最近一次对话，运行中或有后台任务时拒绝切换。点其他项目下的会话 = 切换 + 恢复一步到位，不再需要退出重启
+- **会话**：惰性创建（发出第一条消息才成为正式会话，不产生空条目）；重命名 / 删除 / 按标题搜索 / 跨会话内容搜索（摘要可直接跳转）
+- **对话流**：流式回复、推理块与工具调用分行展示（按工具定制摘要，EditFile/WriteFile 展开渲染 diff）、Markdown + 代码高亮、消息复制按钮、用户消息中的 @引用渲染成 chip
 - **HITL**：权限弹窗与 AskUserQuestion 走 SSE 往返，交互与 TUI 一致
-- **输入卡**：`/` 指令与技能菜单、权限模式切换、上下文占用、模型名与切换、发送 ⇄ 停止
-- **设置面板**：模型 / MCP / hooks / 权限 / 外观（写回配置文件后提示重启生效）
+- **输入卡**：`/` 指令与技能菜单、权限模式切换、上下文占用圈（悬停展开六项分解与平均缓存命中率）、会话累计 token 用量（点开四桶明细）、模型名与切换、发送 ⇄ 停止
+- **状态与任务**：顶栏后台任务面板（子 Agent 任务状态 / 耗时 / token 用量）、TodoWrite 任务清单面板（输入区上方）、轮次分隔条（步数 / 耗时 / 单轮用量）、压缩进度卡、自动重试与 `/plan` 等提示行
+- **设置面板**：模型 / MCP 服务器 / Skills / 子 Agent / Hooks / 权限 / 外观 七节，均为"列表 → 详情/编辑"主从交互；子 Agent 可在界面新建 / 编辑 / 删除（写入定义文件），内置定义可一键"复制为项目级/用户级"后修改（同名遮蔽）；Hooks 表单化（8 类事件下拉 + 4 种执行方式）；MCP / 供应商支持编辑来源作用域的条目（写回对应配置文件）。所有配置写入文件后重启生效
+- **添加工作区**：点击"📂 选择文件夹"弹出本机原生目录选择框（手输路径仍可用）
 
 前端开发模式：终端 A 跑 `uv run archcode --web`（后端 8000），终端 B 跑 `cd web && npm run dev`（Vite 5173，`/api` 已代理到后端）。
 
@@ -201,6 +204,7 @@ hooks:
 - **Fork**:继承父 Agent 完整对话,拿到任务从头跑到尾,**始终后台运行**,结果经 `<task-notification>` 异步回传,主 Agent 不阻塞。
 - **四道防线**工具过滤:全局禁止(不能 spawn / 不能问用户 / 不能调度)+ 自定义收紧 + 后台白名单 + 定义黑白名单。
 - 定义式子 agent 默认前台同步执行(`run_in_background: true` 或定义 `background: true` 可转后台);用 `TaskList` / `TaskGet` 查后台任务。
+- **界面管理(Web 设置面板)**："子 Agent"节展示全部生效定义(来源层 / 模型 / 轮次预算 / 权限模式 / 工具白名单);新建、编辑、删除直接操作定义文件;内置定义(Explore / Plan / general-purpose)可"复制为项目级/用户级"后修改——同名即遮蔽内置,本体保持只读不可变。
 - **Skill 联动**:skill 的 `mode: fork` 会创建后台子 agent 执行该 skill(按 `context` 档位携带父对话、按 `allowedTools` 过滤工具集);`mode: inline` 维持钉 SOP 进主对话。
 
 ### 上下文压缩
@@ -297,6 +301,8 @@ mcp_servers:
 2. 调用 `tools/list` 拿工具清单
 3. 包成 `MCPToolWrapper`（`should_defer=True`）
 4. LLM 通过 `ToolSearch` 按需加载 schema
+
+配置也可通过 Web 设置面板的"MCP 服务器"节新增 / 编辑 / 删除（含环境变量），写入对应作用域的 `config.yaml`，重启生效。
 
 发现新 server：搜索 `mcp-server-*`（npm / PyPI）、看 [MCP 官方 server 列表](https://github.com/modelcontextprotocol/servers)。
 
