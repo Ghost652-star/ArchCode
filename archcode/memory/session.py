@@ -510,3 +510,25 @@ class SessionManager:
                 self.delete(meta.id)
                 removed += 1
         return removed
+
+    def sweep_empty(self) -> int:
+        """删除"零内容"会话:jsonl 为 0 字节(从未发出过消息的草稿)。
+
+        惰性创建机制下理论上不会再产生,这里兜底清理历史遗留的空文件。
+        Returns: 删除数量。
+        """
+        removed = 0
+        for jsonl in self.sessions_dir.glob("*.jsonl"):
+            try:
+                if jsonl.stat().st_size > 0:
+                    continue
+            except OSError:
+                continue
+            meta = jsonl.with_suffix(".meta")
+            try:
+                jsonl.unlink()
+                meta.unlink(missing_ok=True)
+                removed += 1
+            except OSError:
+                continue
+        return removed

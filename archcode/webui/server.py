@@ -57,14 +57,22 @@ class ServerState:
         self.providers = providers or []  # ProviderConfig 列表(模型选择器用)
         self.session_manager = SessionManager(work_dir)
         self.conversation = ConversationManager()
-        self._session = self.session_manager.create()
-        self._session.bind(self.conversation)
-        log.info("session created: %s", self._session.id)
-        set_session_id(self._session.id)
+        # 惰性创建:_session 为 None = "草稿对话"——发出第一条消息时才真正
+        # 落盘会话文件,避免启动/切换/新对话制造一堆空时间戳条目
+        self._session = None
+        set_session_id(None)
         self._run_lock = asyncio.Lock()
         self._permissions: dict[str, asyncio.Future] = {}
         self._pending_permits: list[dict] = []  # 重连时重发的未决请求
         self._usage = self._usage_from_meta()
+
+    def ensure_session(self) -> None:
+        """草稿 → 正式会话:第一次要写消息时才创建会话文件并绑定。"""
+        if self._session is None:
+            self._session = self.session_manager.create()
+            self._session.bind(self.conversation)
+            set_session_id(self._session.id)
+            log.info("session materialized: %s", self._session.id)
 
     # ── 用量累计(数据源:agent 每轮 yield 的 UsageEvent;持久层:.meta 索引)──
 
@@ -98,21 +106,23 @@ class ServerState:
 
     # ── 会话 ──
 
-    def new_session(self) -> str:
+    def new_session(self) -> str | None:
+        """开新对话:旧会话收尾,回到草稿态(第一条消息发出时才落盘)。
+
+        返回 None = 当前是草稿,尚无会话文件。
+        """
         self.agent.clear_active_skills()
         old = self._session
         self.conversation = ConversationManager()
-        self._session = self.session_manager.create()
-        self._session.bind(self.conversation)
+        self._session = None
         if old is not None:
             old.close()
-        log.info("session rotated: %s -> %s", old.id if old else "-", self._session.id)
-        set_session_id(self._session.id)
+        set_session_id(None)
         self._usage = self._usage_from_meta()
         store = _todo_store()
         if store is not None:
-            store.clear()  # 任务清单是会话作用域,会话轮转即清空
-        return self._session.id
+            store.clear()
+        return None
 
     def resume_session(self, session_id: str) -> None:
         restored = self.session_manager.open(session_id)
@@ -202,9 +212,9 @@ class ServerState:
         session = None
         resumed: str | None = None
 
-        # ── 会话:恢复最近一个"非空"历史会话,没有才创建新会话 ──
-        # 候选必须 message_count>0:启动时自动创建的空会话 last_active 永远最新,
-        # 不排除会把刚建的空会话自己"恢复"一遍,真正的历史永远轮不上
+        # ── 会话:恢复最近一个"非空"历史会话;没有就保持草稿态 ──
+        # 候选必须 message_count>0:空会话无恢复价值;不再无条件 create,
+        # 草稿在第一条消息发出时才落盘(惰性创建)
         metas = [m for m in session_manager.list_sessions() if m.message_count > 0]
         if metas:
             latest = max(metas, key=lambda m: m.last_active_ms)
@@ -216,9 +226,6 @@ class ServerState:
                     resumed = latest.id
             except HTTPException:
                 log.warning("[switch] 恢复最近会话失败: %s", latest.id)
-        if session is None:
-            session = session_manager.create()
-        session.bind(conversation)
 
         # ── 替换绑定 ──
         self.agent = agent
@@ -228,7 +235,7 @@ class ServerState:
         self.session_manager = session_manager
         self._session = session
         self.mcp_manager = mcp_manager  # type: ignore[attr-defined]
-        set_session_id(session.id)
+        set_session_id(session.id if session else None)
         self._usage = self._usage_from_meta()
         store = _todo_store()
         if store is not None:
@@ -456,8 +463,10 @@ def api_model_switch(body: dict):
 
 @app.post("/api/sessions")
 def api_new_session():
+    """开新对话:回到草稿态,第一条消息发出时才创建会话文件。"""
     assert STATE is not None
-    return {"session_id": STATE.new_session()}
+    STATE.new_session()
+    return {"ok": True}
 
 
 @app.post("/api/sessions/{session_id}/resume")
@@ -553,6 +562,7 @@ async def api_chat(body: dict):
         async with STATE._run_lock:
             turn_usage = {"input": 0, "output": 0, "cache_read": 0, "cache_creation": 0, "rounds": 0}
             try:
+                STATE.ensure_session()  # 第一条消息发出时才把草稿落盘为正式会话
                 async for event in STATE.agent.run(text, STATE.conversation):
                     if isinstance(event, UsageEvent):
                         STATE.record_usage(event, turn_usage)
@@ -1092,6 +1102,9 @@ def create_web_server(
     """装配入口:由 __main__ 的 --web 路径调用(装配同 TUI,Q5)。"""
     global STATE
     STATE = ServerState(agent, work_dir, providers=providers)
+    removed = STATE.session_manager.sweep_empty()  # 清理历史遗留的空会话文件
+    if removed:
+        log.info("swept %d empty session file(s)", removed)
     if _DIST.exists():
         app.mount("/", StaticFiles(directory=str(_DIST), html=True), name="static")
 
