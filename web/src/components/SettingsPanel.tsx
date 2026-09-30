@@ -45,6 +45,9 @@ export default function SettingsPanel({ onClose }: { onClose: () => void }) {
   const [skillDetail, setSkillDetail] = useState<string | null>(null)
   const [agentDetail, setAgentDetail] = useState<string | null>(null)
   const [agentEdit, setAgentEdit] = useState<string | 'new' | null>(null)
+  const [agentOverride, setAgentOverride] = useState<
+    { def: AgentDefInfo; scope: Scope } | null
+  >(null)
   const [hookEdit, setHookEdit] = useState<number | 'new' | null>(null)
   const [mode, setMode] = useState('default')
   const [theme, setTheme] = useState(document.documentElement.dataset.theme ?? 'light')
@@ -78,10 +81,12 @@ export default function SettingsPanel({ onClose }: { onClose: () => void }) {
     api.state().then((s) => setMode(s.permission_mode ?? 'default')).catch(() => {})
   }, [])
 
-  const save = useCallback(
-    async (key: 'providers' | 'mcp_servers' | 'hooks', items: unknown[]) => {
+  const otherScope: Scope = scope === 'user' ? 'project' : 'user'
+
+  const saveTo = useCallback(
+    async (target: Scope, key: 'providers' | 'mcp_servers' | 'hooks', items: unknown[]) => {
       try {
-        const res = await api.putSettings(scope, key, items)
+        const res = await api.putSettings(target, key, items)
         await load()
         setNotice(
           res.restart_required ? '已写入,重启 ArchCode 后生效' : '已写入',
@@ -91,7 +96,14 @@ export default function SettingsPanel({ onClose }: { onClose: () => void }) {
         setNotice(e instanceof Error ? e.message : String(e))
       }
     },
-    [scope, load],
+    [load],
+  )
+
+  const save = useCallback(
+    (key: 'providers' | 'mcp_servers' | 'hooks', items: unknown[]) => {
+      return saveTo(scope, key, items)
+    },
+    [scope, saveTo],
   )
 
   const providers = (data['providers'] as Array<Record<string, unknown>>) ?? []
@@ -127,6 +139,7 @@ export default function SettingsPanel({ onClose }: { onClose: () => void }) {
                   setSkillDetail(null)
                   setAgentDetail(null)
                   setAgentEdit(null)
+                  setAgentOverride(null)
                   setHookEdit(null)
                 }}
               >
@@ -142,14 +155,19 @@ export default function SettingsPanel({ onClose }: { onClose: () => void }) {
                 items={providers}
                 readOnlyItems={(userData['providers'] as Array<Record<string, unknown>>) ?? []}
                 scope={scope}
+                otherScope={otherScope}
                 onSave={(items) => save('providers', items)}
+                onSaveOther={(items) => saveTo(otherScope, 'providers', items)}
               />
             )}
             {section === 'mcp' && (
               <McpSection
                 items={mcpServers}
                 readOnlyItems={(userData['mcp_servers'] as Array<Record<string, unknown>>) ?? []}
+                scope={scope}
+                otherScope={otherScope}
                 onSave={(items) => save('mcp_servers', items)}
+                onSaveOther={(items) => saveTo(otherScope, 'mcp_servers', items)}
               />
             )}
             {section === 'skills' && (() => {
@@ -182,23 +200,41 @@ export default function SettingsPanel({ onClose }: { onClose: () => void }) {
             })()}
             {section === 'agents' && (() => {
               if (agentEdit !== null) {
-                const editing = agentEdit === 'new' ? null : agents.find((a) => a.agent_type === agentEdit) ?? null
+                const editing = agentOverride?.def ?? (agentEdit === 'new' ? null : agents.find((a) => a.agent_type === agentEdit) ?? null)
+                const editScope: Scope = agentOverride?.scope ?? scope
                 return (
                   <AgentEditForm
                     initial={editing}
-                    scope={scope}
-                    onBack={() => setAgentEdit(null)}
+                    scope={editScope}
+                    onBack={() => {
+                      setAgentEdit(null)
+                      setAgentOverride(null)
+                    }}
                     onSaved={(msg) => {
                       api.agents().then(setAgents).catch(() => {})
                       setNotice(msg)
                       window.setTimeout(() => setNotice(''), 4000)
                       setAgentEdit(null)
+                      setAgentOverride(null)
                     }}
                   />
                 )
               }
               const detail = agents.find((a) => a.agent_type === agentDetail)
-              if (detail) return <AgentDetail agent={detail} onBack={() => setAgentDetail(null)} />
+              if (detail) {
+                return (
+                  <AgentDetail
+                    agent={detail}
+                    scope={scope}
+                    onBack={() => setAgentDetail(null)}
+                    onClone={(target) => {
+                      setAgentOverride({ def: detail, scope: target })
+                      setAgentDetail(null)
+                      setAgentEdit(detail.agent_type)
+                    }}
+                  />
+                )
+              }
               return (
                 <div>
                   {agents.length === 0 ? (
@@ -390,14 +426,19 @@ function ProviderSection({
   items,
   readOnlyItems,
   scope,
+  otherScope,
   onSave,
+  onSaveOther,
 }: {
   items: Array<Record<string, unknown>>
   readOnlyItems: Array<Record<string, unknown>>
-  scope: string
+  scope: Scope
+  otherScope: Scope
   onSave: (items: unknown[]) => void
+  onSaveOther: (items: unknown[]) => void
 }) {
-  const [editing, setEditing] = useState<number | 'new' | null>(null)
+  type Editing = { source: 'current' | 'other'; idx: number } | 'new'
+  const [editing, setEditing] = useState<Editing | null>(null)
   const [form, setForm] = useState({
     name: '',
     protocol: 'openai-compat',
@@ -410,8 +451,9 @@ function ProviderSection({
   })
   const set = (k: string, v: string | boolean) => setForm((f) => ({ ...f, [k]: v }))
 
-  const startEdit = (idx: number | 'new') => {
-    setEditing(idx)
+  const startEdit = (source: 'current' | 'other', idx: number | 'new') => {
+    if (idx !== 'new') setEditing({ source, idx })
+    else setEditing('new')
     if (idx === 'new') {
       setForm({
         name: '',
@@ -425,7 +467,7 @@ function ProviderSection({
       })
       return
     }
-    const p = items[idx] as Record<string, unknown>
+    const p = (source === 'current' ? items : readOnlyItems)[idx] as Record<string, unknown>
     setForm({
       name: String(p['name'] ?? ''),
       protocol: String(p['protocol'] ?? 'openai-compat'),
@@ -440,11 +482,17 @@ function ProviderSection({
 
   if (editing !== null) {
     const isNew = editing === 'new'
+    const source = isNew ? 'current' : editing.source
+    const originList = source === 'current' ? items : readOnlyItems
+    const scopeLabel =
+      source === 'current'
+        ? scope === 'project' ? '项目' : '用户'
+        : otherScope === 'project' ? '项目' : '用户'
     const canSave =
       form.name.trim() !== '' && form.base_url.trim() !== '' && form.model.trim() !== ''
     const save = () => {
       const entry: Record<string, unknown> = {
-        ...(isNew ? {} : (items[editing] as Record<string, unknown>)),
+        ...(isNew ? {} : (originList[editing.idx] as Record<string, unknown>)),
         name: form.name.trim(),
         protocol: form.protocol,
         base_url: form.base_url.trim(),
@@ -454,7 +502,15 @@ function ProviderSection({
         context_window: parseInt(form.context_window, 10) || 0,
         thinking: form.thinking,
       }
-      onSave(isNew ? [...items, entry] : items.map((p, j) => (j === editing ? entry : p)))
+      if (source === 'current') {
+        onSave(isNew ? [...items, entry] : items.map((p, j) => (j === editing.idx ? entry : p)))
+      } else {
+        onSaveOther(
+          isNew
+            ? [...readOnlyItems, entry]
+            : readOnlyItems.map((p, j) => (j === editing.idx ? entry : p)),
+        )
+      }
       setEditing(null)
     }
     return (
@@ -466,7 +522,7 @@ function ProviderSection({
           {isNew ? '添加供应商' : `编辑 · ${form.name}`}
         </div>
         <div className={styles.formCard}>
-          <div className={styles.formScope}>作用域: {scope === 'project' ? '项目' : '用户'}</div>
+          <div className={styles.formScope}>作用域: {scopeLabel}</div>
           <div className={styles.fieldRow}>
             <div>
               <label className={styles.fieldLabel}>名称</label>
@@ -549,7 +605,11 @@ function ProviderSection({
                 type="button"
                 className={styles.deleteBtn}
                 onClick={() => {
-                  onSave(items.filter((_, j) => j !== editing))
+                  if (source === 'current') {
+                    onSave(items.filter((_, j) => j !== editing.idx))
+                  } else {
+                    onSaveOther(readOnlyItems.filter((_, j) => j !== editing.idx))
+                  }
                   setEditing(null)
                 }}
               >
@@ -584,7 +644,7 @@ function ProviderSection({
       )}
       <div className={styles.listHeadRow}>
         <span className={styles.listHead}>当前作用域已配置 {items.length} 个</span>
-        <button type="button" className={styles.addBtn} onClick={() => startEdit('new')}>
+        <button type="button" className={styles.addBtn} onClick={() => startEdit('current', 'new')}>
           + 添加供应商
         </button>
       </div>
@@ -595,7 +655,13 @@ function ProviderSection({
         </div>
       )}
       {readOnlyItems.map((p, i) => (
-        <div key={`ro-${i}`} className={styles.row}>
+        <button
+          key={`ro-${i}`}
+          type="button"
+          className={`${styles.row} ${styles.rowClickable}`}
+          onClick={() => startEdit('other', i)}
+          title="点击编辑(写回其来源作用域文件)"
+        >
           <div className={styles.rowMain}>
             <div className={styles.rowTitle}>
               {String(p['name'] ?? '')} · {String(p['model'] ?? '')}
@@ -605,15 +671,16 @@ function ProviderSection({
             </div>
           </div>
           <span className={styles.tag}>{p['api_key'] ? 'key ✓' : 'key 缺失'}</span>
-          <span className={styles.tag}>用户级</span>
-        </div>
+          <span className={styles.tag}>{otherScope === 'user' ? '用户级' : '项目级'}</span>
+          <span className={styles.rowChevron}>›</span>
+        </button>
       ))}
       {items.map((p, i) => (
         <button
           key={i}
           type="button"
           className={`${styles.row} ${styles.rowClickable}`}
-          onClick={() => startEdit(i)}
+          onClick={() => startEdit('current', i)}
         >
           <div className={styles.rowMain}>
             <div className={styles.rowTitle}>
@@ -638,24 +705,33 @@ function ProviderSection({
 function McpSection({
   items,
   readOnlyItems,
+  scope,
+  otherScope,
   onSave,
+  onSaveOther,
 }: {
   items: Array<Record<string, unknown>>
   readOnlyItems: Array<Record<string, unknown>>
+  scope: Scope
+  otherScope: Scope
   onSave: (items: unknown[]) => void
+  onSaveOther: (items: unknown[]) => void
 }) {
-  // 编辑态:列表 ↔ 表单两个视图;null = 列表,'new' = 新建,数字 = 编辑第 idx 项
-  const [editing, setEditing] = useState<number | 'new' | null>(null)
+  // 编辑态:null = 列表;'new' = 新建(写当前作用域);{source,idx} = 编辑对应
+  // 作用域文件的条目('other' 保存时写回其来源文件)
+  type Editing = { source: 'current' | 'other'; idx: number } | 'new'
+  const [editing, setEditing] = useState<Editing | null>(null)
   const [form, setForm] = useState({ name: '', type: 'stdio', command: '', args: '', url: '', env: '' })
   const set = (k: string, v: string) => setForm((f) => ({ ...f, [k]: v }))
 
-  const startEdit = (idx: number | 'new') => {
-    setEditing(idx)
+  const startEdit = (source: 'current' | 'other', idx: number | 'new') => {
+    if (idx !== 'new') setEditing({ source, idx })
+    else setEditing('new')
     if (idx === 'new') {
       setForm({ name: '', type: 'stdio', command: '', args: '', url: '', env: '' })
       return
     }
-    const s = items[idx] as Record<string, unknown>
+    const s = (source === 'current' ? items : readOnlyItems)[idx] as Record<string, unknown>
     const isHttp = Boolean(s['url'])
     const env = String((s['env'] as Record<string, unknown>) ? Object.entries(s['env'] as Record<string, unknown>).map(([k, v]) => `${k}=${String(v)}`).join('\n') : '')
     setForm({
@@ -670,6 +746,12 @@ function McpSection({
 
   if (editing !== null) {
     const isNew = editing === 'new'
+    const source = isNew ? 'current' : editing.source
+    const originList = source === 'current' ? items : readOnlyItems
+    const scopeLabel =
+      source === 'current'
+        ? scope === 'project' ? '项目' : '用户'
+        : otherScope === 'project' ? '项目' : '用户'
     const canSave =
       form.name.trim() !== '' &&
       (form.type === 'http' ? form.url.trim() !== '' : form.command.trim() !== '')
@@ -679,7 +761,8 @@ function McpSection({
           ‹ 返回列表
         </button>
         <div className={styles.detailTitle}>{isNew ? '新建 MCP 服务器' : `编辑 · ${form.name}`}</div>
-        <div className={styles.editForm}>
+        <div className={styles.formCard}>
+          <div className={styles.formScope}>作用域: {scopeLabel}</div>
           <label className={styles.fieldLabel}>名称</label>
           <input
             className={styles.input}
@@ -733,19 +816,23 @@ function McpSection({
             </>
           )}
         </div>
-        <div className={styles.editActions}>
-          {!isNew && (
-            <button
-              type="button"
-              className={styles.deleteBtn}
-              onClick={() => {
-                onSave(items.filter((_, j) => j !== editing))
-                setEditing(null)
-              }}
-            >
-              删除
-            </button>
-          )}
+          <div className={styles.editActions}>
+            {!isNew && (
+              <button
+                type="button"
+                className={styles.deleteBtn}
+                onClick={() => {
+                  if (source === 'current') {
+                    onSave(items.filter((_, j) => j !== editing.idx))
+                  } else {
+                    onSaveOther(readOnlyItems.filter((_, j) => j !== editing.idx))
+                  }
+                  setEditing(null)
+                }}
+              >
+                删除
+              </button>
+            )}
           <span className={styles.spring} />
           <button type="button" className={styles.cancelBtn} onClick={() => setEditing(null)}>
             取消
@@ -773,10 +860,15 @@ function McpSection({
                           }),
                       ),
                     }
-              const next = isNew
-                ? [...items, entry]
-                : items.map((it, j) => (j === editing ? entry : it))
-              onSave(next)
+              if (source === 'current') {
+                onSave(isNew ? [...items, entry] : items.map((it, j) => (j === editing.idx ? entry : it)))
+              } else {
+                onSaveOther(
+                  isNew
+                    ? [...readOnlyItems, entry]
+                    : readOnlyItems.map((it, j) => (j === editing.idx ? entry : it)),
+                )
+              }
               setEditing(null)
             }}
           >
@@ -791,21 +883,27 @@ function McpSection({
   return (
     <div>
       {items.length === 0 && readOnlyItems.length > 0 && (
-        <div className={styles.hint}>当前作用域未配置,以下为生效的 用户级 配置(只读)。</div>
+        <div className={styles.hint}>当前作用域未配置,以下为生效的 {otherScope === 'user' ? '用户级' : '项目级'} 配置(点击可编辑,写回其来源文件)。</div>
       )}
       {items.length === 0 && readOnlyItems.length === 0 && (
         <div className={styles.hint}>当前作用域未配置 MCP 服务器。</div>
       )}
       <div className={styles.listHeadRow}>
-        <span className={styles.listHead}>已配置 {items.length} 个</span>
-        <button type="button" className={styles.addBtn} onClick={() => startEdit('new')}>
+        <span className={styles.listHead}>当前作用域已配置 {items.length} 个</span>
+        <button type="button" className={styles.addBtn} onClick={() => startEdit('current', 'new')}>
           + 新建
         </button>
       </div>
       {readOnlyItems.map((s, i) => {
         const isHttp = Boolean(s['url'])
         return (
-          <div key={`ro-${i}`} className={styles.row}>
+          <button
+            key={`ro-${i}`}
+            type="button"
+            className={`${styles.row} ${styles.rowClickable}`}
+            onClick={() => startEdit('other', i)}
+            title="点击编辑(写回其来源作用域文件)"
+          >
             <div className={styles.rowMain}>
               <div className={styles.rowTitle}>{String(s['name'] ?? '')}</div>
               <div className={styles.rowDesc}>
@@ -815,8 +913,9 @@ function McpSection({
               </div>
             </div>
             <span className={styles.tag}>{isHttp ? 'http' : 'stdio'}</span>
-            <span className={styles.tag}>用户级</span>
-          </div>
+            <span className={styles.tag}>{otherScope === 'user' ? '用户级' : '项目级'}</span>
+            <span className={styles.rowChevron}>›</span>
+          </button>
         )
       })}
       {items.map((s, i) => {
@@ -826,7 +925,7 @@ function McpSection({
             key={i}
             type="button"
             className={`${styles.row} ${styles.rowClickable}`}
-            onClick={() => startEdit(i)}
+            onClick={() => startEdit('current', i)}
           >
             <div className={styles.rowMain}>
               <div className={styles.rowTitle}>{String(s['name'] ?? '')}</div>
@@ -841,7 +940,7 @@ function McpSection({
           </button>
         )
       })}
-      <div className={styles.hint}>点击条目编辑;变更需重启 ArchCode 生效。</div>
+      <div className={styles.hint}>点击条目编辑(来源条目写回其作用域文件);MCP 变更需重启生效。</div>
     </div>
   )
 }
@@ -887,8 +986,18 @@ function SkillDetail({
   )
 }
 
-/** 详情视图:子 agent 定义(全部 frontmatter 字段 + 工具清单 + 路径)。 */
-function AgentDetail({ agent, onBack }: { agent: AgentDefInfo; onBack: () => void }) {
+/** 详情视图:子 agent 定义(内置只读 + "复制为项目级/用户级"遮蔽入口)。 */
+function AgentDetail({
+  agent,
+  scope,
+  onBack,
+  onClone,
+}: {
+  agent: AgentDefInfo
+  scope: Scope
+  onBack: () => void
+  onClone: (target: Scope) => void
+}) {
   return (
     <div>
       <button type="button" className={styles.backBtn} onClick={onBack}>
@@ -930,8 +1039,19 @@ function AgentDetail({ agent, onBack }: { agent: AgentDefInfo; onBack: () => voi
           </>
         )}
       </div>
+      {agent.source === 'builtin' && (
+        <div className={styles.cloneRow}>
+          <span className={styles.cloneLabel}>内置定义不可直接改,可复制一份来遮蔽:</span>
+          <button type="button" className={styles.cloneBtn} onClick={() => onClone('project')}>
+            复制为项目级
+          </button>
+          <button type="button" className={styles.cloneBtn} onClick={() => onClone('user')}>
+            复制为用户级
+          </button>
+        </div>
+      )}
       <div className={styles.hint}>
-        修改定义请编辑对应 Markdown 文件,或直接在界面新建/编辑同目录定义,重启 ArchCode 后生效。
+        修改定义请编辑对应 Markdown 文件,或复制一份自定义,重启 ArchCode 后生效。
       </div>
     </div>
   )
