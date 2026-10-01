@@ -105,6 +105,11 @@ def _session_or_error(session_id: str) -> SessionRuntime:
 _TYPE_MAP = {
     "StreamText": lambda e: {"text": e.text},
     "ThinkingText": lambda e: {"text": e.text},
+    "ToolUseEvent": lambda e: {
+        "tool_id": e.tool_id,
+        "tool_name": e.tool_name,
+        "arguments": e.arguments,
+    },
     "TurnComplete": lambda e: {"turn": e.turn},
     "ErrorEvent": lambda e: {"message": e.message},
     "LoopComplete": lambda e: {"total_turns": e.total_turns, "text": e.text},

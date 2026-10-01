@@ -252,7 +252,8 @@ export default function App() {
   // 打开的会话正在后台运行:轮询状态,完成时自动刷新历史
   const prevRunningRef = useRef(false)
   useEffect(() => {
-    if (!openRunning) {
+    // 任意会话在跑就轮询(不限当前打开的):驱动侧栏转圈与完成检测
+    if (runningIds.length === 0) {
       prevRunningRef.current = false
       return
     }
@@ -265,7 +266,7 @@ export default function App() {
       }
     }, 3000)
     return () => clearInterval(timer)
-  }, [openRunning])
+  }, [runningIds.length > 0])
   useEffect(() => {
     if (prevRunningRef.current && !openRunning && openId) {
       ;(async () => {
@@ -511,6 +512,8 @@ export default function App() {
       })
       try {
         await api.chat(sid, text)
+        // 乐观标记:转圈立即出现,不等 3s 轮询
+        setRunningIds((prev) => (prev.includes(sid) ? prev : [...prev, sid]))
       } catch (e) {
         itemsRef.current = [
           ...itemsRef.current,
@@ -697,6 +700,7 @@ export default function App() {
       <div className={styles.sidebarCol}>
         <Sidebar
           sessionsByWs={sessionsByWs}
+          runningIds={runningIds}
           openWorkspace={openWs}
           openSessionId={openId}
           workspaces={workspaces}

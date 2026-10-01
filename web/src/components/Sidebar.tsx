@@ -6,6 +6,8 @@ import styles from './Sidebar.module.css'
 interface Props {
   /** 全部工作区的会话清单(各组同时展示,键 = 工作区路径)。 */
   sessionsByWs: Record<string, SessionInfo[]>
+  /** 正在运行的会话 id(3s 轮询 /api/state,驱动会话行的转圈)。 */
+  runningIds: string[]
   openWorkspace: string
   openSessionId: string | null
   workspaces: string[]
@@ -43,6 +45,7 @@ function relTime(ms?: number): string {
 /** 侧栏:工作区分组树,每组同时展示各自会话,可折叠;点击跨项目会话自动切换(§10.5/§10.9-4)。 */
 export default function Sidebar({
   sessionsByWs,
+  runningIds,
   openWorkspace,
   openSessionId,
   workspaces,
@@ -83,6 +86,8 @@ export default function Sidebar({
       return next
     })
   }
+
+  const runningSet = new Set(runningIds)
 
   const groupSessions = useCallback(
     (ws: string) =>
@@ -346,7 +351,7 @@ export default function Sidebar({
                             >
                               <span
                                 className={styles.sessionDot}
-                                data-running={s.running || undefined}
+                                data-running={runningSet.has(s.id) || undefined}
                               />
                               <span className={styles.sessionTitle}>
                                 {s.title || s.id.slice(0, 18)}

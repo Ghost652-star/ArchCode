@@ -238,8 +238,21 @@
   background: var(--ac-border-l3);
 }
 
+/* 运行中:6px 静点 → 10px 转圈(谁在跑一目了然,完成即恢复静点) */
 .sessionDot[data-running] {
-  background: var(--ac-state-success);
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: transparent;
+  border: 2px solid var(--ac-border-l3);
+  border-top-color: var(--ac-state-success);
+  animation: sessionSpin 0.8s linear infinite;
+}
+
+@keyframes sessionSpin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .sessionTitle {
