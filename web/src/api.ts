@@ -38,7 +38,6 @@ export const api = {
       running_session_ids: string[]
       workspaces: string[]
       max_concurrent_runs: number
-      model: string
     }>('/api/state'),
 
   registerWorkspace: (path: string) =>
@@ -62,7 +61,9 @@ export const api = {
 
   // ── 会话 ──
   sessionsByWorkspace: (workspace: string) =>
-    jsonFetch<SessionInfo[]>(`/api/sessions${q({ workspace })}`),
+    jsonFetch<{ workspace: string; sessions: SessionInfo[] }>(
+      `/api/sessions${q({ workspace })}`,
+    ).then((r) => r.sessions),
 
   newSession: (workspace: string) =>
     jsonFetch<{ session_id: string; workspace: string }>('/api/sessions', {
@@ -255,8 +256,9 @@ export function subscribeEvents(
     }
   })
   es.onerror = () => {
-    // 浏览器自动重连(带 Last-Event-ID);只有连接被服务端正常关闭
-    // (readyState === CLOSED)才视为流结束
+    // 正常结束走 done 哨兵(上方主动 close);这里兜底网络级断亡。
+    // 注意:服务端流正常结束时浏览器是自动重连(readyState=CONNECTING),不是 CLOSED——
+    // 判断 CLOSED 才算结束只对"连接彻底死亡"成立,不能作为流的常规结束信号。
     if (es.readyState === EventSource.CLOSED) onEnd()
   }
   return () => es.close()

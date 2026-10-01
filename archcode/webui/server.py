@@ -22,7 +22,7 @@ import uuid
 from dataclasses import asdict
 from pathlib import Path, PurePosixPath
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -340,13 +340,18 @@ async def _run_session_message(rt: SessionRuntime, text: str) -> None:
     """会话运行任务:事件进通道,浏览器断开不影响;结束自行收尾。"""
     assert STATE is not None
     async with rt.lock:
-        rt.events = EventChannel()
+        if rt.events is None or rt.events.done:
+            rt.events = EventChannel()  # 新一轮:复用早订阅挂上的通道,已结束才换新
         turn_usage = {
             "input": 0, "output": 0, "cache_read": 0, "cache_creation": 0, "rounds": 0,
         }
         try:
+            was_draft = rt.session is None
             rt.materialize()
             _registry().materialize(rt)
+            if was_draft:
+                # 草稿键已换正式 id:广播给订阅方同步换 id,后续 state/history 按新 id 才能找到
+                rt.events.publish({"type": "session_renamed", "session_id": rt.session_id})
             rt.agent._abort_event.clear()  # 新一轮重置中断(同 TUI)
             async for event in rt.agent.run(text, rt.conversation):
                 if isinstance(event, UsageEvent):
@@ -401,21 +406,35 @@ async def api_chat(body: dict):
 
 
 @app.get("/api/events/{session_id}")
-async def api_events(session_id: str, after: int = -1):
-    """订阅会话事件流(SSE):重放 after 之后的事件,实时跟随到运行结束。"""
+async def api_events(session_id: str, request: Request, after: int = -1):
+    """订阅会话事件流(SSE):重放 after 之后的事件,实时跟随到运行结束。
+
+    断线续传靠 Last-Event-ID 头(EventSource 自动带),查询参数 after 仅调试用。
+    流末尾发 done 哨兵——浏览器 EventSource 对正常结束的流会自动重连
+    (onerror 且 readyState=CONNECTING),没有 done 客户端就永远等不到结束。
+    """
     rt = _registry().session(session_id)
-    if rt is None or rt.events is None:
+    if rt is None:
 
         async def _idle():
             yield _sse({"type": "idle"})
+            yield _sse({"type": "done"})
 
         return StreamingResponse(
             _idle(), media_type="text/event-stream", headers={"Cache-Control": "no-cache"}
         )
+    if rt.events is None:
+        # 先于首条消息订阅:挂上空通道等运行开张(否则拿到即时 idle,订阅形同虚设)
+        rt.events = EventChannel()
+    if after < 0:
+        lei = request.headers.get("last-event-id", "")
+        if lei.isdigit():
+            after = int(lei)
 
     async def _stream():
         async for ev in rt.events.stream(after):
             yield _sse(ev)
+        yield _sse({"type": "done"})
 
     return StreamingResponse(
         _stream(),
@@ -441,7 +460,13 @@ async def api_abort(body: dict):
 def api_history(session_id: str):
     """该会话的全量历史(刷新恢复用);内部注入的 user 消息不进 UI。"""
     rt = _session_or_error(session_id)
-    internal_prefixes = ("<system-reminder>", "<会话恢复材料>", "[恢复提示]")
+    internal_prefixes = (
+        "<system-reminder>",
+        "<会话恢复材料>",
+        "[恢复提示]",
+        "<memory-context>",  # 长期记忆索引(非持久化注入段)
+        "<active-skills>",  # 激活 Skill 钉住段(同上)
+    )
     out = []
     for m in rt.conversation.history:
         if m.role == "user" and m.content.startswith(internal_prefixes):

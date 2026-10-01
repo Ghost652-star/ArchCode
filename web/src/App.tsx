@@ -105,6 +105,8 @@ export default function App() {
   >([])
   const [context, setContext] = useState<ContextInfo | null>(null)
   const [workspaces, setWorkspaces] = useState<string[]>(loadWorkspaces)
+  // 同步镜像:异步回调(refreshSessions/addWorkspace)里读 ref,避开闭包捕获旧清单
+  const workspacesRef = useRef<string[]>(workspaces)
   const [activeWorkspace, setActiveWorkspace] = useState(
     () => localStorage.getItem(ACTIVE_WS_KEY) ?? '',
   )
@@ -158,8 +160,9 @@ export default function App() {
   }, [])
 
   const refreshSessions = useCallback(async () => {
+    const list = workspacesRef.current
     const rows = await Promise.all(
-      workspaces.map(async (ws) => {
+      list.map(async (ws) => {
         try {
           return [ws, await api.sessionsByWorkspace(ws)] as const
         } catch {
@@ -170,15 +173,16 @@ export default function App() {
     const map: Record<string, SessionInfo[]> = {}
     for (const [ws, list] of rows) map[ws] = list
     setSessionsByWs(map)
-  }, [workspaces])
+  }, [])
 
   const refreshMeta = useCallback(async () => {
     try {
       const st = await api.state()
       setRunningIds(st.running_session_ids)
-      setModelName(st.model)
+      const m = await api.model()
+      setModelName(m.current)
+      setProviders(m.providers)
       await refreshSessions()
-      setProviders((await api.model()).providers)
       const sid = openRef.current?.id
       if (sid) {
         api.context(sid).then(setContext).catch(() => {})
@@ -435,6 +439,15 @@ export default function App() {
           })
           break
         }
+        case 'session_renamed': {
+          // 草稿落盘换正式 id:后续 state/history/abort 都按新 id 寻址
+          const newId = String(event['session_id'] ?? '')
+          const cur = openRef.current
+          if (newId && cur && cur.id !== newId) {
+            setOpenSession({ id: newId, workspace: cur.workspace })
+          }
+          break
+        }
         case 'loop_complete': {
           settleRunning(list)
           list.push({
@@ -583,12 +596,12 @@ export default function App() {
         alert(e instanceof Error ? e.message : String(e))
         return
       }
-      setWorkspaces((prev) => {
-        const exists = prev.some((p) => norm(p) === norm(normalized))
-        const next = exists ? prev : [...prev, normalized]
-        localStorage.setItem(WS_KEY, JSON.stringify(next))
-        return next
-      })
+      const cur = workspacesRef.current
+      const exists = cur.some((p) => norm(p) === norm(normalized))
+      const next = exists ? cur : [...cur, normalized]
+      workspacesRef.current = next
+      setWorkspaces(next)
+      localStorage.setItem(WS_KEY, JSON.stringify(next))
       localStorage.setItem(ACTIVE_WS_KEY, normalized)
       setActiveWorkspace(normalized)
       await refreshMeta()

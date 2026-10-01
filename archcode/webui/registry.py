@@ -233,6 +233,8 @@ class RuntimeRegistry:
         self.sessions: dict[str, SessionRuntime] = {}
         self.max_concurrent_runs = max_concurrent_runs
         self.default_provider_name: str | None = None  # 全局默认供应商(唯一事实源)
+        # 草稿 id → 正式 id:订阅/寻址发生在落盘前时,重键后旧 id 仍要能找到会话
+        self._aliases: dict[str, str] = {}
 
     @staticmethod
     def _key(path: str | Path) -> str:
@@ -254,7 +256,12 @@ class RuntimeRegistry:
         self.sessions[rt.session_id] = rt
 
     def session(self, session_id: str) -> SessionRuntime | None:
-        return self.sessions.get(session_id)
+        rt = self.sessions.get(session_id)
+        if rt is None:
+            alias = self._aliases.get(session_id)
+            if alias is not None:
+                rt = self.sessions.get(alias)
+        return rt
 
     def drop_session(self, session_id: str) -> None:
         self.sessions.pop(session_id, None)
@@ -266,10 +273,20 @@ class RuntimeRegistry:
         return sum(1 for rt in self.sessions.values() if rt.running)
 
     def materialize(self, rt: SessionRuntime) -> None:
-        """草稿落盘后更新注册表键(临时 id → 文件 id)。"""
-        if self.sessions.get(rt.session_id) is rt and rt.session is not None:
-            self.sessions.pop(rt.session_id, None)
-            self.sessions[rt.session_id] = rt
+        """草稿落盘后更新注册表键(临时 id → 文件 id)。
+
+        按对象身份找旧键——调用时 rt.session_id 已经换成文件 id,
+        按新键查 dict 永远 miss,重键会被整段跳过(运行时挂在草稿键下,
+        新 id 查 history/state 全部 404)。
+        """
+        if rt.session is None:
+            return
+        for key, val in self.sessions.items():
+            if val is rt and key != rt.session_id:
+                self.sessions.pop(key, None)
+                self.sessions[rt.session_id] = rt
+                self._aliases[key] = rt.session_id
+                break
 
     async def shutdown(self) -> None:
         for ws in self.workspaces.values():
