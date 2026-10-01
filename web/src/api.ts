@@ -1,6 +1,15 @@
-/** 服务端 API 客户端:REST + SSE 流解析(plan §4.1/§4.2)。 */
+/** 服务端 API 客户端:REST + SSE 订阅(多会话并行版,plan §4.3)。 */
 
-import type { AgentState, ContextInfo, DirListing, FileContent, FileSearch, SessionInfo, TodoItem, UsageTotal, WireEvent } from './types'
+import type {
+  AgentState,
+  ContextInfo,
+  DirListing,
+  FileContent,
+  FileSearch,
+  SessionInfo,
+  TodoItem,
+  UsageTotal,
+} from './types'
 
 async function jsonFetch<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(url, {
@@ -14,9 +23,31 @@ async function jsonFetch<T>(url: string, init?: RequestInit): Promise<T> {
   return res.json() as Promise<T>
 }
 
-export const api = {
-  state: () => jsonFetch<AgentState>('/api/state'),
+const q = (params: Record<string, string | number | undefined>) => {
+  const usp = new URLSearchParams()
+  for (const [k, v] of Object.entries(params))
+    if (v !== undefined && v !== '') usp.set(k, String(v))
+  const s = usp.toString()
+  return s ? `?${s}` : ''
+}
 
+export const api = {
+  /** 全局状态:运行中会话 + 已注册工作区。 */
+  state: () =>
+    jsonFetch<{
+      running_session_ids: string[]
+      workspaces: string[]
+      max_concurrent_runs: number
+      model: string
+    }>('/api/state'),
+
+  registerWorkspace: (path: string) =>
+    jsonFetch<{ ok: boolean; workspaces: string[]; work_dir: string }>('/api/workspaces', {
+      method: 'POST',
+      body: JSON.stringify({ path }),
+    }),
+
+  // ── 模型 ──
   model: () =>
     jsonFetch<{
       current: string
@@ -29,42 +60,107 @@ export const api = {
       body: JSON.stringify({ name }),
     }),
 
-  sessionsByWorkspace: (workspace?: string) =>
-    jsonFetch<SessionInfo[]>(
-      workspace ? `/api/sessions?workspace=${encodeURIComponent(workspace)}` : '/api/sessions',
-    ),
+  // ── 会话 ──
+  sessionsByWorkspace: (workspace: string) =>
+    jsonFetch<SessionInfo[]>(`/api/sessions${q({ workspace })}`),
 
-  sessions: () => jsonFetch<SessionInfo[]>('/api/sessions'),
-
-  sessionsSearch: (q: string) =>
-    jsonFetch<{ results: Array<{ id: string; title: string; excerpt: string }> }>(
-      `/api/sessions/search?q=${encodeURIComponent(q)}`,
-    ),
-
-  newSession: () => jsonFetch<{ session_id: string }>('/api/sessions', { method: 'POST' }),
-
-  resumeSession: (id: string) =>
-    jsonFetch<{ session_id: string }>(`/api/sessions/${id}/resume`, { method: 'POST' }),
-
-  renameSession: (id: string, title: string) =>
-    jsonFetch<{ ok: boolean }>(`/api/sessions/${id}/rename`, {
+  newSession: (workspace: string) =>
+    jsonFetch<{ session_id: string; workspace: string }>('/api/sessions', {
       method: 'POST',
-      body: JSON.stringify({ title }),
+      body: JSON.stringify({ workspace }),
     }),
 
-  deleteSession: (id: string) =>
-    jsonFetch<{ ok: boolean }>(`/api/sessions/${id}`, { method: 'DELETE' }),
+  resume: (sessionId: string, workspace: string) =>
+    jsonFetch<{ ok: boolean }>(
+      `/api/sessions/${sessionId}/resume${q({ workspace })}`,
+      { method: 'POST' },
+    ),
 
-  history: () => jsonFetch<Array<Record<string, unknown>>>('/api/history'),
+  renameSession: (sessionId: string, workspace: string, title: string) =>
+    jsonFetch<{ ok: boolean }>(
+      `/api/sessions/${sessionId}/rename${q({ workspace })}`,
+      { method: 'POST', body: JSON.stringify({ title }) },
+    ),
 
-  abort: () => jsonFetch<{ ok: boolean }>('/api/abort', { method: 'POST' }),
+  deleteSession: (sessionId: string, workspace: string) =>
+    jsonFetch<{ ok: boolean }>(`/api/sessions/${sessionId}${q({ workspace })}`, {
+      method: 'DELETE',
+    }),
 
-  skills: () =>
+  sessionsSearch: (workspace: string, query: string) =>
+    jsonFetch<{ results: Array<{ id: string; title: string; excerpt: string }> }>(
+      `/api/sessions/search${q({ workspace, q: query })}`,
+    ),
+
+  history: (sessionId: string) =>
+    jsonFetch<Array<Record<string, unknown>>>(
+      `/api/history${q({ session_id: sessionId })}`,
+    ),
+
+  // ── 对话运行 ──
+  chat: (sessionId: string, text: string) =>
+    jsonFetch<{ ok: boolean; session_id: string }>('/api/chat', {
+      method: 'POST',
+      body: JSON.stringify({ session_id: sessionId, text }),
+    }),
+
+  /** 订阅会话事件流的 SSE 地址(after = 已消费到的 seq,断线续传)。 */
+  eventsUrl: (sessionId: string, after: number = -1) =>
+    `/api/events/${sessionId}${q({ after })}`,
+
+  abort: (sessionId: string) =>
+    jsonFetch<{ ok: boolean }>('/api/abort', {
+      method: 'POST',
+      body: JSON.stringify({ session_id: sessionId }),
+    }),
+
+  // ── 逐会话观测 ──
+  context: (sessionId: string) =>
+    jsonFetch<ContextInfo>(`/api/context${q({ session_id: sessionId })}`),
+
+  usage: (sessionId: string) =>
+    jsonFetch<UsageTotal>(`/api/usage${q({ session_id: sessionId })}`),
+
+  todo: (sessionId: string) => jsonFetch<{ todos: TodoItem[] }>(`/api/todo${q({ session_id: sessionId })}`),
+
+  tasks: (sessionId: string) =>
+    jsonFetch<{
+      tasks: Array<{
+        id: string
+        name: string
+        status: string
+        elapsed: number
+        input_tokens: number
+        output_tokens: number
+        result_preview: string
+      }>
+    }>(`/api/tasks${q({ session_id: sessionId })}`),
+
+  // ── 权限 ──
+  answerPermission: (requestId: string, body: { allowed?: boolean; answer?: string }) =>
+    jsonFetch<{ ok: boolean }>(`/api/permission/${requestId}`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+
+  permissionMode: (sessionId: string) =>
+    jsonFetch<{ mode: string; plan_mode: boolean }>(
+      `/api/permission-mode${q({ session_id: sessionId })}`,
+    ),
+
+  setPermissionMode: (sessionId: string, mode: string) =>
+    jsonFetch<{ ok: boolean; mode: string }>('/api/permission-mode', {
+      method: 'POST',
+      body: JSON.stringify({ session_id: sessionId, mode }),
+    }),
+
+  // ── Skills / 子 Agent(按工作区)──
+  skills: (workspace: string) =>
     jsonFetch<
       Array<{ name: string; description: string; source: string; path: string; is_directory: boolean }>
-    >('/api/skills'),
+    >(`/api/skills${q({ workspace })}`),
 
-  agents: () =>
+  agents: (workspace: string) =>
     jsonFetch<
       Array<{
         agent_type: string
@@ -79,9 +175,10 @@ export const api = {
         disallowed_tools: string[]
         system_prompt: string
       }>
-    >('/api/agents'),
+    >(`/api/agents${q({ workspace })}`),
 
   saveAgent: (
+    workspace: string,
     scope: string,
     payload: {
       agent_type: string
@@ -96,123 +193,71 @@ export const api = {
     },
   ) =>
     jsonFetch<{ ok: boolean; path: string; restart_required: boolean }>(
-      `/api/agents/${scope}`,
+      `/api/agents/${scope}${q({ workspace })}`,
       { method: 'POST', body: JSON.stringify(payload) },
     ),
 
-  deleteAgent: (scope: string, agentType: string) =>
-    jsonFetch<{ ok: boolean }>(`/api/agents/${scope}/${agentType}`, {
-      method: 'DELETE',
-    }),
-
-  answerPermission: (requestId: string, body: { allowed?: boolean; answer?: string }) =>
-    jsonFetch<{ ok: boolean }>(`/api/permission/${requestId}`, {
-      method: 'POST',
-      body: JSON.stringify(body),
-    }),
-
-  setPermissionMode: (mode: string) =>
-    jsonFetch<{ ok: boolean }>(`/api/permission-mode`, {
-      method: 'POST',
-      body: JSON.stringify({ mode }),
-    }),
-
-  getSettings: (scope: string) =>
-    jsonFetch<{ path: string; data: Record<string, unknown>; exists: boolean }>(
-      `/api/settings/${scope}`,
+  deleteAgent: (workspace: string, scope: string, agentType: string) =>
+    jsonFetch<{ ok: boolean }>(
+      `/api/agents/${scope}/${agentType}${q({ workspace })}`,
+      { method: 'DELETE' },
     ),
 
-  putSettings: (scope: string, key: string, items: unknown[]) =>
-    jsonFetch<{ ok: boolean; restart_required: boolean }>(`/api/settings/${scope}`, {
-      method: 'PUT',
-      body: JSON.stringify({ key, items }),
-    }),
+  // ── 设置(config.yaml 读写,按工作区)──
+  getSettings: (scope: string, workspace: string) =>
+    jsonFetch<{ path: string; data: Record<string, unknown>; exists: boolean }>(
+      `/api/settings/${scope}${q({ workspace })}`,
+    ),
 
-  listFiles: (path: string) =>
-    jsonFetch<DirListing>(`/api/files?path=${encodeURIComponent(path)}`),
+  putSettings: (scope: string, workspace: string, key: string, items: unknown[]) =>
+    jsonFetch<{ ok: boolean; restart_required: boolean }>(
+      `/api/settings/${scope}${q({ workspace })}`,
+      { method: 'PUT', body: JSON.stringify({ key, items }) },
+    ),
 
-  readFile: (path: string) =>
-    jsonFetch<FileContent>(`/api/file?path=${encodeURIComponent(path)}`),
+  // ── 工作区文件(按工作区)──
+  listFiles: (workspace: string, path: string) =>
+    jsonFetch<DirListing>(`/api/files${q({ workspace, path })}`),
 
-  filesSearch: (q: string) =>
-    jsonFetch<FileSearch>(`/api/files/search?q=${encodeURIComponent(q)}`),
+  readFile: (workspace: string, path: string) =>
+    jsonFetch<FileContent>(`/api/file${q({ workspace, path })}`),
 
-  context: () => jsonFetch<ContextInfo>('/api/context'),
-
-  switchWorkspace: (path: string) =>
-    jsonFetch<{
-      ok: boolean
-      unchanged?: boolean
-      work_dir: string
-      session_id: string | null
-      resumed: string | null
-    }>('/api/workspace/switch', {
-      method: 'POST',
-      body: JSON.stringify({ path }),
-    }),
+  filesSearch: (workspace: string, query: string) =>
+    jsonFetch<FileSearch>(`/api/files/search${q({ workspace, q: query })}`),
 
   pickDirectory: () =>
     jsonFetch<{ ok: boolean; path: string | null }>('/api/workspace/pick', {
       method: 'POST',
     }),
-
-  usage: () => jsonFetch<UsageTotal>('/api/usage'),
-
-  todo: () => jsonFetch<{ todos: TodoItem[] }>('/api/todo'),
-
-  tasks: () =>
-    jsonFetch<{
-      tasks: Array<{
-        id: string
-        name: string
-        status: string
-        elapsed: number
-        input_tokens: number
-        output_tokens: number
-        result_preview: string
-      }>
-    }>('/api/tasks'),
 }
 
 /**
- * POST /api/chat 并解析 SSE 流。每个 agent 事件回调一次;
- * 服务端断开 / 流结束(done)时 resolve。abort 由调用方触发独立端点。
+ * 订阅会话事件流(EventSource)。返回关闭函数;
+ * 连接意外断开时浏览器自动用 Last-Event-ID 续传。
  */
-export async function streamChat(
-  text: string,
-  onEvent: (event: WireEvent) => void,
-): Promise<void> {
-  const res = await fetch('/api/chat', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ text }),
-  })
-  if (!res.ok || !res.body) {
-    const detail = await res.text().catch(() => '')
-    throw new Error(`${res.status}: ${detail}`)
-  }
-  const reader = res.body.getReader()
-  const decoder = new TextDecoder()
-  let buffer = ''
-  for (;;) {
-    const { done, value } = await reader.read()
-    if (done) break
-    buffer += decoder.decode(value, { stream: true })
-    let index: number
-    while ((index = buffer.indexOf('\n\n')) !== -1) {
-      const frame = buffer.slice(0, index)
-      buffer = buffer.slice(index + 2)
-      for (const line of frame.split('\n')) {
-        if (line.startsWith('data: ')) {
-          try {
-            const event = JSON.parse(line.slice(6)) as WireEvent
-            if (event.type === 'done') return
-            onEvent(event)
-          } catch {
-            // 忽略解析失败的分片
-          }
-        }
+export function subscribeEvents(
+  sessionId: string,
+  onEvent: (event: { type: string; [k: string]: unknown }) => void,
+  onEnd: () => void,
+): () => void {
+  const es = new EventSource(`/api/events/${sessionId}`)
+  es.addEventListener('agent', (e) => {
+    try {
+      const event = JSON.parse((e as MessageEvent).data)
+      if (event.type === 'done') {
+        es.close()
+        onEnd()
+        return
       }
+      onEvent(event)
+    } catch {
+      /* 忽略解析失败的分片 */
     }
+  })
+  es.onerror = () => {
+    // 浏览器自动重连(带 Last-Event-ID);只有连接被服务端正常关闭
+    // (readyState === CLOSED)才视为流结束
+    if (es.readyState === EventSource.CLOSED) onEnd()
   }
+  return () => es.close()
 }

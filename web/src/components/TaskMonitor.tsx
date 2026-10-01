@@ -19,16 +19,16 @@ function fmtElapsed(sec: number): string {
 }
 
 /** 顶栏后台任务监控:触发器按钮 + 下拉清单(打开时每 3s 轮询快照)。 */
-export default function TaskMonitor() {
+export default function TaskMonitor({ sessionId }: { sessionId: string }) {
   const [open, setOpen] = useState(false)
   const [tasks, setTasks] = useState<TaskInfo[]>([])
 
   useEffect(() => {
-    if (!open) return
+    if (!open || !sessionId) return
     let cancelled = false
     const load = () => {
       api
-        .tasks()
+        .tasks(sessionId)
         .then((r) => {
           if (!cancelled) setTasks(r.tasks)
         })
@@ -40,7 +40,7 @@ export default function TaskMonitor() {
       cancelled = true
       clearInterval(timer)
     }
-  }, [open])
+  }, [open, sessionId])
 
   const runningCount = tasks.filter((t) => t.status === 'running').length
 

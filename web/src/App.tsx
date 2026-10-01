@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { api, streamChat } from './api'
-import type { AgentState, ContextInfo, Item, PermissionState, SessionInfo, TodoItem, UsageTotal, WireEvent } from './types'
+import { api, subscribeEvents } from './api'
+import type { ContextInfo, Item, PermissionState, SessionInfo, TodoItem, UsageTotal } from './types'
 import Sidebar from './components/Sidebar'
 import Composer from './components/Composer'
 import PermissionDialog from './components/PermissionDialog'
@@ -15,7 +15,7 @@ import styles from './App.module.css'
 const WS_KEY = 'ac-workspaces'
 const ACTIVE_WS_KEY = 'ac-active-workspace'
 
-// ── 三栏几何常量(设计 §11.2,DSH 同源,数值可微调)──────────────────
+// ── 三栏几何常量(设计 §11.2,数值可微调)──────────────────
 const SIDEBAR_MIN = 264
 const SIDEBAR_MAX = 420
 const SIDEBAR_DEFAULT = 280
@@ -32,12 +32,20 @@ function loadBool(key: string, fallback: boolean): boolean {
   const raw = localStorage.getItem(key)
   return raw === null ? fallback : raw === '1'
 }
+function loadWorkspaces(): string[] {
+  try {
+    const raw = JSON.parse(localStorage.getItem(WS_KEY) ?? '[]')
+    return Array.isArray(raw) ? raw.filter((x) => typeof x === 'string') : []
+  } catch {
+    return []
+  }
+}
 
 function clampWidth(px: number, min: number, max: number): number {
   return Math.min(Math.round(max), Math.max(min, Math.round(px)))
 }
 
-/** /api/history → 渲染条目(工作区切换与 resume 共用):工具行按 tool_use_id 配对回填。 */
+/** /api/history → 渲染条目(打开会话/完成刷新共用):工具行按 tool_use_id 配对回填。 */
 function historyToItems(history: Array<Record<string, unknown>>): Item[] {
   const restored: Item[] = []
   for (const m of history) {
@@ -80,14 +88,7 @@ function settleRunning(items: Item[]): void {
       item.running = false
 }
 
-function loadWorkspaces(): string[] {
-  try {
-    const raw = JSON.parse(localStorage.getItem(WS_KEY) ?? '[]')
-    return Array.isArray(raw) ? raw.filter((x) => typeof x === 'string') : []
-  } catch {
-    return []
-  }
-}
+const norm = (p: string) => p.replace(/\\/g, '/').toLowerCase()
 
 export default function App() {
   const [items, setItems] = useState<Item[]>([])
@@ -95,9 +96,10 @@ export default function App() {
   const [permission, setPermission] = useState<PermissionState | null>(null)
   const [usage, setUsage] = useState<UsageTotal | null>(null)
   const [todos, setTodos] = useState<TodoItem[]>([])
-  const [state, setState] = useState<AgentState | null>(null)
+  const [runningIds, setRunningIds] = useState<string[]>([])
   const [sessionsByWs, setSessionsByWs] = useState<Record<string, SessionInfo[]>>({})
-  const [settingsOpen, setSettingsOpen] = useState(false)
+  const [perm, setPerm] = useState({ mode: 'default', planMode: false })
+  const [modelName, setModelName] = useState('')
   const [providers, setProviders] = useState<
     Array<{ name: string; model: string; protocol: string }>
   >([])
@@ -106,6 +108,11 @@ export default function App() {
   const [activeWorkspace, setActiveWorkspace] = useState(
     () => localStorage.getItem(ACTIVE_WS_KEY) ?? '',
   )
+  // 当前打开的对话(草稿或已落盘)——多会话并行下"看哪里"与"跑哪里"解耦
+  const [openSession, setOpenSession] = useState<{ id: string; workspace: string } | null>(
+    null,
+  )
+  const [settingsOpen, setSettingsOpen] = useState(false)
   // ── 三栏布局状态(设计 §11.5:宽度偏好进 localStorage)──────────
   const [sidebarW, setSidebarW] = useState(() =>
     clampWidth(loadNum('ac-sidebar-w', SIDEBAR_DEFAULT), SIDEBAR_MIN, SIDEBAR_MAX),
@@ -126,19 +133,20 @@ export default function App() {
   const itemsRef = useRef<Item[]>([])
   const rafRef = useRef(0)
   const runStartRef = useRef(0)
+  const unsubRef = useRef<(() => void) | null>(null)
   // 智能滚底(§13-A3):距底 >80px 视为"脱离底部",不再跟随
   const scrollRef = useRef<HTMLDivElement>(null)
   const detachedRef = useRef(false)
   const [detached, setDetached] = useState(false)
 
-  const serverDir = state?.work_dir ?? ''
-  /** 活动工作区是否就是服务端绑定的工作目录(仅此可用 composer/发消息)。 */
-  const isHome = Boolean(
-    serverDir &&
-      activeWorkspace &&
-      activeWorkspace.replace(/\\/g, '/').toLowerCase() ===
-        serverDir.replace(/\\/g, '/').toLowerCase(),
-  )
+  const openRef = useRef(openSession)
+  openRef.current = openSession
+  const activeWsRef = useRef(activeWorkspace)
+  activeWsRef.current = activeWorkspace
+
+  const openWs = openSession?.workspace ?? activeWorkspace
+  const openId = openSession?.id ?? null
+  const openRunning = openId !== null && runningIds.includes(openId)
 
   /** itemsRef 变更后 rAF 批量刷新(高频 delta 不逐条 setState)。 */
   const render = useCallback(() => {
@@ -149,78 +157,126 @@ export default function App() {
     })
   }, [])
 
-  /** 拉取全部工作区的会话清单(侧栏各组同时展示,不再只看激活目录)。 */
   const refreshSessions = useCallback(async () => {
     const rows = await Promise.all(
       workspaces.map(async (ws) => {
         try {
-          return [ws, await api.sessionsByWorkspace(ws || undefined)] as const
+          return [ws, await api.sessionsByWorkspace(ws)] as const
         } catch {
           return [ws, [] as SessionInfo[]] as const
         }
       }),
     )
-    setSessionsByWs(Object.fromEntries(rows))
+    const map: Record<string, SessionInfo[]> = {}
+    for (const [ws, list] of rows) map[ws] = list
+    setSessionsByWs(map)
   }, [workspaces])
 
   const refreshMeta = useCallback(async () => {
     try {
-      setState(await api.state())
+      const st = await api.state()
+      setRunningIds(st.running_session_ids)
+      setModelName(st.model)
       await refreshSessions()
-      const m = await api.model()
-      setProviders(m.providers)
-      api.context().then(setContext).catch(() => {})
-      api.usage().then(setUsage).catch(() => {})
-      api.todo().then((r) => setTodos(r.todos)).catch(() => {})
+      setProviders((await api.model()).providers)
+      const sid = openRef.current?.id
+      if (sid) {
+        api.context(sid).then(setContext).catch(() => {})
+        api.usage(sid).then(setUsage).catch(() => {})
+        api.todo(sid).then((r) => setTodos(r.todos)).catch(() => {})
+        api.permissionMode(sid).then((r) => setPerm({ mode: r.mode, planMode: r.plan_mode })).catch(() => {})
+      } else {
+        setContext(null)
+        setUsage(null)
+        setTodos([])
+      }
     } catch {
       /* 服务端未就绪时静默 */
     }
   }, [refreshSessions])
 
+  // 启动:把本地工作区清单注册到服务端,拉一次元数据
   useEffect(() => {
-    refreshMeta()
-  }, [refreshMeta])
+    ;(async () => {
+      for (const ws of loadWorkspaces()) {
+        try {
+          await api.registerWorkspace(ws)
+        } catch {
+          /* 目录不存在等:保留在本地清单,切换时给出提示 */
+        }
+      }
+      await refreshMeta()
+    })()
+    // 仅启动时执行一次
+  }, [])
 
-  // 服务端目录加载后,把 activeWorkspace 默认为它并并入工作区清单
+  // 无激活工作区时,默认选第一个
   useEffect(() => {
-    if (!serverDir) return
-    setWorkspaces((prev) => {
-      const next = prev.includes(serverDir) ? prev : [...prev, serverDir]
-      if (next !== prev) localStorage.setItem(WS_KEY, JSON.stringify(next))
-      return next
-    })
-    setActiveWorkspace((prev) => {
-      if (prev) return prev
-      localStorage.setItem(ACTIVE_WS_KEY, serverDir)
-      return serverDir
-    })
-  }, [serverDir])
+    if (!activeWorkspace && workspaces.length) setActiveWorkspace(workspaces[0])
+  }, [workspaces, activeWorkspace])
 
-  // 切换工作区后:加载该目录的历史对话(会话清单由 refreshSessions 全量覆盖)
+  // 打开会话:加载其历史(静态快照;运行中的实时跟播为 v2)
   useEffect(() => {
-    if (!activeWorkspace) return
-    localStorage.setItem(ACTIVE_WS_KEY, activeWorkspace)
+    if (!openId) {
+      itemsRef.current = []
+      setItems([])
+      return
+    }
     let cancelled = false
     ;(async () => {
-      if (!isHome) {
-        itemsRef.current = []
-        setItems([])
-        return
-      }
       try {
-        const history = await api.history()
+        const history = await api.history(openId)
         if (cancelled) return
         const restored = historyToItems(history)
         itemsRef.current = restored
         setItems([...restored])
       } catch {
-        /* ignore */
+        /* 草稿尚无历史:静默 */
       }
     })()
     return () => {
       cancelled = true
     }
-  }, [activeWorkspace, isHome])
+  }, [openId])
+
+  // 打开会话的权限模式/计划模式回显
+  useEffect(() => {
+    if (!openId) return
+    api.permissionMode(openId).then((r) => setPerm({ mode: r.mode, planMode: r.plan_mode })).catch(() => {})
+  }, [openId])
+
+  // 打开的会话正在后台运行:轮询状态,完成时自动刷新历史
+  const prevRunningRef = useRef(false)
+  useEffect(() => {
+    if (!openRunning) {
+      prevRunningRef.current = false
+      return
+    }
+    const timer = setInterval(async () => {
+      try {
+        const st = await api.state()
+        setRunningIds(st.running_session_ids)
+      } catch {
+        /* ignore */
+      }
+    }, 3000)
+    return () => clearInterval(timer)
+  }, [openRunning])
+  useEffect(() => {
+    if (prevRunningRef.current && !openRunning && openId) {
+      ;(async () => {
+        try {
+          const history = await api.history(openId)
+          itemsRef.current = historyToItems(history)
+          setItems([...itemsRef.current])
+        } catch {
+          /* ignore */
+        }
+        await refreshMeta()
+      })()
+    }
+    prevRunningRef.current = openRunning
+  }, [openRunning, openId, refreshMeta])
 
   // 新条目自动滚底(§13-A3:near-bottom 才跟随,不拽上翻的用户)
   useEffect(() => {
@@ -246,7 +302,7 @@ export default function App() {
   }, [])
 
   const handleEvent = useCallback(
-    (event: WireEvent) => {
+    (event: { type: string; [k: string]: unknown }) => {
       const list = itemsRef.current
       const last = list[list.length - 1]
       switch (event.type) {
@@ -294,7 +350,6 @@ export default function App() {
             tool.running = false
             tool.elapsed = Number(event['elapsed'] ?? 0)
           }
-          // TodoWrite 的结果事件附带清单快照,驱动输入区上方面板
           if (Array.isArray(event['todos'])) setTodos(event['todos'] as TodoItem[])
           break
         }
@@ -313,15 +368,22 @@ export default function App() {
           list.push({ kind: 'error', message: String(event['message'] ?? '') })
           break
         }
-        case 'notice': {
-          list.push({ kind: 'notice', text: String(event['text'] ?? '') })
-          break
-        }
-        case 'retry': {
-          const wait = Number(event['wait'] ?? 0)
-          list.push({
-            kind: 'notice',
-            text: `请求失败，${wait > 0 ? `${wait}s 后` : ''}自动重试：${String(event['reason'] ?? '')}`,
+        case 'usage': {
+          // 增量累加做即时反馈;完成后的 refreshMeta 用 /api/usage 真值对齐
+          setUsage((prev) => {
+            const next = {
+              input_tokens: (prev?.input_tokens ?? 0) + Number(event['input_tokens'] ?? 0),
+              output_tokens: (prev?.output_tokens ?? 0) + Number(event['output_tokens'] ?? 0),
+              cache_read: (prev?.cache_read ?? 0) + Number(event['cache_read'] ?? 0),
+              cache_creation: (prev?.cache_creation ?? 0) + Number(event['cache_creation'] ?? 0),
+              llm_rounds: (prev?.llm_rounds ?? 0) + 1,
+              total_tokens: 0,
+              cache_hit: null as number | null,
+            }
+            const billed = next.input_tokens + next.cache_read + next.cache_creation
+            next.total_tokens = billed + next.output_tokens
+            next.cache_hit = billed > 0 ? next.cache_read / billed : null
+            return next
           })
           break
         }
@@ -357,36 +419,20 @@ export default function App() {
             }
           }
           // 压缩会即时改写上下文占用,主动刷一次(不等下一次 refreshMeta)
-          api.context().then(setContext).catch(() => {})
+          const sid = openRef.current?.id
+          if (sid) api.context(sid).then(setContext).catch(() => {})
           break
         }
-        case 'usage': {
-          // 增量累加做即时反馈;流结束后的 refreshMeta 会用 /api/usage 服务端真值对齐
-          setUsage((prev) => {
-            const next = {
-              input_tokens: (prev?.input_tokens ?? 0) + Number(event['input_tokens'] ?? 0),
-              output_tokens: (prev?.output_tokens ?? 0) + Number(event['output_tokens'] ?? 0),
-              cache_read: (prev?.cache_read ?? 0) + Number(event['cache_read'] ?? 0),
-              cache_creation: (prev?.cache_creation ?? 0) + Number(event['cache_creation'] ?? 0),
-              llm_rounds: (prev?.llm_rounds ?? 0) + 1,
-              total_tokens: 0,
-              cache_hit: null as number | null,
-            }
-            const billed = next.input_tokens + next.cache_read + next.cache_creation
-            next.total_tokens = billed + next.output_tokens
-            next.cache_hit = billed > 0 ? next.cache_read / billed : null
-            return next
+        case 'notice': {
+          list.push({ kind: 'notice', text: String(event['text'] ?? '') })
+          break
+        }
+        case 'retry': {
+          const wait = Number(event['wait'] ?? 0)
+          list.push({
+            kind: 'notice',
+            text: `请求失败，${wait > 0 ? `${wait}s 后` : ''}自动重试：${String(event['reason'] ?? '')}`,
           })
-          break
-        }
-        case 'turn_usage': {
-          for (let i = list.length - 1; i >= 0; i--) {
-            const it = list[i]
-            if (it.kind === 'turnEnd') {
-              it.tokens = Number(event['total'] ?? 0)
-              break
-            }
-          }
           break
         }
         case 'loop_complete': {
@@ -406,125 +452,112 @@ export default function App() {
     [render],
   )
 
+  const onRunEnd = useCallback(async () => {
+    setRunning(false)
+    unsubRef.current?.()
+    unsubRef.current = null
+    const sid = openRef.current?.id
+    if (sid) {
+      try {
+        const history = await api.history(sid)
+        itemsRef.current = historyToItems(history)
+        setItems([...itemsRef.current])
+      } catch {
+        /* ignore */
+      }
+    }
+    await refreshMeta()
+  }, [refreshMeta])
+
   const send = useCallback(
     async (text: string) => {
-      if (running || !text.trim() || !isHome) return
-      runStartRef.current = Date.now()
-      itemsRef.current = [...itemsRef.current, { kind: 'user', text, ts: Date.now() }]
-      setItems([...itemsRef.current])
-      setRunning(true)
+      if (running || !text.trim() || !activeWorkspace) return
+      let sid = openRef.current?.id
+      const ws = openRef.current?.workspace ?? activeWorkspace
       try {
-        await streamChat(text, handleEvent)
+        if (!sid) {
+          const r = await api.newSession(ws)
+          sid = r.session_id
+          setOpenSession({ id: sid, workspace: ws })
+        }
       } catch (e) {
         itemsRef.current = [
           ...itemsRef.current,
           { kind: 'error', message: e instanceof Error ? e.message : String(e) },
         ]
         setItems([...itemsRef.current])
-      } finally {
-        settleRunning(itemsRef.current)
+        return
+      }
+      runStartRef.current = Date.now()
+      itemsRef.current = [...itemsRef.current, { kind: 'user', text, ts: Date.now() }]
+      setItems([...itemsRef.current])
+      setRunning(true)
+      unsubRef.current?.()
+      unsubRef.current = subscribeEvents(sid, handleEvent, () => {
+        void onRunEnd()
+      })
+      try {
+        await api.chat(sid, text)
+      } catch (e) {
+        itemsRef.current = [
+          ...itemsRef.current,
+          { kind: 'error', message: e instanceof Error ? e.message : String(e) },
+        ]
         setItems([...itemsRef.current])
         setRunning(false)
-        refreshMeta()
+        unsubRef.current?.()
+        unsubRef.current = null
       }
     },
-    [running, handleEvent, refreshMeta, isHome],
+    [running, activeWorkspace, handleEvent, onRunEnd],
   )
 
   const abort = useCallback(async () => {
-    try {
-      await api.abort()
-    } catch {
-      /* ignore */
+    const sid = openRef.current?.id
+    if (sid) {
+      try {
+        await api.abort(sid)
+      } catch {
+        /* ignore */
+      }
     }
   }, [])
 
   const newSession = useCallback(async () => {
-    if (!isHome) return
+    if (!activeWorkspace) return
     try {
-      await api.newSession()
+      const r = await api.newSession(activeWorkspace)
+      unsubRef.current?.()
+      unsubRef.current = null
+      setOpenSession({ id: r.session_id, workspace: activeWorkspace })
       itemsRef.current = []
       setItems([])
+      setRunning(false)
+      setContext(null)
+      setUsage(null)
+      setTodos([])
+      setPerm({ mode: 'default', planMode: false })
       await refreshMeta()
     } catch {
       /* ignore */
     }
-  }, [isHome, refreshMeta])
+  }, [activeWorkspace, refreshMeta])
 
-  /** 打开一个当前工作区内的会话:恢复 + 刷新元数据 + 重建对话区。 */
-  const openSession = useCallback(
-    async (id: string) => {
-      await api.resumeSession(id)
-      await refreshMeta()
-      const history = await api.history()
-      const restored = historyToItems(history)
-      itemsRef.current = restored
-      setItems([...restored])
-    },
-    [refreshMeta],
-  )
-
-  const resumeSession = useCallback(
-    async (id: string) => {
-      if (!isHome) return
-      try {
-        await openSession(id)
-      } catch {
-        /* ignore */
-      }
-    },
-    [isHome, openSession],
-  )
-
-  const addWorkspace = useCallback((path: string) => {
-    const normalized = path.trim()
-    if (!normalized) return
-    setWorkspaces((prev) => {
-      const exists = prev.some((p) => p.replace(/\\/g, '/').toLowerCase() === normalized.replace(/\\/g, '/').toLowerCase())
-      const next = exists ? prev : [...prev, normalized]
-      localStorage.setItem(WS_KEY, JSON.stringify(next))
-      return next
-    })
-    localStorage.setItem(ACTIVE_WS_KEY, normalized)
-    setActiveWorkspace(normalized)
-  }, [])
-
-  const switchWorkspace = useCallback(
-    async (path: string): Promise<boolean> => {
-      const norm = (p: string) => p.replace(/\\/g, '/').toLowerCase()
-      if (!activeWorkspace || norm(path) !== norm(activeWorkspace)) {
-        try {
-          // 单激活重建:后端收旧运行时、按新目录重建并恢复其最近会话
-          await api.switchWorkspace(path)
-          setPermission(null)
-        } catch (e) {
-          alert(e instanceof Error ? e.message : String(e))
-          return false
-        }
-        await refreshMeta()
-      }
-      localStorage.setItem(ACTIVE_WS_KEY, path)
-      setActiveWorkspace(path)
-      return true
-    },
-    [activeWorkspace, refreshMeta],
-  )
-
-  /** 跨项目打开会话:目标非激活工作区时先切换(收旧造新),再恢复该会话。 */
+  /** 跨项目打开会话:切视图 + 确保运行时(从磁盘恢复)+ 历史加载由 openId 效应接管。 */
   const openWorkspaceSession = useCallback(
     async (ws: string, id: string) => {
-      const norm = (p: string) => p.replace(/\\/g, '/').toLowerCase()
-      if (!isHome || norm(ws) !== norm(activeWorkspace)) {
-        const ok = await switchWorkspace(ws)
-        if (!ok) return
-      }
+      localStorage.setItem(ACTIVE_WS_KEY, ws)
+      setActiveWorkspace(ws)
       try {
-        await openSession(id)
-      } catch {
-        /* ignore */
+        await api.resume(id, ws)
+      } catch (e) {
+        alert(e instanceof Error ? e.message : String(e))
+        return
       }
+      setOpenSession({ id, workspace: ws })
+      await refreshMeta()
     },
-    [isHome, activeWorkspace, switchWorkspace, openSession],
+    [refreshMeta],
   )
 
   const answerPermission = useCallback(
@@ -538,6 +571,50 @@ export default function App() {
       setPermission(null)
     },
     [permission],
+  )
+
+  const addWorkspace = useCallback(
+    async (path: string) => {
+      const normalized = path.trim()
+      if (!normalized) return
+      try {
+        await api.registerWorkspace(normalized)
+      } catch (e) {
+        alert(e instanceof Error ? e.message : String(e))
+        return
+      }
+      setWorkspaces((prev) => {
+        const exists = prev.some((p) => norm(p) === norm(normalized))
+        const next = exists ? prev : [...prev, normalized]
+        localStorage.setItem(WS_KEY, JSON.stringify(next))
+        return next
+      })
+      localStorage.setItem(ACTIVE_WS_KEY, normalized)
+      setActiveWorkspace(normalized)
+      await refreshMeta()
+    },
+    [refreshMeta],
+  )
+
+  const switchWorkspace = useCallback((path: string) => {
+    // 工作区点击 = 切换"新对话的落点 + 侧栏视图";运行中的对话不受影响
+    localStorage.setItem(ACTIVE_WS_KEY, path)
+    setActiveWorkspace(path)
+  }, [])
+
+  // 会话改名/删除后的刷新:删除的是打开的会话时清空对话区
+  const handleSessionsChanged = useCallback(
+    async (deletedId: string | null) => {
+      if (deletedId && openRef.current?.id === deletedId) {
+        unsubRef.current?.()
+        unsubRef.current = null
+        setOpenSession(null)
+        itemsRef.current = []
+        setItems([])
+      }
+      await refreshMeta()
+    },
+    [refreshMeta],
   )
 
   // ── 三栏交互(设计 §11.3/§11.4)────────────────────────────────
@@ -561,7 +638,7 @@ export default function App() {
     fireAnimating()
   }, [filesOpen, fireAnimating])
 
-  // 拖拽基点冻结在手势开始时的渲染宽度(DSH:从存储偏好出发会让被夹住的列跳回)
+  // 拖拽基点冻结在手势开始时的渲染宽度
   const sidebarBase = useRef(0)
   const filesBase = useRef(0)
   const onSidebarStart = useCallback(() => {
@@ -588,18 +665,6 @@ export default function App() {
   }, [])
   const onDragEnd = useCallback(() => setDragging(false), [])
 
-  // 会话改名/删除后的刷新:删除的是当前会话时后端已自动开新会话 → 清空对话区
-  const handleSessionsChanged = useCallback(
-    async (currentDeleted: boolean) => {
-      if (currentDeleted) {
-        itemsRef.current = []
-        setItems([])
-      }
-      await refreshMeta()
-    },
-    [refreshMeta],
-  )
-
   const isEmpty = items.length === 0
   const activeBaseName = activeWorkspace
     ? activeWorkspace.split(/[\\/]/).filter(Boolean).pop() ?? ''
@@ -619,7 +684,8 @@ export default function App() {
       <div className={styles.sidebarCol}>
         <Sidebar
           sessionsByWs={sessionsByWs}
-          state={state}
+          openWorkspace={openWs}
+          openSessionId={openId}
           workspaces={workspaces}
           activeWorkspace={activeWorkspace}
           collapsed={sidebarCollapsed}
@@ -635,9 +701,8 @@ export default function App() {
       <div className={styles.mainColumn}>
         <div className={styles.mainHeader}>
           <span className={styles.mainTitle}>{activeBaseName || 'ArchCode'}</span>
-          {!isHome && <span className={styles.mainBadge}>仅浏览</span>}
           <span className={styles.headerSpring} />
-          <TaskMonitor />
+          <TaskMonitor sessionId={openId ?? ''} />
           <button
             className={styles.iconBtn}
             onClick={toggleFiles}
@@ -652,7 +717,7 @@ export default function App() {
         </div>
         <div className={styles.scroll} ref={scrollRef} onScroll={onScroll} id="chat-scroll">
           {isEmpty ? (
-            <Hero project={activeWorkspace} locked={!isHome} />
+            <Hero project={activeWorkspace} />
           ) : (
             <div className="contentColumn">
               <ChatItems items={items} />
@@ -669,18 +734,21 @@ export default function App() {
             <TodoPanel todos={todos} />
             <Composer
               running={running}
-              disabled={!state || !isHome}
+              disabled={!activeWorkspace}
+              workspace={openWs}
               usage={usage}
               context={context}
-              permissionMode={state?.permission_mode ?? 'default'}
-              planMode={state?.plan_mode ?? false}
-              modelName={state?.model ?? ''}
+              permissionMode={perm.mode}
+              planMode={perm.planMode}
+              modelName={modelName}
               providers={providers}
               onSend={send}
               onAbort={abort}
               onNewSession={newSession}
               onModeChange={async (mode) => {
-                await api.setPermissionMode(mode)
+                const sid = openRef.current?.id
+                if (!sid) return
+                await api.setPermissionMode(sid, mode)
                 await refreshMeta()
               }}
               onModelSwitch={async () => {
@@ -689,11 +757,11 @@ export default function App() {
             />
           </div>
         </div>
-        <StatusBar model={state?.model ?? ''} running={running} />
+        <StatusBar model={modelName} running={running} />
       </div>
-      {filesOpen && serverDir && (
+      {filesOpen && openWs && (
         <div className={styles.filesCol}>
-          <FilePanel workDir={serverDir} showBrowsingHint={!isHome} />
+          <FilePanel workDir={openWs} />
         </div>
       )}
       {!sidebarCollapsed && (
@@ -708,13 +776,19 @@ export default function App() {
         />
       )}
       {permission && <PermissionDialog permission={permission} onAnswer={answerPermission} />}
-      {settingsOpen && <SettingsPanel onClose={() => setSettingsOpen(false)} />}
+      {settingsOpen && (
+        <SettingsPanel
+          onClose={() => setSettingsOpen(false)}
+          workspace={activeWorkspace}
+          sessionId={openId}
+        />
+      )}
     </div>
   )
 }
 
 /** 列宽拖拽手柄:跨在列边界上的浮层,pointer capture + rAF 节流(设计 §11.3)。
- *  capture 只是加固——窗口级监听才是手势主路(DSH:滚动容器会抢手势,合成指针会抛 NotFoundError)。 */
+ *  capture 只是加固——窗口级监听才是手势主路(滚动容器会抢手势,合成指针会抛 NotFoundError)。 */
 function DragHandle(props: {
   left: string
   onStart: () => void
@@ -734,7 +808,7 @@ function DragHandle(props: {
     latest.current = clientX
     if (raf.current === null) {
       raf.current = requestAnimationFrame(() => {
-        raf.current = null
+        raf.current = 0
         cb.current.onDrag(latest.current - origin.current)
       })
     }
@@ -811,7 +885,7 @@ function DragHandle(props: {
 }
 
 /** Hero 态(新对话):居中 logo + 标题 + 工作区 chip(§10.2)。 */
-function Hero({ project, locked }: { project: string; locked: boolean }) {
+function Hero({ project }: { project: string }) {
   const projectName = project ? project.split(/[\\/]/).filter(Boolean).pop() : ''
   return (
     <div className={styles.hero}>
@@ -830,7 +904,7 @@ function Hero({ project, locked }: { project: string; locked: boolean }) {
           <span>ArchCode</span>
         </div>
         {projectName && (
-          <button className={styles.heroChip} type="button" title={locked ? '该工作区未接入后端(浏览模式)' : project}>
+          <div className={styles.heroChip} title={project}>
             <svg width={14} height={14} viewBox="0 0 16 16" fill="none" aria-hidden>
               <path
                 d="M2 4.5A1.5 1.5 0 0 1 3.5 3h3l1.5 2h4.5A1.5 1.5 0 0 1 14 6.5v5A1.5 1.5 0 0 1 12.5 13h-9A1.5 1.5 0 0 1 2 11.5v-7z"
@@ -839,8 +913,7 @@ function Hero({ project, locked }: { project: string; locked: boolean }) {
               />
             </svg>
             <span>{projectName}</span>
-            {locked && <span className={styles.heroLock}>仅浏览</span>}
-          </button>
+          </div>
         )}
       </div>
     </div>

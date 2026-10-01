@@ -29,8 +29,16 @@ export interface AgentDefInfo {
   system_prompt: string
 }
 
-/** 设置面板:800×560 Modal,作用域选择器 + 七节(§9.2)。 */
-export default function SettingsPanel({ onClose }: { onClose: () => void }) {
+/** 设置面板:800×560 Modal,作用域选择器 + 七节(§9.2)。项目级读写路由到当前打开会话的工作区。 */
+export default function SettingsPanel({
+  onClose,
+  workspace,
+  sessionId,
+}: {
+  onClose: () => void
+  workspace: string
+  sessionId: string | null
+}) {
   const [scope, setScope] = useState<Scope>('project')
   const [section, setSection] = useState<Section>('models')
   const [data, setData] = useState<Record<string, unknown>>({})
@@ -54,7 +62,7 @@ export default function SettingsPanel({ onClose }: { onClose: () => void }) {
 
   const load = useCallback(async () => {
     try {
-      const res = await api.getSettings(scope)
+      const res = await api.getSettings(scope, workspace)
       setData(res.data ?? {})
       setExists(res.exists)
     } catch {
@@ -64,7 +72,7 @@ export default function SettingsPanel({ onClose }: { onClose: () => void }) {
     // 另一层(user/project)只读展示:当前作用域没配的条目,标注来源可见
     const otherScope = scope === 'user' ? 'project' : 'user'
     try {
-      const res2 = await api.getSettings(otherScope)
+      const res2 = await api.getSettings(otherScope, workspace)
       setUserData(res2.data ?? {})
     } catch {
       setUserData({})
@@ -76,9 +84,10 @@ export default function SettingsPanel({ onClose }: { onClose: () => void }) {
   }, [load])
 
   useEffect(() => {
-    api.skills().then(setSkills).catch(() => {})
-    api.agents().then(setAgents).catch(() => {})
-    api.state().then((s) => setMode(s.permission_mode ?? 'default')).catch(() => {})
+    api.skills(workspace).then(setSkills).catch(() => {})
+    api.agents(workspace).then(setAgents).catch(() => {})
+    if (!sessionId) return
+    api.permissionMode(sessionId).then((r) => setMode(r.mode)).catch(() => {})
   }, [])
 
   const otherScope: Scope = scope === 'user' ? 'project' : 'user'
@@ -86,7 +95,7 @@ export default function SettingsPanel({ onClose }: { onClose: () => void }) {
   const saveTo = useCallback(
     async (target: Scope, key: 'providers' | 'mcp_servers' | 'hooks', items: unknown[]) => {
       try {
-        const res = await api.putSettings(target, key, items)
+        const res = await api.putSettings(target, workspace, key, items)
         await load()
         setNotice(
           res.restart_required ? '已写入,重启 ArchCode 后生效' : '已写入',
@@ -96,7 +105,7 @@ export default function SettingsPanel({ onClose }: { onClose: () => void }) {
         setNotice(e instanceof Error ? e.message : String(e))
       }
     },
-    [load],
+    [workspace, load],
   )
 
   const save = useCallback(
@@ -201,17 +210,23 @@ export default function SettingsPanel({ onClose }: { onClose: () => void }) {
             {section === 'agents' && (() => {
               if (agentEdit !== null) {
                 const editing = agentOverride?.def ?? (agentEdit === 'new' ? null : agents.find((a) => a.agent_type === agentEdit) ?? null)
-                const editScope: Scope = agentOverride?.scope ?? scope
+                const editScope: Scope =
+                  agentOverride?.scope ??
+                  (editing && editing.source !== 'builtin'
+                    ? (editing.source as Scope)
+                    : scope)
+                const editWorkspace = agentOverride?.scope ?? workspace
                 return (
                   <AgentEditForm
                     initial={editing}
                     scope={editScope}
+                    workspace={editWorkspace}
                     onBack={() => {
                       setAgentEdit(null)
                       setAgentOverride(null)
                     }}
                     onSaved={(msg) => {
-                      api.agents().then(setAgents).catch(() => {})
+                      api.agents(workspace).then(setAgents).catch(() => {})
                       setNotice(msg)
                       window.setTimeout(() => setNotice(''), 4000)
                       setAgentEdit(null)
@@ -352,6 +367,9 @@ export default function SettingsPanel({ onClose }: { onClose: () => void }) {
             })()}
             {section === 'permissions' && (
               <div>
+                {!sessionId && (
+                  <div className={styles.hint}>打开一个会话后可查看/切换权限模式。</div>
+                )}
                 <div className={styles.formCard}>
                   <div className={styles.permList}>
                     {(
@@ -367,7 +385,7 @@ export default function SettingsPanel({ onClose }: { onClose: () => void }) {
                         className={`${styles.permRow} ${mode === m ? styles.permRowActive : ''}`}
                         onClick={async () => {
                           setMode(m)
-                          await api.setPermissionMode(m)
+                          if (sessionId) await api.setPermissionMode(sessionId, m)
                         }}
                       >
                         <span className={styles.permRadio} data-on={mode === m || undefined} />
@@ -1083,11 +1101,13 @@ function CopyMini({ text }: { text: string }) {
 function AgentEditForm({
   initial,
   scope,
+  workspace,
   onSaved,
   onBack,
 }: {
   initial: AgentDefInfo | null
   scope: string
+  workspace: string
   onSaved: (msg: string) => void
   onBack: () => void
 }) {
@@ -1112,7 +1132,7 @@ function AgentEditForm({
     setBusy(true)
     setError('')
     try {
-      const res = await api.saveAgent(scope, {
+      const res = await api.saveAgent(workspace, scope, {
         agent_type: name.trim(),
         when_to_use: whenToUse.trim(),
         system_prompt: systemPrompt.trim(),
@@ -1136,7 +1156,7 @@ function AgentEditForm({
     setBusy(true)
     setError('')
     try {
-      await api.deleteAgent(scope, initial.agent_type)
+      await api.deleteAgent(workspace, scope, initial.agent_type)
       onSaved(`已删除 ${initial.agent_type},重启 ArchCode 后生效`)
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))

@@ -8,6 +8,7 @@ import styles from './Composer.module.css'
 interface Props {
   running: boolean
   disabled: boolean
+  workspace: string
   usage: UsageTotal | null
   context: ContextInfo | null
   permissionMode: string
@@ -33,6 +34,7 @@ const MODES = ['default', 'accept', 'bypass'] as const
 export default function Composer({
   running,
   disabled,
+  workspace,
   usage,
   context,
   permissionMode,
@@ -60,8 +62,8 @@ export default function Composer({
   const rootRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
-    api.skills().then(setSkills).catch(() => {})
-  }, [])
+    api.skills(workspace).then(setSkills).catch(() => {})
+  }, [workspace])
 
   useEffect(() => {
     setCurrentModel(modelName)
@@ -118,7 +120,7 @@ export default function Composer({
     if (!atOpen) return
     const timer = setTimeout(() => {
       api
-        .filesSearch(atQuery)
+        .filesSearch(workspace, atQuery)
         .then((r) => setAtItems(r.results))
         .catch(() => setAtItems([]))
     }, 300)

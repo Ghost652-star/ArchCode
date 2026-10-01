@@ -175,19 +175,11 @@ def main() -> None:
 
             asyncio.run(_oneshot())
         elif args.web:
-            # Web 路径:装配同 TUI(一套 _build_agent_sync + wiring),MCP 在
-            # FastAPI startup 里连(同 uvicorn loop,镜像 app.on_mount 模式)。
+            # Web 路径:多会话并行——每对话的运行时由注册表按需构建
+            # (archcode/runtime.py 工厂),MCP 连接按工作区共享(惰性连接)。
             from archcode.webui.server import run_web
 
-            provider = config.providers[0]
-            tool_registry = build_tool_registry(work_dir, provider.protocol)
-            agent = _build_agent_sync(config, work_dir, tool_registry)
-            _wire_hooks(config, work_dir, agent)
-            skill_executor = _wire_skills(agent, tool_registry, work_dir)
-            # 子 agent 接线(Agent/TaskList/TaskGet + 后台通知 + _task_manager):
-            # 此前 web 分支漏掉这步,Agent 工具在 Web 端根本不存在
-            _wire_agents(agent, tool_registry, work_dir, skill_executor)
-            run_web(agent, work_dir, args.port, config.mcp_servers, config.providers)
+            run_web(work_dir=work_dir, config=config, port=args.port)
         else:
             # TUI 路径:build 同步做(create_default_registry 不需要 await),
             # MCP 连接放到 background task,在 TUI 的 event loop 里跑。

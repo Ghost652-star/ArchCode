@@ -1,7 +1,12 @@
-"""ArchCode Web 服务(FastAPI):把 AgentEvent 流桥接成 SSE,供 web/ 前端消费。
+"""ArchCode Web 服务(FastAPI):多会话并行 + SSE 订阅。
 
-装配与 TUI 完全同源(__main__ 的 _build_agent_sync + _wire_hooks + _wire_skills),
-agent 零改动——Web 只是 AgentEvent 流的另一个客户端(hooks-design/webui §8.5 Q5)。
+架构(webui-multi-session-design.md):
+- RuntimeRegistry 管理工作区(每目录一份共享资源:MCP 连接/子进程、会话管理器)
+  与会话运行实例(每对话一份:agent/对话/事件通道/逐会话状态);
+- 对话运行由 asyncio 任务承载,不挂任何 HTTP 请求——浏览器断开不影响运行;
+- 前端按会话订阅事件(GET /api/events/{sid},支持 seq 续传)。
+
+装配与 TUI 同源:每对话运行时由 archcode/runtime.py 的工厂构建。
 """
 
 from __future__ import annotations
@@ -22,139 +27,36 @@ from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from archcode.agent import (
-    Agent,
     CompactFinished,
     CompactProgress,
     CompactStarted,
-    ErrorEvent,
-    InstructionDiagnosticsEvent,
-    LoopComplete,
     PermissionRequest,
-    RetryEvent,
-    StreamText,
-    ThinkingText,
     ToolResultEvent,
-    ToolUseEvent,
-    TurnComplete,
     UsageEvent,
 )
-from archcode.conversation.manager import ConversationManager
 from archcode.logctx import set_session_id
 from archcode.memory import SessionManager
-from archcode.runtime import build_agent_runtime, connect_mcp
+from archcode.runtime import build_agent_runtime
+from archcode.webui.registry import EventChannel, RuntimeRegistry, SessionRuntime
 
 log = logging.getLogger(__name__)
 
-# ── 全局服务状态(单进程单 agent,学习项目) ─────────────────────────────
+
+# ── 全局服务状态 ─────────────────────────────────────────────────────────
 
 
 class ServerState:
-    """服务端持有的运行时:agent、会话、HITL 注册表、任务锁、用量累计。"""
+    """Web 服务全局状态:运行注册表 + HITL 桥 + 默认供应商。"""
 
-    def __init__(self, agent: Agent, work_dir: Path, providers: list | None = None) -> None:
-        self.agent = agent
-        self.work_dir = work_dir
-        self.providers = providers or []  # ProviderConfig 列表(模型选择器用)
-        self.session_manager = SessionManager(work_dir)
-        self.conversation = ConversationManager()
-        # 惰性创建:_session 为 None = "草稿对话"——发出第一条消息时才真正
-        # 落盘会话文件,避免启动/切换/新对话制造一堆空时间戳条目
-        self._session = None
-        set_session_id(None)
-        self._run_lock = asyncio.Lock()
+    def __init__(self, providers: list | None = None) -> None:
+        self.providers = providers or []
+        self.default_provider_name: str | None = (
+            providers[0].name if providers else None
+        )
+        self.registry = RuntimeRegistry(max_concurrent_runs=4)
         self._permissions: dict[str, asyncio.Future] = {}
         self._pending_permits: list[dict] = []  # 重连时重发的未决请求
-        self._usage = self._usage_from_meta()
-
-    def ensure_session(self) -> None:
-        """草稿 → 正式会话:第一次要写消息时才创建会话文件并绑定。"""
-        if self._session is None:
-            self._session = self.session_manager.create()
-            self._session.bind(self.conversation)
-            set_session_id(self._session.id)
-            log.info("session materialized: %s", self._session.id)
-
-    # ── 用量累计(数据源:agent 每轮 yield 的 UsageEvent;持久层:.meta 索引)──
-
-    def _usage_from_meta(self) -> dict:
-        meta = self._session.meta if self._session else None
-        return {
-            "input": int(getattr(meta, "input_tokens", 0) or 0),
-            "output": int(getattr(meta, "output_tokens", 0) or 0),
-            "cache_read": int(getattr(meta, "cache_read_tokens", 0) or 0),
-            "cache_creation": int(getattr(meta, "cache_creation_tokens", 0) or 0),
-            "rounds": int(getattr(meta, "llm_rounds", 0) or 0),
-        }
-
-    def record_usage(self, event: UsageEvent, turn: dict) -> None:
-        """本轮 LLM 用量:进单轮小计 + 会话累计(落 .meta)。"""
-        fields = (
-            ("input", "input_tokens", event.input_tokens),
-            ("output", "output_tokens", event.output_tokens),
-            ("cache_read", "cache_read", event.cache_read),
-            ("cache_creation", "cache_creation", event.cache_creation),
-        )
-        for turn_key, _, value in fields:
-            turn[turn_key] += int(value)
-        self._usage["rounds"] += 1
-        turn["rounds"] += 1
-        if self._session is not None:
-            self._session.accumulate_usage(
-                event.input_tokens, event.output_tokens,
-                event.cache_read, event.cache_creation,
-            )
-
-    # ── 会话 ──
-
-    def new_session(self) -> str | None:
-        """开新对话:旧会话收尾,回到草稿态(第一条消息发出时才落盘)。
-
-        返回 None = 当前是草稿,尚无会话文件。
-        """
-        self.agent.clear_active_skills()
-        old = self._session
-        self.conversation = ConversationManager()
-        self._session = None
-        if old is not None:
-            old.close()
-        set_session_id(None)
-        self._usage = self._usage_from_meta()
-        store = _todo_store()
-        if store is not None:
-            store.clear()
-        return None
-
-    def resume_session(self, session_id: str) -> None:
-        restored = self.session_manager.open(session_id)
-        if restored is None:
-            raise HTTPException(404, f"session not found: {session_id}")
-        self.agent.clear_active_skills()
-        old = self._session
-        self._session = restored.session
-        self.conversation = restored.conversation
-        if old is not None:
-            old.close()
-        log.info("session resumed: %s", session_id)
-        set_session_id(session_id)
-        self._usage = self._usage_from_meta()
-        store = _todo_store()
-        if store is not None:
-            store.clear()
-
-    def list_sessions(self) -> list[dict]:
-        running = self._run_lock.locked()
-        current_id = self._session.id if self._session else None
-        sessions = self.session_manager.list_sessions()
-        return [
-            _session_row(
-                s,
-                current=s.id == current_id,
-                running=running and s.id == current_id,
-            )
-            for s in sessions
-        ]
-
-    # ── HITL 桥(§8.5 Q3)──
+        self.default_provider_name: str | None = None
 
     def register_permission(self, req: PermissionRequest) -> str:
         rid = uuid.uuid4().hex
@@ -167,129 +69,86 @@ class ServerState:
             raise HTTPException(404, f"unknown or resolved permission: {request_id}")
         future.set_result(value)
 
-    # ── 工作区切换(单激活重建:收旧造新)────────────────────────────
-
-    async def switch_workspace(self, target: Path) -> dict:
-        """关闭旧运行时,按新目录重建整套运行时并恢复该目录最近会话。
-
-        前置校验(运行中锁/后台任务/目录存在)由端点完成;这里的收尾顺序:
-        关会话句柄(Windows 文件锁)→ 作废未决权限 → 旧 MCP shutdown →
-        load_config(新目录分层) → build_agent_runtime + connect_mcp →
-        替换绑定 → 恢复最近会话。
-        """
-        from archcode.config import load_config
-
-        # ── 旧运行时收尾 ──
-        if self._session is not None:
-            self._session.close()
-        self._permissions.clear()
-        self._pending_permits = []
-        old_mcp = getattr(self, "mcp_manager", None)
-        if old_mcp is not None:
-            try:
-                await old_mcp.shutdown()
-            except Exception as e:
-                log.warning("[switch] 旧 MCP 收尾失败(忽略): %s", e)
-
-        # ── 按新目录重建 ──
-        config = load_config(None, project_dir=target)
-        protocol = (
-            self.providers[0].protocol
-            if self.providers
-            else (config.providers[0].protocol if config.providers else "anthropic")
-        )
-        registry, agent, _executor = build_agent_runtime(config, target, protocol)
-        mcp_manager, mcp_errors, mcp_successes = await connect_mcp(
-            config.mcp_servers, registry
-        )
-        for name, count in mcp_successes:
-            log.info("[MCP] %s: %d tools", name, count)
-        for err in mcp_errors:
-            log.warning("[MCP] %s", err)
-
-        conversation = ConversationManager()
-        session_manager = SessionManager(target)
-        session = None
-        resumed: str | None = None
-
-        # ── 会话:恢复最近一个"非空"历史会话;没有就保持草稿态 ──
-        # 候选必须 message_count>0:空会话无恢复价值;不再无条件 create,
-        # 草稿在第一条消息发出时才落盘(惰性创建)
-        metas = [m for m in session_manager.list_sessions() if m.message_count > 0]
-        if metas:
-            latest = max(metas, key=lambda m: m.last_active_ms)
-            try:
-                restored = session_manager.open(latest.id)
-                if restored is not None:
-                    conversation = restored.conversation
-                    session = restored.session
-                    resumed = latest.id
-            except HTTPException:
-                log.warning("[switch] 恢复最近会话失败: %s", latest.id)
-
-        # ── 替换绑定 ──
-        self.agent = agent
-        self.work_dir = target
-        self.providers = config.providers or self.providers
-        self.conversation = conversation
-        self.session_manager = session_manager
-        self._session = session
-        self.mcp_manager = mcp_manager  # type: ignore[attr-defined]
-        set_session_id(session.id if session else None)
-        self._usage = self._usage_from_meta()
-        store = _todo_store()
-        if store is not None:
-            store.clear()
-        log.info("workspace switched: %s (session %s, resumed=%s)", target, session.id, resumed)
-        return {"resumed": resumed, "mcp_errors": mcp_errors}
-
 
 STATE: ServerState | None = None
+STARTUP_WORK_DIR: Path | None = None
 
 app = FastAPI(title="ArchCode Web")
 
 
-# ── 事件序列化(AgentEvent → wire JSON,plan §4.2)────────────────────────
+def _registry() -> RuntimeRegistry:
+    assert STATE is not None
+    return STATE.registry
+
+
+def _workspace_or_error(workspace: str | None):
+    """按路径取工作区运行时;缺省取第一个已注册的。"""
+    reg = _registry()
+    if workspace:
+        return reg.workspace(workspace)
+    paths = reg.workspace_paths()
+    if not paths:
+        raise HTTPException(400, "尚未注册任何工作区")
+    return reg.workspace(paths[0])
+
+
+def _session_or_error(session_id: str) -> SessionRuntime:
+    rt = _registry().session(session_id)
+    if rt is None:
+        raise HTTPException(404, f"会话未打开或不存在: {session_id}")
+    return rt
+
+
+# ── 事件序列化(AgentEvent → wire JSON)──────────────────────────────────
 
 
 _TYPE_MAP = {
-    StreamText: ("text", lambda e: {"text": e.text}),
-    ThinkingText: ("thinking", lambda e: {"text": e.text}),
-    TurnComplete: ("turn_complete", lambda e: {"turn": e.turn}),
-    ErrorEvent: ("error", lambda e: {"message": e.message}),
-    LoopComplete: (
-        "loop_complete",
-        lambda e: {"total_turns": e.total_turns, "text": e.text},
-    ),
-    UsageEvent: (
-        "usage",
-        lambda e: {
-            "input_tokens": e.input_tokens,
-            "output_tokens": e.output_tokens,
-            "cache_read": e.cache_read,
-            "cache_creation": e.cache_creation,
-        },
-    ),
-    RetryEvent: ("retry", lambda e: {"reason": e.reason, "wait": e.wait}),
-    CompactStarted: ("compact_started", lambda e: {"mode": e.mode}),
-    CompactProgress: (
-        "compact_progress",
-        lambda e: {"delta": e.delta, "total_chars": e.total_chars},
-    ),
-    CompactFinished: (
-        "compact_finished",
-        lambda e: {
-            "success": e.success,
-            "error": e.error,
-            "dropped": e.dropped,
-            "summary_preview": e.summary_preview,
-        },
-    ),
+    "StreamText": lambda e: {"text": e.text},
+    "ThinkingText": lambda e: {"text": e.text},
+    "TurnComplete": lambda e: {"turn": e.turn},
+    "ErrorEvent": lambda e: {"message": e.message},
+    "LoopComplete": lambda e: {"total_turns": e.total_turns, "text": e.text},
+    "UsageEvent": lambda e: {
+        "input_tokens": e.input_tokens,
+        "output_tokens": e.output_tokens,
+        "cache_read": e.cache_read,
+        "cache_creation": e.cache_creation,
+    },
+    "RetryEvent": lambda e: {"reason": e.reason, "wait": e.wait},
+    "CompactStarted": lambda e: {"mode": e.mode},
+    "CompactProgress": lambda e: {"delta": e.delta, "total_chars": e.total_chars},
+    "CompactFinished": lambda e: {
+        "success": e.success,
+        "error": e.error,
+        "dropped": e.dropped,
+        "summary_preview": e.summary_preview,
+    },
+    "InstructionDiagnosticsEvent": lambda e: {
+        "diagnostics": [asdict(d) for d in e.diagnostics]
+    },
+}
+
+# AgentEvent 类名 → wire type(与旧前端的 wire 协议一致)
+_WIRE_NAMES = {
+    "StreamText": "text",
+    "ThinkingText": "thinking",
+    "ToolUseEvent": "tool_use",
+    "ToolResultEvent": "tool_result",
+    "PermissionRequest": "permission_request",
+    "TurnComplete": "turn_complete",
+    "ErrorEvent": "error",
+    "InstructionDiagnosticsEvent": "instruction_diagnostics",
+    "LoopComplete": "loop_complete",
+    "UsageEvent": "usage",
+    "RetryEvent": "retry",
+    "CompactStarted": "compact_started",
+    "CompactProgress": "compact_progress",
+    "CompactFinished": "compact_finished",
 }
 
 
 def serialize_event(event) -> dict:
-    """AgentEvent → wire JSON dict(plan §4.2 映射表)。"""
+    """AgentEvent → wire JSON dict;HITL 权限请求注册进全局 future 桥。"""
     if isinstance(event, PermissionRequest):
         assert STATE is not None
         rid = STATE.register_permission(event)
@@ -303,15 +162,8 @@ def serialize_event(event) -> dict:
             "options": event.options,
             "multi_select": event.multi_select,
         }
-    if isinstance(event, ToolUseEvent):
-        return {
-            "type": "tool_use",
-            "tool_id": event.tool_id,
-            "tool_name": event.tool_name,
-            "arguments": event.arguments,
-        }
     if isinstance(event, ToolResultEvent):
-        payload = {
+        return {
             "type": "tool_result",
             "tool_id": event.tool_id,
             "tool_name": event.tool_name,
@@ -319,176 +171,150 @@ def serialize_event(event) -> dict:
             "is_error": event.is_error,
             "elapsed": event.elapsed,
         }
-        if event.tool_name == "TodoWrite":
-            payload["todos"] = _todo_snapshot()
-        return payload
-    if isinstance(event, InstructionDiagnosticsEvent):
-        return {
-            "type": "instruction_diagnostics",
-            "diagnostics": [asdict(d) for d in event.diagnostics],
-        }
-    mapping = _TYPE_MAP.get(type(event))
-    if mapping is None:
+    cls = type(event).__name__
+    maker = _TYPE_MAP.get(cls)
+    if maker is None:
         return {"type": "unknown", "repr": repr(event)}
-    wire_type, fields = mapping
-    payload = {"type": wire_type, **fields(event)}
-    payload["ts"] = int(time.time() * 1000)  # 事件发出时刻(§13-A1)
-    return payload
+    return {"type": _WIRE_NAMES[cls], **maker(event)}
 
 
 def _sse(payload: dict) -> str:
-    return f"event: agent\ndata: {json.dumps(payload, ensure_ascii=False, default=str)}\n\n"
+    seq = payload.get("seq")
+    id_line = f"id: {seq}\n" if isinstance(seq, int) else ""
+    return f"{id_line}event: agent\ndata: {json.dumps(payload, ensure_ascii=False, default=str)}\n\n"
 
 
-def _todo_store():
-    """TodoWrite 工具实例上的会话级清单 store(未注册/被禁用时为 None)。"""
-    assert STATE is not None
-    registry = getattr(STATE.agent, "_tool_registry", None)
-    tool = registry.get("TodoWrite") if registry is not None else None
-    return getattr(tool, "store", None)
-
-
-def _todo_snapshot() -> list[dict]:
-    store = _todo_store()
-    return list(store.todos) if store is not None else []
-
-
-# ── 端点 ─────────────────────────────────────────────────────────────────
+# ── 端点:状态 / 工作区 ──────────────────────────────────────────────────
 
 
 @app.get("/api/state")
 def api_state():
-    assert STATE is not None
-    checker = getattr(STATE.agent, "_permission_checker", None)
-    provider = getattr(STATE.agent, "_client", None)
+    reg = _registry()
     return {
-        "session_id": STATE._session.id if STATE._session else None,
-        "running": STATE._run_lock.locked(),
-        "work_dir": str(STATE.work_dir),
-        "model": getattr(provider, "model_name", ""),
-        "permission_mode": checker.mode.value if checker else "default",
-        "plan_mode": bool(getattr(STATE.agent, "_plan_mode", False)),
+        "running_session_ids": reg.running_session_ids(),
+        "workspaces": reg.workspace_paths(),
+        "max_concurrent_runs": reg.max_concurrent_runs,
     }
+
+
+@app.post("/api/workspaces")
+def api_workspace_register(body: dict):
+    """注册工作区(惰性创建运行时;幂等)。前端启动时同步 localStorage 清单。"""
+    path = str((body or {}).get("path", "")).strip()
+    if not path:
+        raise HTTPException(400, "path is required")
+    target = Path(path)
+    if not target.exists() or not target.is_dir():
+        raise HTTPException(400, f"目录不存在: {path}")
+    ws = _registry().workspace(target)
+    return {"ok": True, "workspaces": _registry().workspace_paths(), "work_dir": str(ws.work_dir)}
+
+
+# ── 端点:会话管理 ───────────────────────────────────────────────────────
+
+
+def _session_rows(workspace_runtime, running_ids: set[str]) -> list[dict]:
+    reg = _registry()
+    rows = []
+    for s in workspace_runtime.session_manager.list_sessions():
+        rt = reg.session(s.id)
+        rows.append(
+            {
+                "id": s.id,
+                "title": s.title,
+                "message_count": s.message_count,
+                "last_active_ms": s.last_active_ms,
+                "created": str(getattr(s, "created_at", "")),
+                "running": s.id in running_ids,
+                "workspace": str(workspace_runtime.work_dir),
+            }
+        )
+    rows.sort(key=lambda r: r["last_active_ms"], reverse=True)
+    return rows
 
 
 @app.get("/api/sessions")
 def api_sessions(workspace: str | None = None):
-    """会话清单;`?workspace=<path>` 可列出其他工作区的会话(只读,不切换 agent)。"""
-    assert STATE is not None
+    """列出工作区的会话(running 标记来自注册表)。workspace 缺省 = 全部已注册工作区分组返回。"""
+    reg = _registry()
+    running_ids = set(reg.running_session_ids())
     if workspace:
-        from archcode.memory import SessionManager as _SM
+        ws = reg.workspace(workspace)
+        return {"workspace": str(ws.work_dir), "sessions": _session_rows(ws, running_ids)}
+    grouped = [
+        {"workspace": str(ws.work_dir), "sessions": _session_rows(ws, running_ids)}
+        for ws in reg.workspaces.values()
+    ]
+    return {"groups": grouped}
 
-        ws = Path(workspace)
-        if not ws.exists() or ws.resolve() == STATE.work_dir.resolve():
-            return STATE.list_sessions()
-        other = _SM(ws)
-        return [_session_row(s, workspace=str(ws)) for s in other.list_sessions()]
-    return STATE.list_sessions()
+
+@app.post("/api/sessions")
+async def api_new_session(body: dict):
+    """开新对话:创建草稿运行实例(不落盘,首条消息才创建会话文件)。"""
+    path = str((body or {}).get("workspace", "")).strip()
+    if not path:
+        raise HTTPException(400, "workspace is required")
+    ws = _registry().workspace(Path(path))
+    rt = await ws.build_session_runtime()
+    _registry().register_session(rt)
+    return {"session_id": rt.session_id, "workspace": str(ws.work_dir)}
 
 
-def _session_row(s, **extra) -> dict:
-    """SessionMeta → wire 行(设计 §10.9-4:标题 + 相对时间数据源)。"""
-    return {
-        "id": s.id,
-        "title": s.title,
-        "message_count": s.message_count,
-        "last_active_ms": s.last_active_ms,
-        "created": str(getattr(s, "created_at", "")),
-        "current": bool(extra.pop("current", False)),
-        "running": bool(extra.pop("running", False)),
-        **extra,
-    }
+@app.post("/api/sessions/{session_id}/resume")
+async def api_resume_session(session_id: str, workspace: str | None = None):
+    """打开会话:确保其 SessionRuntime 存在(从磁盘恢复)。"""
+    if _registry().session(session_id) is not None:
+        return {"ok": True, "session_id": session_id}
+    ws = _workspace_or_error(workspace)
+    rt = await ws.build_session_runtime(resume_id=session_id)
+    if rt.session is None or rt.session.id != session_id:
+        if rt.session is not None:
+            rt.session.close()
+        _registry().drop_session(rt.session_id)
+        raise HTTPException(404, f"session not found: {session_id}")
+    _registry().register_session(rt)
+    return {"ok": True, "session_id": session_id}
 
 
 @app.post("/api/sessions/{session_id}/rename")
-def api_rename_session(session_id: str, body: dict):
-    assert STATE is not None
+def api_rename_session(session_id: str, body: dict, workspace: str | None = None):
     title = str((body or {}).get("title", "")).strip()
     if not title:
         raise HTTPException(400, "title is required")
-    if not STATE.session_manager.rename(session_id, title):
+    ws = _workspace_or_error(workspace)
+    if not ws.session_manager.rename(session_id, title):
         raise HTTPException(404, f"session not found: {session_id}")
-    if STATE._session is not None and STATE._session.id == session_id:
-        STATE._session.meta.title = title  # 同步内存态,防 _touch_meta 把旧名写回
+    rt = _registry().session(session_id)
+    if rt is not None and rt.session is not None:
+        rt.session.meta.title = title  # 同步内存态,防 _touch_meta 把旧名写回
     return {"ok": True}
 
 
 @app.delete("/api/sessions/{session_id}")
-def api_delete_session(session_id: str):
-    assert STATE is not None
-    is_current = STATE._session is not None and STATE._session.id == session_id
-    if is_current and STATE._run_lock.locked():
-        raise HTTPException(409, "cannot delete the running session")
-    if is_current:
-        STATE._session.close()  # 先关句柄,Windows 下不关无法删除
-    if not STATE.session_manager.delete(session_id):
+def api_delete_session(session_id: str, workspace: str | None = None):
+    ws = _workspace_or_error(workspace)
+    rt = _registry().session(session_id)
+    if rt is not None:
+        if rt.running:
+            raise HTTPException(409, "cannot delete the running session")
+        if rt.session is not None:
+            rt.session.close()  # 先关句柄,Windows 下不关无法删除
+        _registry().drop_session(session_id)
+    if not ws.session_manager.delete(session_id):
         raise HTTPException(404, f"session not found: {session_id}")
-    if is_current:
-        STATE.new_session()  # 删的是当前会话:自动开新会话,页面始终有落点
     return {"ok": True}
-
-
-# ── 模型选择器(§9.1 ModelsSection 模式:当前 + 已配置清单)──────────────
-
-
-@app.get("/api/model")
-def api_model():
-    assert STATE is not None
-    client = getattr(STATE.agent, "_client", None)
-    return {
-        "current": getattr(client, "model_name", ""),
-        "providers": [
-            {"name": p.name, "model": p.model, "protocol": p.protocol}
-            for p in STATE.providers
-        ],
-    }
-
-
-@app.post("/api/model")
-def api_model_switch(body: dict):
-    """切换模型:按名称重建 agent._client(运行中拒绝)。"""
-    assert STATE is not None
-    if STATE._run_lock.locked():
-        raise HTTPException(409, "cannot switch model while a run is active")
-    name = (body or {}).get("name", "")
-    provider = next((p for p in STATE.providers if p.name == name), None)
-    if provider is None:
-        raise HTTPException(404, f"provider not found: {name}")
-    from archcode.llm.client import create_client
-
-    STATE.agent._client = create_client(provider)
-    STATE.agent._client.set_max_output_tokens(provider.max_output_tokens)
-    return {"ok": True, "model": provider.model}
-
-
-@app.post("/api/sessions")
-def api_new_session():
-    """开新对话:回到草稿态,第一条消息发出时才创建会话文件。"""
-    assert STATE is not None
-    STATE.new_session()
-    return {"ok": True}
-
-
-@app.post("/api/sessions/{session_id}/resume")
-def api_resume_session(session_id: str):
-    assert STATE is not None
-    STATE.resume_session(session_id)
-    return {"session_id": session_id}
 
 
 @app.get("/api/sessions/search")
-def api_sessions_search(q: str, limit: int = 8):
-    """跨会话内容搜索:扫描 .jsonl 正文(每文件前 2MB),返回首次命中摘要。
-
-    只读;搜索范围 = 当前工作区的会话目录,超大文件截断,不求全文精确计数。
-    """
-    assert STATE is not None
+def api_sessions_search(workspace: str | None = None, q: str = "", limit: int = 8):
+    """跨会话内容搜索:扫指定工作区的 .jsonl 正文(每文件前 2MB)。"""
+    ws = _workspace_or_error(workspace)
     needle = q.strip().lower()
     if len(needle) < 2:
         return {"results": []}
     results: list[dict] = []
-    for meta in STATE.session_manager.list_sessions():
-        path = STATE.session_manager.sessions_dir / f"{meta.id}.jsonl"
+    for meta in ws.session_manager.list_sessions():
+        path = ws.session_manager.sessions_dir / f"{meta.id}.jsonl"
         try:
             if path.stat().st_size > 8 * 1024 * 1024:
                 continue
@@ -507,18 +333,117 @@ def api_sessions_search(q: str, limit: int = 8):
     return {"results": results}
 
 
-@app.get("/api/history")
-def api_history():
-    """当前会话全量历史(刷新恢复用):按消息角色返回。
+# ── 端点:对话运行(chat 启动式 + 事件订阅 + 中断)──────────────────────
 
-    内部注入的 user 消息不进 UI(§10.9-3):`<system-reminder>`(运行时提醒)、
-    `<会话恢复材料>`(恢复降级线索)、`[恢复提示]`(时间间隔提示)。
-    会话数据不动,只在显示层过滤;对应的 assistant 边界说明是真实回复,保留。
-    """
+
+async def _run_session_message(rt: SessionRuntime, text: str) -> None:
+    """会话运行任务:事件进通道,浏览器断开不影响;结束自行收尾。"""
     assert STATE is not None
+    async with rt.lock:
+        rt.events = EventChannel()
+        turn_usage = {
+            "input": 0, "output": 0, "cache_read": 0, "cache_creation": 0, "rounds": 0,
+        }
+        try:
+            rt.materialize()
+            _registry().materialize(rt)
+            rt.agent._abort_event.clear()  # 新一轮重置中断(同 TUI)
+            async for event in rt.agent.run(text, rt.conversation):
+                if isinstance(event, UsageEvent):
+                    rt.record_usage(event)
+                    turn_usage["input"] += int(event.input_tokens)
+                    turn_usage["output"] += int(event.output_tokens)
+                    turn_usage["cache_read"] += int(event.cache_read)
+                    turn_usage["cache_creation"] += int(event.cache_creation)
+                    turn_usage["rounds"] += 1
+                payload = serialize_event(event)
+                if isinstance(event, ToolResultEvent) and event.tool_name == "TodoWrite":
+                    payload["todos"] = rt.todo_snapshot()
+                rt.events.publish(payload)
+            if turn_usage["rounds"] > 0:
+                total = sum(
+                    turn_usage[k]
+                    for k in ("input", "output", "cache_read", "cache_creation")
+                )
+                rt.events.publish({"type": "turn_usage", **turn_usage, "total": total})
+        except Exception as e:
+            rt.events.publish({"type": "error", "message": str(e)})
+        finally:
+            pending = list(STATE._permissions.items())
+            STATE._pending_permits = [
+                {"request_id": rid} for rid, _ in pending
+            ]
+            rt.events.finish()
+            rt.run_task = None
+
+
+@app.post("/api/chat")
+async def api_chat(body: dict):
+    """启动一次对话运行(立即返回)。事件经 GET /api/events/{session_id} 订阅。"""
+    assert STATE is not None
+    reg = _registry()
+    sid = str((body or {}).get("session_id", "")).strip()
+    text = str((body or {}).get("text", "")).strip()
+    if not text:
+        raise HTTPException(400, "text is required")
+    rt = reg.session(sid)
+    if rt is None:
+        raise HTTPException(404, f"会话未打开: {sid}")
+    if rt.running:
+        raise HTTPException(409, "该会话正在运行中")
+    if reg.running_count() >= reg.max_concurrent_runs:
+        raise HTTPException(429, f"并发运行已达上限({reg.max_concurrent_runs})")
+
+    rt.run_task = asyncio.create_task(
+        _run_session_message(rt, text), name=f"run-{sid}"
+    )
+    return {"ok": True, "session_id": rt.session_id}
+
+
+@app.get("/api/events/{session_id}")
+async def api_events(session_id: str, after: int = -1):
+    """订阅会话事件流(SSE):重放 after 之后的事件,实时跟随到运行结束。"""
+    rt = _registry().session(session_id)
+    if rt is None or rt.events is None:
+
+        async def _idle():
+            yield _sse({"type": "idle"})
+
+        return StreamingResponse(
+            _idle(), media_type="text/event-stream", headers={"Cache-Control": "no-cache"}
+        )
+
+    async def _stream():
+        async for ev in rt.events.stream(after):
+            yield _sse(ev)
+
+    return StreamingResponse(
+        _stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.post("/api/abort")
+async def api_abort(body: dict):
+    """中断指定会话的运行(协作式:设中断事件,运行任务自行收尾)。"""
+    assert STATE is not None
+    sid = str((body or {}).get("session_id", "")).strip()
+    rt = _registry().session(sid)
+    if rt is None:
+        raise HTTPException(404, f"会话未打开: {sid}")
+    log.info("abort requested (web): session=%s", sid)
+    rt.agent._abort_event.set()
+    return {"ok": True}
+
+
+@app.get("/api/history")
+def api_history(session_id: str):
+    """该会话的全量历史(刷新恢复用);内部注入的 user 消息不进 UI。"""
+    rt = _session_or_error(session_id)
     internal_prefixes = ("<system-reminder>", "<会话恢复材料>", "[恢复提示]")
     out = []
-    for m in STATE.conversation.history:
+    for m in rt.conversation.history:
         if m.role == "user" and m.content.startswith(internal_prefixes):
             continue
         entry: dict = {"role": m.role, "content": m.content, "created_at": m.created_at}
@@ -530,136 +455,37 @@ def api_history():
     return out
 
 
-@app.post("/api/chat")
-async def api_chat(body: dict):
+# ── 端点:逐会话观测已在上文;以下是模型/权限/技能/子Agent/设置/文件 ──
+
+
+@app.get("/api/model")
+def api_model():
     assert STATE is not None
-    text = (body or {}).get("text", "").strip()
-    if not text:
-        raise HTTPException(400, "text is required")
-    if STATE._run_lock.locked():
-        raise HTTPException(409, "another run is active")
-
-    STATE.agent._abort_event.clear()  # 新一轮重置中断(同 app.py:806)
-
-    async def stream():
-        # Web 端斜杠命令:目前只接 /plan(直接调 agent 现成方法),其余提示不支持
-        if text.startswith("/"):
-            async with STATE._run_lock:
-                if text == "/plan":
-                    on = not getattr(STATE.agent, "_plan_mode", False)
-                    STATE.agent.set_plan_mode(on)
-                    yield _sse({
-                        "type": "notice",
-                        "text": f"Plan 模式已{'开启' if on else '关闭'}",
-                    })
-                else:
-                    yield _sse({
-                        "type": "notice",
-                        "text": f"Web 端暂不支持斜杠命令 {text.split()[0]}(可在 TUI 使用)",
-                    })
-                yield _sse({"type": "done"})
-            return
-        async with STATE._run_lock:
-            turn_usage = {"input": 0, "output": 0, "cache_read": 0, "cache_creation": 0, "rounds": 0}
-            try:
-                STATE.ensure_session()  # 第一条消息发出时才把草稿落盘为正式会话
-                async for event in STATE.agent.run(text, STATE.conversation):
-                    if isinstance(event, UsageEvent):
-                        STATE.record_usage(event, turn_usage)
-                    yield _sse(serialize_event(event))
-            except Exception as e:  # 兜底:agent 内部抛错也走 SSE error
-                yield _sse({"type": "error", "message": str(e)})
-            finally:
-                if turn_usage["rounds"] > 0:
-                    total = sum(turn_usage[k] for k in ("input", "output", "cache_read", "cache_creation"))
-                    yield _sse({"type": "turn_usage", **turn_usage, "total": total})
-                yield _sse({"type": "done"})
-                pending = list(STATE._permissions.items())
-                STATE._pending_permits = [
-                    {"request_id": rid} for rid, _ in pending
-                ]
-
-    return StreamingResponse(
-        stream(), media_type="text/event-stream", headers={"Cache-Control": "no-cache"}
-    )
-
-
-@app.post("/api/workspace/switch")
-async def api_workspace_switch(body: dict):
-    """切换工作区(单激活重建):收旧运行时,按新目录重建,恢复最近会话。
-
-    运行中 / 后台任务未完成时 409;同目录重复切换幂等返回。
-    """
-    assert STATE is not None
-    raw = str((body or {}).get("path", "")).strip()
-    if not raw:
-        raise HTTPException(400, "path is required")
-    target = Path(raw)
-    if not target.exists() or not target.is_dir():
-        raise HTTPException(400, f"目录不存在: {raw}")
-    resolved = target.resolve()
-    if resolved == STATE.work_dir.resolve():
-        return {
-            "ok": True,
-            "unchanged": True,
-            "work_dir": str(STATE.work_dir),
-            "session_id": STATE._session.id if STATE._session else None,
-        }
-    if STATE._run_lock.locked():
-        raise HTTPException(409, "Agent 运行中,请先停止再切换工作区")
-    task_manager = getattr(STATE.agent, "_task_manager", None)
-    if task_manager is not None and any(
-        t.status == "running" for t in task_manager.list_tasks()
-    ):
-        raise HTTPException(409, "有后台任务运行中,完成后再切换工作区")
-    result = await STATE.switch_workspace(resolved)
+    provider = STATE.default_provider()
     return {
-        "ok": True,
-        "work_dir": str(STATE.work_dir),
-        "session_id": STATE._session.id if STATE._session else None,
-        "resumed": result["resumed"],
+        "current": provider.model if provider else "",
+        "providers": [
+            {"name": p.name, "model": p.model, "protocol": p.protocol}
+            for p in STATE.providers
+        ],
     }
 
 
-@app.post("/api/workspace/pick")
-def api_workspace_pick():
-    """弹原生目录选择框(tkinter),返回所选绝对路径。
-
-    服务仅绑定 127.0.0.1,与浏览器同机——所以服务端弹的窗口就是用户屏幕上
-    的窗口。tkinter 建在一次性线程里(避免污染 uvicorn 工作线程);同步端点
-    跑在 FastAPI 线程池,阻塞不占事件循环。
-    """
-    import threading
-
-    def _pick() -> None:
-        import tkinter as tk
-        from tkinter import filedialog
-
-        root = tk.Tk()
-        root.withdraw()
-        root.attributes("-topmost", True)
-        try:
-            picked["path"] = filedialog.askdirectory(title="选择工作区文件夹") or ""
-        finally:
-            root.destroy()
-
-    picked: dict = {}
-    try:
-        t = threading.Thread(target=_pick, daemon=True)
-        t.start()
-        t.join()
-    except Exception as e:
-        raise HTTPException(500, f"目录选择器不可用: {e}")
-    path = (picked.get("path") or "").strip()
-    return {"ok": bool(path), "path": path or None}
-
-
-@app.post("/api/abort")
-async def api_abort():
+@app.post("/api/model")
+def api_model_switch(body: dict):
+    """切换默认供应商:新会话用它;空闲的已开会话立即重建 client,运行中的保持。"""
     assert STATE is not None
-    log.info("abort requested (web)")
-    STATE.agent._abort_event.set()
-    return {"ok": True}
+    name = str((body or {}).get("name", ""))
+    provider = next((p for p in STATE.providers if p.name == name), None)
+    if provider is None:
+        raise HTTPException(404, f"provider not found: {name}")
+    STATE.default_provider_name = name
+    for rt in _registry().sessions.values():
+        if rt.running:
+            continue
+        rt.agent._client = create_client(provider)
+        rt.agent._client.set_max_output_tokens(provider.max_output_tokens)
+    return {"ok": True, "model": provider.model}
 
 
 @app.post("/api/permission/{request_id}")
@@ -672,128 +498,14 @@ async def api_permission(request_id: str, body: dict):
     return {"ok": True}
 
 
-@app.get("/api/context")
-def api_context():
-    """上下文占用(§13-A4):percent = 当前 token / 窗口(provider 可配,缺省 128k)。
-
-    breakdown 为启发式分段估算,供 composer 旁的占用卡做分类着色:
-    系统提示词 / 内建工具 schema / MCP(延迟)工具 schema / 激活 Skill 钉住段 /
-    记忆索引段 / 消息(= 总量减去其余,保证闭合)。数字是估算值。
-    """
-    assert STATE is not None
-    total = STATE.conversation.current_tokens()
-    provider = STATE.providers[0] if STATE.providers else None
-    window = int(getattr(provider, "context_window", 0) or 0) or 131072
-    percent = min(1.0, total / window) if window > 0 else 0.0
-
-    def _est(text: str | None) -> int:
-        return int(len(text or "") / 3.5)
-
-    system = _est(getattr(STATE.agent, "_system_prompt", ""))
-    tools_builtin = tools_mcp = 0
-    registry = getattr(STATE.agent, "_tool_registry", None)
-    if registry is not None:
-        for tool in getattr(registry, "_tools", {}).values():
-            try:
-                est = _est(json.dumps(tool.get_schema(), ensure_ascii=False))
-            except Exception:
-                continue
-            if getattr(tool, "should_defer", False):
-                tools_mcp += est
-            else:
-                tools_builtin += est
-    conversation = STATE.conversation
-    skills = _est(getattr(conversation, "_active_skills_message", None) and
-                  conversation._active_skills_message.content)
-    memory = _est(getattr(conversation, "_memory_context_message", None) and
-                  conversation._memory_context_message.content)
-    fixed = system + tools_builtin + tools_mcp + skills + memory
-    messages = max(total - fixed, 0)
+@app.get("/api/permission-mode")
+def api_permission_mode_get(session_id: str):
+    rt = _session_or_error(session_id)
+    checker = getattr(rt.agent, "_permission_checker", None)
     return {
-        "total_tokens": total,
-        "percent": percent,
-        "window": window,
-        "breakdown": {
-            "messages": messages,
-            "system": system,
-            "tools_builtin": tools_builtin,
-            "tools_mcp": tools_mcp,
-            "skills": skills,
-            "memory": memory,
-        },
+        "mode": checker.mode.value if checker else "default",
+        "plan_mode": bool(getattr(rt.agent, "_plan_mode", False)),
     }
-
-
-@app.get("/api/usage")
-def api_usage():
-    """会话累计 LLM 用量(.meta 索引持久化,resume 后可恢复)。"""
-    assert STATE is not None
-    u = STATE._usage
-    billed_input = u["input"] + u["cache_read"] + u["cache_creation"]
-    return {
-        "input_tokens": u["input"],
-        "output_tokens": u["output"],
-        "cache_read": u["cache_read"],
-        "cache_creation": u["cache_creation"],
-        "llm_rounds": u["rounds"],
-        "total_tokens": billed_input + u["output"],
-        "cache_hit": (u["cache_read"] / billed_input) if billed_input > 0 else None,
-    }
-
-
-# ── 设置(§9.2:作用域选择器;ruamel round-trip 保注释)───────────────────
-
-from ruamel.yaml import YAML  # noqa: E402
-
-_yaml = YAML()
-_yaml.preserve_quotes = True
-
-
-def _scope_path(scope: str, work_dir: Path) -> Path:
-    from archcode.paths import application_data_dir, project_data_dir
-
-    if scope == "user":
-        return application_data_dir() / "config.yaml"
-    if scope == "project":
-        return project_data_dir(work_dir) / "config.yaml"
-    if scope == "local":
-        return project_data_dir(work_dir) / "config.local.yaml"
-    raise HTTPException(400, f"unknown scope: {scope}")
-
-
-@app.get("/api/settings/{scope}")
-def api_settings_get(scope: str):
-    assert STATE is not None
-    path = _scope_path(scope, STATE.work_dir)
-    if not path.exists():
-        return {"path": str(path), "data": {}, "exists": False}
-    data = _yaml.load(path.read_text(encoding="utf-8"))
-    return {"path": str(path), "data": data if data is not None else {}, "exists": True}
-
-
-@app.put("/api/settings/{scope}")
-def api_settings_put(scope: str, body: dict):
-    assert STATE is not None
-    path = _scope_path(scope, STATE.work_dir)
-    key = (body or {}).get("key")
-    items = (body or {}).get("items")
-    if key not in ("providers", "mcp_servers", "hooks") or not isinstance(items, list):
-        raise HTTPException(400, "body must be {key, items}")
-    path.parent.mkdir(parents=True, exist_ok=True)
-    if path.exists():
-        backup = path.with_suffix(".yaml.bak")
-        backup.write_text(path.read_text(encoding="utf-8"), encoding="utf-8")
-        data = _yaml.load(path.read_text(encoding="utf-8")) or {}
-    else:
-        data = {}
-    data[key] = items
-    import io
-
-    buf = io.StringIO()
-    _yaml.dump(data, buf)
-    path.write_text(buf.getvalue(), encoding="utf-8")
-    restart_required = key in ("providers", "mcp_servers", "hooks")
-    return {"ok": True, "restart_required": restart_required}
 
 
 @app.post("/api/permission-mode")
@@ -801,52 +513,47 @@ def api_permission_mode(body: dict):
     assert STATE is not None
     from archcode.permissions import PermissionMode
 
-    mode = (body or {}).get("mode", "")
+    sid = str((body or {}).get("session_id", "")).strip()
+    mode = str((body or {}).get("mode", "")).strip()
     if mode not in ("default", "accept", "bypass"):
         raise HTTPException(400, f"unknown mode: {mode}")
-    checker = getattr(STATE.agent, "_permission_checker", None)
+    rt = _registry().session(sid)
+    if rt is None:
+        raise HTTPException(404, f"会话未打开: {sid}")
+    checker = getattr(rt.agent, "_permission_checker", None)
     if checker is not None:
         checker.mode = PermissionMode(mode)
     return {"ok": True, "mode": mode}
 
 
-@app.get("/api/todo")
-def api_todo():
-    """当前会话任务清单(TodoWrite store 快照)。"""
-    return {"todos": _todo_snapshot()}
+# ── 端点:Skills / 子 Agent(按工作区)─────────────────────────────────
 
 
-@app.get("/api/tasks")
-def api_tasks():
-    """后台任务清单(TaskManager 只读快照):状态/耗时/token 用量/结果预览。"""
-    assert STATE is not None
-    manager = getattr(STATE.agent, "_task_manager", None)
-    if manager is None:
-        return {"tasks": []}
-    tasks = []
-    for bg in manager.list_tasks():
-        end = bg.end_time if bg.end_time is not None else time.monotonic()
-        tasks.append(
-            {
-                "id": bg.id,
-                "name": bg.name,
-                "status": bg.status,
-                "elapsed": max(end - bg.start_time, 0.0),
-                "input_tokens": bg.progress.input_tokens,
-                "output_tokens": bg.progress.output_tokens,
-                "result_preview": (bg.result or "")[:200],
-            }
-        )
-    return {"tasks": tasks}
+@app.get("/api/skills")
+def api_skills(workspace: str | None = None):
+    from archcode.skills import SkillLoader
+
+    ws = _workspace_or_error(workspace)
+    loader = SkillLoader(work_dir=ws.work_dir)
+    return [
+        {
+            "name": m.name,
+            "description": m.description,
+            "source": m.source,
+            "path": str(m.path),
+            "is_directory": m.is_directory,
+        }
+        for m in loader.scan().values()
+    ]
 
 
 @app.get("/api/agents")
-def api_agents():
-    """子 agent 定义清单(AgentLoader 三层合并后的生效集合:project > user > builtin)。"""
-    assert STATE is not None
-    loader = getattr(STATE.agent, "_agent_loader", None)
-    if loader is None:
-        return []
+def api_agents(workspace: str | None = None):
+    from archcode.agents.loader import AgentLoader
+
+    ws = _workspace_or_error(workspace)
+    loader = AgentLoader(work_dir=ws.work_dir)
+    loader.load_all()
     return [
         {
             "agent_type": d.agent_type,
@@ -868,31 +575,24 @@ def api_agents():
 _AGENT_NAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{1,63}$")
 
 
-def _agents_dir_for(scope: str) -> Path:
-    """子 agent 定义文件的作用域目录(与 AgentLoader._layer_dirs 同源)。"""
-    assert STATE is not None
+def _agents_dir_for(workspace: str, scope: str) -> Path:
     from archcode.paths import application_agents_dir, project_agents_dir
 
     if scope == "project":
-        return project_agents_dir(STATE.work_dir)
+        return project_agents_dir(_workspace_or_error(workspace).work_dir)
     if scope == "user":
         return application_agents_dir()
     raise HTTPException(400, f"unknown scope: {scope}")
 
 
 def _yaml_str(v: str) -> str:
-    """JSON 字符串是合法 YAML 标量:免手写转义。"""
     return json.dumps(v, ensure_ascii=False)
 
 
 @app.post("/api/agents/{scope}")
-def api_agents_save(scope: str, body: dict):
-    """新建/覆盖一个子 agent 定义(渲染 frontmatter Markdown 写入作用域目录)。
-
-    写文件即止,不热重载——loader 在下次启动时重新扫描(与设置面板口径一致)。
-    同名文件直接覆盖;与内置定义同名会形成遮蔽(loader 优先级语义,允许)。
-    """
-    assert STATE is not None
+async def api_agents_save(scope: str, body: dict, workspace: str | None = None):
+    """新建/覆盖一个子 agent 定义(渲染 frontmatter Markdown 写入作用域目录)。"""
+    ws = _workspace_or_error(workspace)
     body = body or {}
     name = str(body.get("agent_type", "")).strip()
     if not _AGENT_NAME_RE.match(name):
@@ -923,7 +623,9 @@ def api_agents_save(scope: str, body: dict):
     if tools:
         lines.append("tools: [" + ", ".join(_yaml_str(t) for t in tools) + "]")
     if disallowed:
-        lines.append("disallowedTools: [" + ", ".join(_yaml_str(t) for t in disallowed) + "]")
+        lines.append(
+            "disallowedTools: [" + ", ".join(_yaml_str(t) for t in disallowed) + "]"
+        )
     if model and model != "inherit":
         lines.append(f"model: {_yaml_str(model)}")
     if max_turns != 50:
@@ -935,7 +637,7 @@ def api_agents_save(scope: str, body: dict):
     lines.append("---")
     md = "\n".join(lines) + "\n\n" + system_prompt + "\n"
 
-    target_dir = _agents_dir_for(scope)
+    target_dir = _agents_dir_for(workspace, scope)
     target_dir.mkdir(parents=True, exist_ok=True)
     path = target_dir / f"{name}.md"
     path.write_text(md, encoding="utf-8")
@@ -944,14 +646,16 @@ def api_agents_save(scope: str, body: dict):
 
 
 @app.delete("/api/agents/{scope}/{agent_type}")
-def api_agents_delete(scope: str, agent_type: str):
-    """删除一个子 agent 定义文件;只允许删当前作用域目录内的文件(内置不可删)。"""
-    assert STATE is not None
-    loader = getattr(STATE.agent, "_agent_loader", None)
-    defn = loader.get(agent_type) if loader is not None else None
+async def api_agents_delete(scope: str, agent_type: str, workspace: str | None = None):
+    from archcode.agents.loader import AgentLoader
+
+    ws = _workspace_or_error(workspace)
+    loader = AgentLoader(work_dir=ws.work_dir)
+    loader.load_all()
+    defn = loader.get(agent_type)
     if defn is None:
         raise HTTPException(404, f"agent not found: {agent_type}")
-    scope_dir = _agents_dir_for(scope).resolve()
+    scope_dir = _agents_dir_for(workspace, scope).resolve()
     if defn.file_path is None or not defn.file_path.resolve().is_relative_to(scope_dir):
         raise HTTPException(400, "只能删除当前作用域目录内的定义(内置定义不可删)")
     defn.file_path.unlink()
@@ -959,36 +663,77 @@ def api_agents_delete(scope: str, agent_type: str):
     return {"ok": True, "restart_required": True}
 
 
-@app.get("/api/skills")
-def api_skills():
-    assert STATE is not None
-    loader = getattr(STATE.agent, "_skill_loader", None)
-    if loader is None:
-        return []
-    return [
-        {
-            "name": m.name,
-            "description": m.description,
-            "source": m.source,
-            "path": str(m.path),
-            "is_directory": m.is_directory,
-        }
-        for m in loader.manifests().values()
-    ]
+# ── 端点:设置(config.yaml 读写,按工作区)────────────────────────────
 
 
-# ── 工作区文件(只读浏览:设计 §12,路径圈定在工作区内是安全底线)──────────
+from ruamel.yaml import YAML  # noqa: E402
+
+_yaml = YAML()
+_yaml.preserve_quotes = True
+
+
+def _scope_path(scope: str, work_dir: Path) -> Path:
+    from archcode.paths import application_data_dir, project_data_dir
+
+    if scope == "user":
+        return application_data_dir() / "config.yaml"
+    if scope == "project":
+        return project_data_dir(work_dir) / "config.yaml"
+    if scope == "local":
+        return project_data_dir(work_dir) / "config.local.yaml"
+    raise HTTPException(400, f"unknown scope: {scope}")
+
+
+def _settings_workspace(workspace: str | None) -> Path:
+    return _workspace_or_error(workspace).work_dir
+
+
+@app.get("/api/settings/{scope}")
+def api_settings_get(scope: str, workspace: str | None = None):
+    path = _scope_path(scope, _settings_workspace(workspace))
+    if not path.exists():
+        return {"path": str(path), "data": {}, "exists": False}
+    data = _yaml.load(path.read_text(encoding="utf-8"))
+    return {"path": str(path), "data": data if data is not None else {}, "exists": True}
+
+
+@app.put("/api/settings/{scope}")
+def api_settings_put(scope: str, body: dict, workspace: str | None = None):
+    path = _scope_path(scope, _settings_workspace(workspace))
+    key = (body or {}).get("key")
+    items = (body or {}).get("items")
+    if key not in ("providers", "mcp_servers", "hooks") or not isinstance(items, list):
+        raise HTTPException(400, "body must be {key, items}")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.exists():
+        backup = path.with_suffix(".yaml.bak")
+        backup.write_text(path.read_text(encoding="utf-8"), encoding="utf-8")
+        data = _yaml.load(path.read_text(encoding="utf-8")) or {}
+    else:
+        data = {}
+    data[key] = items
+    import io
+
+    buf = io.StringIO()
+    _yaml.dump(data, buf)
+    path.write_text(buf.getvalue(), encoding="utf-8")
+    restart_required = key in ("providers", "mcp_servers", "hooks")
+    return {"ok": True, "restart_required": restart_required}
+
+
+# ── 端点:工作区文件(只读浏览,圈定在工作区内)────────────────────────
+
 
 _MAX_ENTRIES = 2000
 _MAX_LINES = 2000
 _MAX_BYTES = 512 * 1024
 
 
-def _confine(rel: str) -> Path:
-    """相对路径 → work_dir 内的绝对路径;越界 403、不存在 404。空串 = 根。"""
-    assert STATE is not None
+def _confine(workspace: str | None, rel: str) -> Path:
+    """相对路径 → 工作区内的绝对路径;越界 403、不存在 404。空串 = 根。"""
+    ws = _workspace_or_error(workspace)
     rel = (rel or "").replace("\\", "/").strip("/")
-    root = STATE.work_dir.resolve()
+    root = ws.work_dir.resolve()
     if not rel or rel == ".":
         return root
     if PurePosixPath(rel).is_absolute() or ".." in PurePosixPath(rel).parts:
@@ -1006,9 +751,8 @@ def _natural_key(name: str) -> list:
 
 
 @app.get("/api/files")
-def api_files(path: str = ""):
-    """列目录直接子项:目录在前、自然序、2000 条上限(设计 §12.2)。"""
-    target = _confine(path)
+def api_files(workspace: str | None = None, path: str = ""):
+    target = _confine(workspace, path)
     if not target.is_dir():
         raise HTTPException(400, f"not a directory: {path}")
     entries: list[dict] = []
@@ -1033,9 +777,8 @@ def api_files(path: str = ""):
 
 
 @app.get("/api/file")
-def api_file(path: str):
-    """读文本文件:二进制探测 → utf-8/gbk 解码 → 2000 行 / 512KB 截断(设计 §12.4)。"""
-    target = _confine(path)
+def api_file(workspace: str | None = None, path: str = ""):
+    target = _confine(workspace, path)
     if not target.is_file():
         raise HTTPException(400, f"not a regular file: {path}")
     size = target.stat().st_size
@@ -1057,7 +800,6 @@ def api_file(path: str):
     }
 
 
-# 文件名搜索时跳过的目录(§13-B1:依赖与构建产物无引用价值)
 _SEARCH_SKIP_DIRS = {
     ".git", ".venv", "venv", "node_modules", "__pycache__", ".archcode",
     ".pytest_cache", ".idea", ".cursor", ".codegraph", "dist", "build",
@@ -1066,13 +808,12 @@ _SEARCH_SCAN_CAP = 20000
 
 
 @app.get("/api/files/search")
-def api_files_search(q: str = "", limit: int = 20):
-    """按文件名子串递归搜索工作区(@ 引用的数据源,§13-B1)。"""
-    assert STATE is not None
+def api_files_search(workspace: str | None = None, q: str = "", limit: int = 20):
+    ws = _workspace_or_error(workspace)
     needle = q.strip().lower()
     if not needle:
         return {"results": []}
-    root = STATE.work_dir.resolve()
+    root = ws.work_dir.resolve()
     results: list[str] = []
     scanned = 0
     for dirpath, dirnames, filenames in os.walk(root):
@@ -1088,62 +829,69 @@ def api_files_search(q: str = "", limit: int = 20):
     return {"results": results}
 
 
-# ── 静态文件(web/dist 存在时,装配时挂载)──────────────────────────────
+@app.post("/api/workspace/pick")
+def api_workspace_pick():
+    """弹原生目录选择框(tkinter),返回所选绝对路径。
+
+    服务仅绑定 127.0.0.1,与浏览器同机——所以服务端弹的窗口就是用户屏幕上
+    的窗口。tkinter 建在一次性线程里;同步端点跑在 FastAPI 线程池,阻塞不占
+    事件循环。
+    """
+    import threading
+
+    def _pick() -> None:
+        import tkinter as tk
+        from tkinter import filedialog
+
+        root = tk.Tk()
+        root.withdraw()
+        root.attributes("-topmost", True)
+        try:
+            picked["path"] = filedialog.askdirectory(title="选择工作区文件夹") or ""
+        finally:
+            root.destroy()
+
+    picked: dict = {}
+    try:
+        t = threading.Thread(target=_pick, daemon=True)
+        t.start()
+        t.join()
+    except Exception as e:
+        raise HTTPException(500, f"目录选择器不可用: {e}")
+    path = (picked.get("path") or "").strip()
+    return {"ok": bool(path), "path": path or None}
+
+
+# ── 装配入口 ─────────────────────────────────────────────────────────────
 
 _DIST = Path(__file__).resolve().parents[2] / "web" / "dist"
 
 
-def create_web_server(
-    agent: Agent,
-    work_dir: Path,
-    mcp_server_configs: list | None = None,
-    providers: list | None = None,
-) -> FastAPI:
-    """装配入口:由 __main__ 的 --web 路径调用(装配同 TUI,Q5)。"""
-    global STATE
-    STATE = ServerState(agent, work_dir, providers=providers)
-    removed = STATE.session_manager.sweep_empty()  # 清理历史遗留的空会话文件
+def create_web_server(work_dir: Path, config) -> FastAPI:
+    """装配入口:注册启动工作区,清扫空会话,挂静态前端。"""
+    global STATE, STARTUP_WORK_DIR
+    STATE = ServerState(providers=config.providers)
+    STARTUP_WORK_DIR = Path(work_dir).resolve()
+    registry = STATE.registry
+    ws = registry.workspace(STARTUP_WORK_DIR)
+    removed = ws.session_manager.sweep_empty()
     if removed:
         log.info("swept %d empty session file(s)", removed)
     if _DIST.exists():
         app.mount("/", StaticFiles(directory=str(_DIST), html=True), name="static")
 
-    @app.on_event("startup")
-    async def _startup() -> None:
-        # MCP 初始化(镜像 app.on_mount:连接 + 注册,同 uvicorn loop)
-        if not mcp_server_configs:
-            return
-        manager, errors, successes = await connect_mcp(
-            mcp_server_configs, agent._tool_registry
-        )
-        STATE.mcp_manager = manager  # type: ignore[attr-defined]
-        for name, count in successes:
-            log.info("[MCP] %s: %d tools", name, count)
-        for err in errors:
-            log.warning("[MCP] %s", err)
-
     @app.on_event("shutdown")
     async def _shutdown() -> None:
-        manager = getattr(STATE, "mcp_manager", None) if STATE else None
-        if manager is not None:
-            await manager.shutdown()
-        if STATE._session is not None:
-            STATE._session.close()
+        await registry.shutdown()
 
     return app
 
 
-def run_web(
-    agent: Agent,
-    work_dir: Path,
-    port: int,
-    mcp_server_configs: list | None = None,
-    providers: list | None = None,
-) -> None:
+def run_web(work_dir: Path, config, port: int) -> None:
     """--web 路径:装配 + uvicorn 启动(仅 127.0.0.1)。"""
     import uvicorn
 
-    web_app = create_web_server(agent, work_dir, mcp_server_configs, providers)
-    log.info("web server starting: port=%d", port)
+    create_web_server(work_dir=work_dir, config=config)
+    log.info("web server starting: port=%d work_dir=%s", port, work_dir)
     print(f"ArchCode Web: http://127.0.0.1:{port}", file=sys.stderr)
-    uvicorn.run(web_app, host="127.0.0.1", port=port, log_level="warning")
+    uvicorn.run(app, host="127.0.0.1", port=port, log_level="warning")

@@ -6,7 +6,7 @@ import styles from './FilePanel.module.css'
 interface Props {
   /** 服务端绑定工作区(树根)。 */
   workDir: string
-  showBrowsingHint: boolean
+  showBrowsingHint?: boolean
 }
 
 type Tab = { kind: 'tree' } | { kind: 'file'; path: string }
@@ -96,7 +96,7 @@ export default function FilePanel({ workDir, showBrowsingHint }: Props) {
       </div>
       <div className={styles.body}>
         {activeFile ? (
-          <FilePreview path={activeFile.path} refreshSignal={refreshSignal} />
+          <FilePreview workspace={workDir} path={activeFile.path} refreshSignal={refreshSignal} />
         ) : (
           <FileTree
             workDir={workDir}

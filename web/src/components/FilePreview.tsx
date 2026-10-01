@@ -6,6 +6,8 @@ import CodeBlock, { langFromFilename } from './CodeBlock'
 import styles from './FilePreview.module.css'
 
 interface Props {
+  /** 所属工作区(服务端按它路由文件访问)。 */
+  workspace: string
   /** 工作区相对路径。 */
   path: string
   /** 外部刷新信号(面板刷新钮):每次值变化重读。 */
@@ -13,7 +15,7 @@ interface Props {
 }
 
 /** 文件预览:.md → Markdown;其余 → Prism 高亮 + 行号;二进制/超限 → 提示(设计 §10.9-1/§12.4)。 */
-export default function FilePreview({ path, refreshSignal }: Props) {
+export default function FilePreview({ workspace, path, refreshSignal }: Props) {
   const [content, setContent] = useState<FileContent | null>(null)
   const [error, setError] = useState('')
 
@@ -21,11 +23,11 @@ export default function FilePreview({ path, refreshSignal }: Props) {
     setError('')
     setContent(null)
     try {
-      setContent(await api.readFile(path))
+      setContent(await api.readFile(workspace, path))
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
     }
-  }, [path])
+  }, [workspace, path])
 
   useEffect(() => {
     load()

@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useState } from 'react'
 import { api } from '../api'
-import type { AgentState, SessionInfo } from '../types'
+import type { SessionInfo } from '../types'
 import styles from './Sidebar.module.css'
 
 interface Props {
   /** 全部工作区的会话清单(各组同时展示,键 = 工作区路径)。 */
   sessionsByWs: Record<string, SessionInfo[]>
-  state: AgentState | null
+  openWorkspace: string
+  openSessionId: string | null
   workspaces: string[]
   activeWorkspace: string
   collapsed: boolean
@@ -17,8 +18,8 @@ interface Props {
   onOpenSettings: () => void
   onAddWorkspace: (path: string) => void
   onSwitchWorkspace: (path: string) => void
-  /** 会话变更后的刷新:改名传 false;删除当前会话传 true(清空对话区)。 */
-  onSessionsChanged: (currentDeleted: boolean) => void
+  /** 会话变更后的刷新:参数为被删除的会话 id(删除之外的操作传 null)。 */
+  onSessionsChanged: (deletedId: string | null) => void
 }
 
 function baseName(p: string): string {
@@ -42,7 +43,8 @@ function relTime(ms?: number): string {
 /** 侧栏:工作区分组树,每组同时展示各自会话,可折叠;点击跨项目会话自动切换(§10.5/§10.9-4)。 */
 export default function Sidebar({
   sessionsByWs,
-  state,
+  openWorkspace,
+  openSessionId,
   workspaces,
   activeWorkspace,
   collapsed,
@@ -74,7 +76,6 @@ export default function Sidebar({
     }
   })
 
-  const serverDir = state?.work_dir ?? ''
   const toggleFold = (ws: string) => {
     setFolded((prev) => {
       const next = prev.includes(ws) ? prev.filter((p) => p !== ws) : [...prev, ws]
@@ -103,7 +104,7 @@ export default function Sidebar({
     }
     const timer = setTimeout(() => {
       api
-        .sessionsSearch(q)
+        .sessionsSearch(activeWorkspace, q)
         .then((r) => setContentResults(r.results))
         .catch(() => setContentResults([]))
     }, 300)
@@ -116,26 +117,26 @@ export default function Sidebar({
       setRenamingId(null)
       if (!value) return
       try {
-        await api.renameSession(id, value)
-        onSessionsChanged(false)
+        await api.renameSession(id, activeWorkspace, value)
+        onSessionsChanged(null)
       } catch {
         /* 改名失败静默:列表下次刷新会显示原名 */
       }
     },
-    [renameValue, onSessionsChanged],
+    [renameValue, activeWorkspace, onSessionsChanged],
   )
 
   const removeSession = useCallback(
     async (s: SessionInfo) => {
       if (!window.confirm(`删除会话 "${s.title || s.id.slice(0, 18)}"?`)) return
       try {
-        await api.deleteSession(s.id)
-        onSessionsChanged(Boolean(s.current))
+        await api.deleteSession(s.id, activeWorkspace)
+        onSessionsChanged(s.id)
       } catch {
         /* 运行中删除被服务端 409 拒绝,静默 */
       }
     },
-    [onSessionsChanged],
+    [activeWorkspace, onSessionsChanged],
   )
 
   // 折叠 = 56px 图标栏(DSH 同款:展开入口常驻,不消失)
@@ -269,7 +270,7 @@ export default function Sidebar({
       <div className={styles.workspaceList}>
         {workspaces.map((ws) => {
           const active = ws === activeWorkspace
-          const isServer = ws === serverDir
+          const isLive = ws === openWorkspace
           const group = groupSessions(ws)
           const foldedGroup = folded.includes(ws)
           return (
@@ -309,7 +310,7 @@ export default function Sidebar({
                 <button type="button" className={styles.wsNameBtn} onClick={() => onSwitchWorkspace(ws)}>
                   <span className={styles.wsName}>{baseName(ws)}</span>
                 </button>
-                {isServer && <span className={styles.wsLive}>●</span>}
+                {isLive && <span className={styles.wsLive}>●</span>}
               </div>
               {!foldedGroup && (
                 <div className={styles.sessionList}>
@@ -317,12 +318,12 @@ export default function Sidebar({
                     <div className={styles.empty}>暂无会话</div>
                   )}
                   {group.map((s) => {
-                    const renaming = isServer && renamingId === s.id
+                    const renaming = renamingId === s.id
                     return (
                       <div
                         key={s.id}
                         className={styles.sessionRow}
-                        data-current={s.current || undefined}
+                        data-current={openSessionId === s.id || undefined}
                       >
                         {renaming ? (
                           <input
@@ -351,7 +352,7 @@ export default function Sidebar({
                                 {s.title || s.id.slice(0, 18)}
                               </span>
                             </button>
-                            {isServer && (
+                            {(
                               <span className={styles.rowActions}>
                                 <button
                                   className={styles.rowAction}
@@ -393,7 +394,7 @@ export default function Sidebar({
               <button
                 key={r.id}
                 className={styles.contentRow}
-                onClick={() => onOpenSession(serverDir, r.id)}
+                onClick={() => onOpenSession(openWorkspace, r.id)}
                 title={r.excerpt}
               >
                 <span className={styles.sessionTitle}>

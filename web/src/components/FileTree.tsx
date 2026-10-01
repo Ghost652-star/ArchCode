@@ -30,7 +30,7 @@ export default function FileTree({ workDir, showBrowsingHint, onOpenFile, refres
       [rel]: keep && prev[rel]?.status === 'ready' ? prev[rel] : { status: 'loading' },
     }))
     try {
-      const listing = await api.listFiles(rel)
+      const listing = await api.listFiles(workDir, rel)
       setLevels((prev) => ({
         ...prev,
         [rel]: { status: 'ready', entries: listing.entries, truncated: listing.truncated },
