@@ -34,6 +34,7 @@ from archcode.agent import (
     ToolResultEvent,
     UsageEvent,
 )
+from archcode.llm.client import create_client
 from archcode.logctx import set_session_id
 from archcode.memory import SessionManager
 from archcode.runtime import build_agent_runtime
@@ -50,13 +51,12 @@ class ServerState:
 
     def __init__(self, providers: list | None = None) -> None:
         self.providers = providers or []
-        self.default_provider_name: str | None = (
+        self.registry = RuntimeRegistry(max_concurrent_runs=4)
+        self.registry.default_provider_name = (
             providers[0].name if providers else None
         )
-        self.registry = RuntimeRegistry(max_concurrent_runs=4)
         self._permissions: dict[str, asyncio.Future] = {}
         self._pending_permits: list[dict] = []  # 重连时重发的未决请求
-        self.default_provider_name: str | None = None
 
     def register_permission(self, req: PermissionRequest) -> str:
         rid = uuid.uuid4().hex
@@ -455,13 +455,117 @@ def api_history(session_id: str):
     return out
 
 
-# ── 端点:逐会话观测已在上文;以下是模型/权限/技能/子Agent/设置/文件 ──
+@app.get("/api/context")
+def api_context(session_id: str):
+    """上下文占用(§13-A4):percent = 当前 token / 窗口(provider 可配,缺省 128k)。
+
+    breakdown 为启发式分段估算,供 composer 旁的占用卡做分类着色:
+    系统提示词 / 内建工具 schema / MCP(延迟)工具 schema / 激活 Skill 钉住段 /
+    记忆索引段 / 消息(= 总量减去其余,保证闭合)。数字是估算值。
+    """
+    rt = _session_or_error(session_id)
+    total = rt.conversation.current_tokens()
+    provider = rt.workspace.resolve_provider()
+    window = int(getattr(provider, "context_window", 0) or 0) or 131072
+    percent = min(1.0, total / window) if window > 0 else 0.0
+
+    def _est(text: str | None) -> int:
+        return int(len(text or "") / 3.5)
+
+    system = _est(getattr(rt.agent, "_system_prompt", ""))
+    tools_builtin = tools_mcp = 0
+    tool_registry = getattr(rt.agent, "_tool_registry", None)
+    if tool_registry is not None:
+        for tool in getattr(tool_registry, "_tools", {}).values():
+            try:
+                est = _est(json.dumps(tool.get_schema(), ensure_ascii=False))
+            except Exception:
+                continue
+            if getattr(tool, "should_defer", False):
+                tools_mcp += est
+            else:
+                tools_builtin += est
+    conversation = rt.conversation
+    skills_msg = getattr(conversation, "_active_skills_message", None)
+    memory_msg = getattr(conversation, "_memory_context_message", None)
+    skills = _est(skills_msg.content if skills_msg is not None else None)
+    memory = _est(memory_msg.content if memory_msg is not None else None)
+    fixed = system + tools_builtin + tools_mcp + skills + memory
+    messages = max(total - fixed, 0)
+    return {
+        "total_tokens": total,
+        "percent": percent,
+        "window": window,
+        "breakdown": {
+            "messages": messages,
+            "system": system,
+            "tools_builtin": tools_builtin,
+            "tools_mcp": tools_mcp,
+            "skills": skills,
+            "memory": memory,
+        },
+    }
+
+
+@app.get("/api/usage")
+def api_usage(session_id: str):
+    """会话累计 LLM 用量(.meta 索引持久化,resume 后可恢复)。"""
+    rt = _session_or_error(session_id)
+    u = rt.usage
+    billed_input = u["input"] + u["cache_read"] + u["cache_creation"]
+    return {
+        "input_tokens": u["input"],
+        "output_tokens": u["output"],
+        "cache_read": u["cache_read"],
+        "cache_creation": u["cache_creation"],
+        "llm_rounds": u["rounds"],
+        "total_tokens": billed_input + u["output"],
+        "cache_hit": (u["cache_read"] / billed_input) if billed_input > 0 else None,
+    }
+
+
+@app.get("/api/todo")
+def api_todo(session_id: str):
+    """当前会话任务清单(TodoWrite store 快照)。"""
+    rt = _session_or_error(session_id)
+    return {"todos": rt.todo_snapshot()}
+
+
+@app.get("/api/tasks")
+def api_tasks(session_id: str):
+    """后台任务清单(TaskManager 只读快照):状态/耗时/token 用量/结果预览。"""
+    rt = _session_or_error(session_id)
+    manager = getattr(rt.agent, "_task_manager", None)
+    if manager is None:
+        return {"tasks": []}
+    tasks = []
+    for bg in manager.list_tasks():
+        end = bg.end_time if bg.end_time is not None else time.monotonic()
+        tasks.append(
+            {
+                "id": bg.id,
+                "name": bg.name,
+                "status": bg.status,
+                "elapsed": max(end - bg.start_time, 0.0),
+                "input_tokens": bg.progress.input_tokens,
+                "output_tokens": bg.progress.output_tokens,
+                "result_preview": (bg.result or "")[:200],
+            }
+        )
+    return {"tasks": tasks}
+
+
+# ── 端点:以下是模型/权限/技能/子Agent/设置/文件 ──
 
 
 @app.get("/api/model")
 def api_model():
     assert STATE is not None
-    provider = STATE.default_provider()
+    name = STATE.registry.default_provider_name
+    provider = next((p for p in STATE.providers if p.name == name), None)
+    if provider is None and STATE.providers:
+        provider = STATE.providers[0]
+        STATE.registry.default_provider_name = provider.name
     return {
         "current": provider.model if provider else "",
         "providers": [
@@ -479,7 +583,7 @@ def api_model_switch(body: dict):
     provider = next((p for p in STATE.providers if p.name == name), None)
     if provider is None:
         raise HTTPException(404, f"provider not found: {name}")
-    STATE.default_provider_name = name
+    _registry().default_provider_name = name
     for rt in _registry().sessions.values():
         if rt.running:
             continue

@@ -21,6 +21,7 @@ from typing import Any, AsyncIterator
 from archcode.agent import Agent, UsageEvent
 from archcode.config import load_config
 from archcode.conversation.manager import ConversationManager
+from archcode.llm.client import create_client
 from archcode.logctx import set_session_id
 from archcode.mcp import MCPManager
 from archcode.memory import SessionManager
@@ -145,13 +146,22 @@ class SessionRuntime:
 class WorkspaceRuntime:
     """每工作区一份:配置 + 会话管理器 + 共享的 MCP 连接与子进程。"""
 
-    def __init__(self, work_dir: Path) -> None:
+    def __init__(self, work_dir: Path, registry: "RuntimeRegistry | None" = None) -> None:
         self.work_dir = work_dir
+        self.registry = registry  # 回引注册表:读取全局默认供应商
         self.config = load_config(None, project_dir=work_dir)
         self.providers = self.config.providers
         self.protocol = self.providers[0].protocol if self.providers else "anthropic"
         self.session_manager = SessionManager(work_dir)
         self.mcp_manager: MCPManager | None = None
+
+    def resolve_provider(self):
+        """生效供应商:注册表选中的默认供应商优先,否则配置第一个。"""
+        want = self.registry.default_provider_name if self.registry is not None else None
+        for p in self.providers:
+            if p.name == want:
+                return p
+        return self.providers[0] if self.providers else None
 
     async def ensure_mcp(self) -> tuple[list[str], list[tuple[str, int]]]:
         """幂等连接本工作区配置的全部 MCP server(连接层共享)。"""
@@ -175,9 +185,15 @@ class WorkspaceRuntime:
                 session = restored.session
                 conversation = restored.conversation
 
+        provider = self.resolve_provider()
+        protocol = provider.protocol if provider is not None else self.protocol
         registry, agent, _executor = build_agent_runtime(
-            self.config, self.work_dir, self.protocol
+            self.config, self.work_dir, protocol
         )
+        if provider is not None and self.providers and provider is not self.providers[0]:
+            # build_agent_sync 固定用配置第一个供应商建 client,这里换绑选中的
+            agent._client = create_client(provider)
+            agent._client.set_max_output_tokens(provider.max_output_tokens)
         if self.mcp_manager is not None:
             await self.mcp_manager.register_into(registry)
 
@@ -216,6 +232,7 @@ class RuntimeRegistry:
         self.workspaces: dict[str, WorkspaceRuntime] = {}
         self.sessions: dict[str, SessionRuntime] = {}
         self.max_concurrent_runs = max_concurrent_runs
+        self.default_provider_name: str | None = None  # 全局默认供应商(唯一事实源)
 
     @staticmethod
     def _key(path: str | Path) -> str:
@@ -225,7 +242,7 @@ class RuntimeRegistry:
         key = self._key(path)
         ws = self.workspaces.get(key)
         if ws is None:
-            ws = WorkspaceRuntime(Path(path).resolve())
+            ws = WorkspaceRuntime(Path(path).resolve(), registry=self)
             self.workspaces[key] = ws
             logger.info("workspace runtime created: %s", ws.work_dir)
         return ws
