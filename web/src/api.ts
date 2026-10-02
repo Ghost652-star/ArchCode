@@ -100,7 +100,7 @@ export const api = {
 
   // ── 对话运行 ──
   chat: (sessionId: string, text: string) =>
-    jsonFetch<{ ok: boolean; session_id: string }>('/api/chat', {
+    jsonFetch<{ ok: boolean; session_id: string; queued?: boolean; position?: number }>('/api/chat', {
       method: 'POST',
       body: JSON.stringify({ session_id: sessionId, text }),
     }),

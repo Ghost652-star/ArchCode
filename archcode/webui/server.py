@@ -343,14 +343,16 @@ def api_sessions_search(workspace: str | None = None, q: str = "", limit: int = 
 
 
 async def _run_session_message(rt: SessionRuntime, text: str) -> None:
-    """会话运行任务:事件进通道,浏览器断开不影响;结束自行收尾。"""
+    """会话运行任务:事件进通道,浏览器断开不影响;结束自行收尾。
+
+    批次语义(TUI 排队同款,app.py _drain_submitted_inputs):首条跑完后若
+    rt.pending 有排队消息,FIFO 逐条继续,共用同一条事件通道(前端订阅
+    不断线);出错或用户中止时放弃剩余队列。
+    """
     assert STATE is not None
     async with rt.lock:
         if rt.events is None or rt.events.done:
             rt.events = EventChannel()  # 新一轮:复用早订阅挂上的通道,已结束才换新
-        turn_usage = {
-            "input": 0, "output": 0, "cache_read": 0, "cache_creation": 0, "rounds": 0,
-        }
         try:
             was_draft = rt.session is None
             rt.materialize()
@@ -358,27 +360,53 @@ async def _run_session_message(rt: SessionRuntime, text: str) -> None:
             if was_draft:
                 # 草稿键已换正式 id:广播给订阅方同步换 id,后续 state/history 按新 id 才能找到
                 rt.events.publish({"type": "session_renamed", "session_id": rt.session_id})
-            rt.agent._abort_event.clear()  # 新一轮重置中断(同 TUI)
-            async for event in rt.agent.run(text, rt.conversation):
-                if isinstance(event, UsageEvent):
-                    rt.record_usage(event)
-                    turn_usage["input"] += int(event.input_tokens)
-                    turn_usage["output"] += int(event.output_tokens)
-                    turn_usage["cache_read"] += int(event.cache_read)
-                    turn_usage["cache_creation"] += int(event.cache_creation)
-                    turn_usage["rounds"] += 1
-                payload = serialize_event(event)
-                if isinstance(event, ToolResultEvent) and event.tool_name == "TodoWrite":
-                    payload["todos"] = rt.todo_snapshot()
-                rt.events.publish(payload)
-            if turn_usage["rounds"] > 0:
-                total = sum(
-                    turn_usage[k]
-                    for k in ("input", "output", "cache_read", "cache_creation")
-                )
-                rt.events.publish({"type": "turn_usage", **turn_usage, "total": total})
-        except Exception as e:
-            rt.events.publish({"type": "error", "message": str(e)})
+            cur = text
+            while True:
+                rt.agent._abort_event.clear()  # 每条消息重置中断(同 TUI)
+                turn_usage = {
+                    "input": 0, "output": 0, "cache_read": 0, "cache_creation": 0, "rounds": 0,
+                }
+                try:
+                    async for event in rt.agent.run(cur, rt.conversation):
+                        if isinstance(event, UsageEvent):
+                            rt.record_usage(event)
+                            turn_usage["input"] += int(event.input_tokens)
+                            turn_usage["output"] += int(event.output_tokens)
+                            turn_usage["cache_read"] += int(event.cache_read)
+                            turn_usage["cache_creation"] += int(event.cache_creation)
+                            turn_usage["rounds"] += 1
+                        payload = serialize_event(event)
+                        if isinstance(event, ToolResultEvent) and event.tool_name == "TodoWrite":
+                            payload["todos"] = rt.todo_snapshot()
+                        rt.events.publish(payload)
+                    if turn_usage["rounds"] > 0:
+                        total = sum(
+                            turn_usage[k]
+                            for k in ("input", "output", "cache_read", "cache_creation")
+                        )
+                        rt.events.publish({"type": "turn_usage", **turn_usage, "total": total})
+                except Exception as e:
+                    rt.events.publish({"type": "error", "message": str(e)})
+                    if rt.pending:
+                        dropped = len(rt.pending)
+                        rt.pending.clear()
+                        rt.events.publish(
+                            {"type": "notice", "text": f"本轮出错，队列剩余 {dropped} 条已放弃"}
+                        )
+                    break
+                if rt.agent._abort_event.is_set():
+                    # 用户按停止 = 整批停:清空剩余队列并告知
+                    if rt.pending:
+                        dropped = len(rt.pending)
+                        rt.pending.clear()
+                        rt.events.publish(
+                            {"type": "notice", "text": f"已中止，队列剩余 {dropped} 条已放弃"}
+                        )
+                    break
+                if rt.pending:
+                    cur = rt.pending.popleft()
+                    continue
+                break
         finally:
             pending = list(STATE._permissions.items())
             STATE._pending_permits = [
@@ -390,7 +418,7 @@ async def _run_session_message(rt: SessionRuntime, text: str) -> None:
 
 @app.post("/api/chat")
 async def api_chat(body: dict):
-    """启动一次对话运行(立即返回)。事件经 GET /api/events/{session_id} 订阅。"""
+    """启动一次对话运行(立即返回);运行中再发=入队(FIFO,批尾逐条执行)。"""
     assert STATE is not None
     reg = _registry()
     sid = str((body or {}).get("session_id", "")).strip()
@@ -401,7 +429,17 @@ async def api_chat(body: dict):
     if rt is None:
         raise HTTPException(404, f"会话未打开: {sid}")
     if rt.running:
-        raise HTTPException(409, "该会话正在运行中")
+        if len(rt.pending) >= 10:
+            raise HTTPException(429, "队列已满(10 条),等当前任务完成后再发")
+        rt.pending.append(text)
+        if rt.events is not None:
+            rt.events.publish({"type": "queued", "position": len(rt.pending), "text": text[:80]})
+        return {
+            "ok": True,
+            "session_id": rt.session_id,
+            "queued": True,
+            "position": len(rt.pending),
+        }
     if reg.running_count() >= reg.max_concurrent_runs:
         raise HTTPException(429, f"并发运行已达上限({reg.max_concurrent_runs})")
 

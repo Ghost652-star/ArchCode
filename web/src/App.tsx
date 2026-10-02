@@ -428,6 +428,16 @@ export default function App() {
           if (sid) api.context(sid).then(setContext).catch(() => {})
           break
         }
+        case 'queued': {
+          // 运行中入队的服务端回执(TUI 同款提示语义)
+          const pos = Number(event['position'] ?? 0)
+          const t = String(event['text'] ?? '')
+          list.push({
+            kind: 'notice',
+            text: `已加入队列（第 ${pos} 位），当前任务完成后执行：${t}`,
+          })
+          break
+        }
         case 'notice': {
           list.push({ kind: 'notice', text: String(event['text'] ?? '') })
           break
@@ -485,14 +495,29 @@ export default function App() {
 
   const send = useCallback(
     async (text: string) => {
-      if (running || !text.trim() || !activeWorkspace) return
-      let sid = openRef.current?.id
+      if (!text.trim() || !activeWorkspace) return
+      const sid = openRef.current?.id
+      // 排队路径(TUI 同款):会话运行中再发=入队,FIFO 批尾执行。
+      // 不重复订阅/不置运行态;提示行由 wire 的 queued 事件带回来。
+      if (sid && running) {
+        try {
+          await api.chat(sid, text)
+        } catch (e) {
+          itemsRef.current = [
+            ...itemsRef.current,
+            { kind: 'error', message: e instanceof Error ? e.message : String(e) },
+          ]
+          setItems([...itemsRef.current])
+        }
+        return
+      }
       const ws = openRef.current?.workspace ?? activeWorkspace
+      let runSid = sid
       try {
-        if (!sid) {
+        if (!runSid) {
           const r = await api.newSession(ws)
-          sid = r.session_id
-          setOpenSession({ id: sid, workspace: ws })
+          runSid = r.session_id
+          setOpenSession({ id: runSid, workspace: ws })
         }
       } catch (e) {
         itemsRef.current = [
@@ -507,13 +532,13 @@ export default function App() {
       setItems([...itemsRef.current])
       setRunning(true)
       unsubRef.current?.()
-      unsubRef.current = subscribeEvents(sid, handleEvent, () => {
+      unsubRef.current = subscribeEvents(runSid, handleEvent, () => {
         void onRunEnd()
       })
       try {
-        await api.chat(sid, text)
+        await api.chat(runSid, text)
         // 乐观标记:转圈立即出现,不等 3s 轮询
-        setRunningIds((prev) => (prev.includes(sid) ? prev : [...prev, sid]))
+        setRunningIds((prev) => (prev.includes(runSid) ? prev : [...prev, runSid]))
       } catch (e) {
         itemsRef.current = [
           ...itemsRef.current,

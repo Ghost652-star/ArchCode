@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import uuid
+from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, AsyncIterator
@@ -106,6 +107,8 @@ class SessionRuntime:
     )
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     events: EventChannel | None = None  # 当前运行的事件通道(非运行态为 None)
+    # 运行中收到的排队消息(TUI 同款语义:FIFO,当前任务完成后逐条执行)
+    pending: deque = field(default_factory=lambda: deque())
     run_task: asyncio.Task | None = None
 
     @property

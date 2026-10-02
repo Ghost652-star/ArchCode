@@ -166,7 +166,9 @@ export default function Composer({
   }
 
   const submit = () => {
-    if (running || !draft.trim()) return
+    // running 时允许提交=入队(当前任务完成后 FIFO 执行,服务端裁决);
+    // 此时按钮是"停止",键盘 Enter 才是排队入口
+    if (!draft.trim()) return
     onSend(draft)
     setDraft('')
     setMenuOpen(false)
