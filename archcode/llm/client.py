@@ -495,6 +495,7 @@ class OpenAICompatClient(LLMClient):
 
         active_calls: dict[int, dict[str, str]] = {}
         saw_usage_end = False
+        final_usage: Any = None
 
         logger.debug(
             "llm request: model=%s messages=%d tools=%d",
@@ -521,6 +522,11 @@ class OpenAICompatClient(LLMClient):
 
                 choice = chunk.choices[0]
                 delta = choice.delta
+
+                if chunk.usage is not None:
+                    # DeepSeek 口径:usage 搭在最后一个内容 chunk 上
+                    #(choices 非空 + finish_reason),不发 OpenAI 那种独立 usage 块
+                    final_usage = chunk.usage
 
                 if delta and delta.content:
                     yield TextDelta(text=delta.content)
@@ -557,6 +563,18 @@ class OpenAICompatClient(LLMClient):
                             )
                         active_calls.clear()
 
+            if not saw_usage_end and final_usage is not None:
+                details = getattr(final_usage, "prompt_tokens_details", None)
+                cache_read = getattr(details, "cached_tokens", 0) or 0
+                prompt_tokens = final_usage.prompt_tokens or 0
+                yield StreamEnd(
+                    stop_reason="end_turn",
+                    input_tokens=max(prompt_tokens - cache_read, 0),
+                    output_tokens=final_usage.completion_tokens or 0,
+                    cache_read=cache_read,
+                    cache_creation=0,
+                )
+                saw_usage_end = True
             if not saw_usage_end:
                 yield StreamEnd(stop_reason="end_turn")
         except _openai.AuthenticationError as e:

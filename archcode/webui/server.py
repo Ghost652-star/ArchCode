@@ -34,6 +34,7 @@ from archcode.agent import (
     ToolResultEvent,
     UsageEvent,
 )
+from archcode.conversation.models import estimate_tokens
 from archcode.llm.client import create_client
 from archcode.logctx import set_session_id
 from archcode.memory import SessionManager
@@ -521,6 +522,23 @@ def api_context(session_id: str):
     skills = _est(skills_msg.content if skills_msg is not None else None)
     memory = _est(memory_msg.content if memory_msg is not None else None)
     fixed = system + tools_builtin + tools_mcp + skills + memory
+    if getattr(conversation, "baseline_tokens", 0) > 0 and fixed > 0:
+        # 真值锚定(供应商回了 usage):分段启发式的字符密度与真实分词有偏差,
+        # 直接做残差会把"消息"段永久钳到 0。按真值总量等比校准各固定段,
+        # 消息段由真值减校准后固定段推出,保持六段闭合。
+        pins = ("<memory-context>", "<active-skills>", "<system-reminder>")
+        bare_msgs = estimate_tokens(
+            [m for m in conversation.history if not m.content.startswith(pins)]
+        )
+        denom = fixed + bare_msgs
+        if denom > 0:
+            k = total / denom
+            system = int(system * k)
+            tools_builtin = int(tools_builtin * k)
+            tools_mcp = int(tools_mcp * k)
+            skills = int(skills * k)
+            memory = int(memory * k)
+            fixed = system + tools_builtin + tools_mcp + skills + memory
     messages = max(total - fixed, 0)
     return {
         "total_tokens": total,
