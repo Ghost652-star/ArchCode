@@ -121,6 +121,7 @@ class AnthropicClient(LLMClient):
 
     def __init__(self, config: ProviderConfig) -> None:
         self.model = config.model
+        self._config_window = config.context_window or 0
         self.thinking = config.thinking
         self.max_output_tokens = config.max_output_tokens or 4096
         api_key = config.resolve_api_key()
@@ -139,6 +140,9 @@ class AnthropicClient(LLMClient):
 
     @property
     def context_window(self) -> int:
+        # 配置显式声明(如中转新模型)优先于模型表
+        if self._config_window:
+            return self._config_window
         # 精确匹配失败时,按前缀匹配(如 claude-sonnet-4-20250501 → claude-sonnet-4)
         if self.model in self._CONTEXT_WINDOWS:
             return self._CONTEXT_WINDOWS[self.model]
@@ -280,6 +284,7 @@ class OpenAIClient(LLMClient):
 
     def __init__(self, config: ProviderConfig) -> None:
         self.model = config.model
+        self._config_window = config.context_window or 0
         self.max_output_tokens = config.max_output_tokens or 4096
         api_key = config.resolve_api_key()
         if not api_key:
@@ -297,6 +302,8 @@ class OpenAIClient(LLMClient):
 
     @property
     def context_window(self) -> int:
+        if self._config_window:
+            return self._config_window
         if self.model in self._CONTEXT_WINDOWS:
             return self._CONTEXT_WINDOWS[self.model]
         for prefix, size in self._CONTEXT_WINDOWS.items():
@@ -431,6 +438,7 @@ class OpenAICompatClient(LLMClient):
 
     def __init__(self, config: ProviderConfig) -> None:
         self.model = config.model
+        self._config_window = config.context_window or 0
         self.max_output_tokens = config.max_output_tokens or 4096
         api_key = config.resolve_api_key()
         if not api_key:
@@ -448,6 +456,8 @@ class OpenAICompatClient(LLMClient):
 
     @property
     def context_window(self) -> int:
+        if self._config_window:
+            return self._config_window
         if self.model in self._CONTEXT_WINDOWS:
             return self._CONTEXT_WINDOWS[self.model]
         for prefix, size in self._CONTEXT_WINDOWS.items():
