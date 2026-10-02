@@ -16,7 +16,7 @@ from archcode.memory import (
     SessionManager,
     format_instruction_diagnostics,
 )
-from archcode.paths import debug_log_path, project_data_dir
+from archcode.paths import application_root, debug_log_path, project_data_dir
 from archcode.runtime import (
     _wire_agents,
     _wire_hooks,
@@ -136,9 +136,20 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    work_dir = Path(args.work_dir).resolve() if args.work_dir else Path(os.getcwd())
-    project_data_dir(work_dir).mkdir(parents=True, exist_ok=True)
-    _setup_logging(work_dir)
+    # -w 缺省语义分模式:TUI/-p 取当前目录;--web 允许"空启动"——工作区由
+    # 前端按需注册(侧栏添加,localStorage 持久化)。避免从源码根启动时把
+    # 源码根变成工作区(路径纪律:项目级运行数据不进源码根)。
+    if args.work_dir:
+        work_dir: Path | None = Path(args.work_dir).resolve()
+        project_data_dir(work_dir).mkdir(parents=True, exist_ok=True)
+        _setup_logging(work_dir)
+    elif args.web:
+        work_dir = None
+        _setup_logging(application_root())
+    else:
+        work_dir = Path(os.getcwd())
+        project_data_dir(work_dir).mkdir(parents=True, exist_ok=True)
+        _setup_logging(work_dir)
 
     try:
         config_path = Path(args.config) if args.config else None

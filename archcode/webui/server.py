@@ -1019,16 +1019,21 @@ def api_workspace_pick():
 _DIST = Path(__file__).resolve().parents[2] / "web" / "dist"
 
 
-def create_web_server(work_dir: Path, config) -> FastAPI:
-    """装配入口:注册启动工作区,清扫空会话,挂静态前端。"""
+def create_web_server(work_dir: Path | None, config) -> FastAPI:
+    """装配入口:注册启动工作区(work_dir=None = 空启动),清扫空会话,挂静态前端。"""
     global STATE, STARTUP_WORK_DIR
     STATE = ServerState(providers=config.providers)
-    STARTUP_WORK_DIR = Path(work_dir).resolve()
     registry = STATE.registry
-    ws = registry.workspace(STARTUP_WORK_DIR)
-    removed = ws.session_manager.sweep_empty()
-    if removed:
-        log.info("swept %d empty session file(s)", removed)
+    if work_dir is not None:
+        STARTUP_WORK_DIR = Path(work_dir).resolve()
+        ws = registry.workspace(STARTUP_WORK_DIR)
+        removed = ws.session_manager.sweep_empty()
+        if removed:
+            log.info("swept %d empty session file(s)", removed)
+    else:
+        # 空启动:工作区由前端注册(localStorage 清单 / 侧栏添加)
+        STARTUP_WORK_DIR = None
+        log.info("no startup workspace: waiting for frontend registration")
     if _DIST.exists():
         app.mount("/", StaticFiles(directory=str(_DIST), html=True), name="static")
 
@@ -1039,8 +1044,8 @@ def create_web_server(work_dir: Path, config) -> FastAPI:
     return app
 
 
-def run_web(work_dir: Path, config, port: int) -> None:
-    """--web 路径:装配 + uvicorn 启动(仅 127.0.0.1)。"""
+def run_web(work_dir: Path | None, config, port: int) -> None:
+    """--web 路径:装配 + uvicorn 启动(仅 127.0.0.1)。work_dir=None = 空启动。"""
     import uvicorn
 
     create_web_server(work_dir=work_dir, config=config)
