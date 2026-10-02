@@ -598,6 +598,15 @@ class OpenAICompatClient(LLMClient):
 
 
 def create_client(config: ProviderConfig) -> LLMClient:
+    """按协议选适配器。
+
+    适配器契约:厂商方言(流式 usage 的交付位置、错误形态、参数命名)一律在
+    adapter 内归一——openai 兼容家族就有两种已知方言(OpenAI/智谱/通义发
+    独立 choices=[] usage 块;DeepSeek 搭在最后一个内容 chunk 上),测试见
+    tests/test_llm_stream_usage.py。消费方(agent/webui)只见统一事件流,
+    终态必须是一个携带 usage 四元组的 StreamEnd。加厂商 = 加 adapter 类,
+    agent 与 webui 零改动——这正是协议层抽离的意义。
+    """
     if config.protocol == "anthropic":
         return AnthropicClient(config)
     if config.protocol == "openai":
