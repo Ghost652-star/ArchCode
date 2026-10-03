@@ -19,7 +19,7 @@ import re
 import sys
 import time
 import uuid
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from pathlib import Path, PurePosixPath
 
 from fastapi import FastAPI, HTTPException, Request
@@ -365,6 +365,16 @@ async def _run_session_message(rt: SessionRuntime, text: str) -> None:
                 rt.events.publish({"type": "session_renamed", "session_id": rt.session_id})
             cur = text
             while True:
+                # 会话级模型选择:每条消息开头对齐(空闲切换已在端点即时生效;
+                # 运行中切换在这里落地——当前这条用原模型跑完,下一条换新)
+                if rt.model_choice is not None:
+                    pname, pmodel = rt.model_choice
+                    if getattr(rt.agent._client, "model", "") != pmodel:
+                        try:
+                            _apply_session_model(rt, pname, pmodel)
+                        except ValueError as e:
+                            rt.model_choice = None
+                            rt.events.publish({"type": "notice", "text": f"模型切换失败：{e}"})
                 rt.agent._abort_event.clear()  # 每条消息重置中断(同 TUI)
                 turn_usage = {
                     "input": 0, "output": 0, "cache_read": 0, "cache_creation": 0, "rounds": 0,
@@ -450,6 +460,75 @@ async def api_chat(body: dict):
         _run_session_message(rt, text), name=f"run-{sid}"
     )
     return {"ok": True, "session_id": rt.session_id}
+
+
+def _default_model_pair() -> tuple[str, str]:
+    """全局默认(供应商名, 模型名)。"""
+    assert STATE is not None
+    name = _registry().default_provider_name or ""
+    provider = next((p for p in STATE.providers if p.name == name), None)
+    return (name, provider.model if provider else "")
+
+
+def _apply_session_model(rt: SessionRuntime, provider_name: str, model: str) -> None:
+    """把会话的模型选择落到 agent._client。查不到供应商抛 ValueError。"""
+    provider = next((p for p in rt.workspace.providers if p.name == provider_name), None)
+    if provider is None and STATE is not None:
+        provider = next((p for p in STATE.providers if p.name == provider_name), None)
+    if provider is None:
+        raise ValueError(f"provider not found: {provider_name}")
+    p = provider if model == provider.model else replace(provider, model=model)
+    rt.agent._client = create_client(p)
+    rt.agent._client.set_max_output_tokens(p.max_output_tokens)
+
+
+@app.get("/api/sessions/{session_id}/model")
+def api_session_model_get(session_id: str):
+    """当前会话生效模型:会话级选择优先,否则跟随全局默认。"""
+    rt = _session_or_error(session_id)
+    default_pair = _default_model_pair()
+    if rt.model_choice is not None:
+        name, model = rt.model_choice
+        return {
+            "provider": name,
+            "model": model,
+            "override": (name, model) != default_pair,
+        }
+    return {
+        "provider": default_pair[0],
+        "model": getattr(rt.agent._client, "model", "") or default_pair[1],
+        "override": False,
+    }
+
+
+@app.post("/api/sessions/{session_id}/model")
+def api_session_model_set(session_id: str, body: dict):
+    """切换本会话模型(不影响其他会话;provider 为空=重置回全局默认)。
+
+    空闲会话立即重建 client;运行中的会话当前这条消息用原模型跑完,
+    批次下一条消息开头生效。
+    """
+    assert STATE is not None
+    rt = _session_or_error(session_id)
+    provider_name = str((body or {}).get("provider", "")).strip()
+    model = str((body or {}).get("model", "")).strip()
+    if provider_name and not model:
+        raise HTTPException(400, "model is required with provider")
+    if not provider_name:
+        provider_name, model = _default_model_pair()
+    try:
+        if not rt.running:
+            _apply_session_model(rt, provider_name, model)
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+    rt.model_choice = (provider_name, model)
+    return {
+        "ok": True,
+        "provider": provider_name,
+        "model": model,
+        "applied": not rt.running,
+        "override": (provider_name, model) != _default_model_pair(),
+    }
 
 
 @app.get("/api/events/{session_id}")
@@ -666,7 +745,10 @@ def api_model():
 
 @app.post("/api/model")
 def api_model_switch(body: dict):
-    """切换默认供应商:新会话用它;空闲的已开会话立即重建 client,运行中的保持。"""
+    """切换全局默认供应商:新会话用它;空闲的已开会话立即重建 client。
+
+    运行中的保持;有会话级模型选择(model_choice)的会话不动——那是它的选择。
+    """
     assert STATE is not None
     name = str((body or {}).get("name", ""))
     provider = next((p for p in STATE.providers if p.name == name), None)
@@ -674,7 +756,7 @@ def api_model_switch(body: dict):
         raise HTTPException(404, f"provider not found: {name}")
     _registry().default_provider_name = name
     for rt in _registry().sessions.values():
-        if rt.running:
+        if rt.running or rt.model_choice is not None:
             continue
         rt.agent._client = create_client(provider)
         rt.agent._client.set_max_output_tokens(provider.max_output_tokens)

@@ -109,6 +109,9 @@ class SessionRuntime:
     events: EventChannel | None = None  # 当前运行的事件通道(非运行态为 None)
     # 运行中收到的排队消息(TUI 同款语义:FIFO,当前任务完成后逐条执行)
     pending: deque = field(default_factory=lambda: deque())
+    # 会话级模型选择(provider_name, model):None = 尚未选择(跟随全局默认);
+    # 空闲时立即换 client,运行中在批次下一条消息开头生效
+    model_choice: tuple[str, str] | None = None
     run_task: asyncio.Task | None = None
 
     @property

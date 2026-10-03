@@ -59,6 +59,24 @@ export const api = {
       body: JSON.stringify({ name }),
     }),
 
+  sessionModel: (sessionId: string) =>
+    jsonFetch<{ provider: string; model: string; override: boolean }>(
+      `/api/sessions/${sessionId}/model`,
+    ),
+
+  /** provider 传空 = 重置回全局默认。 */
+  setSessionModel: (sessionId: string, provider: string, model: string) =>
+    jsonFetch<{
+      ok: boolean
+      provider: string
+      model: string
+      applied: boolean
+      override: boolean
+    }>(`/api/sessions/${sessionId}/model`, {
+      method: 'POST',
+      body: JSON.stringify({ provider, model }),
+    }),
+
   // ── 会话 ──
   sessionsByWorkspace: (workspace: string) =>
     jsonFetch<{ workspace: string; sessions: SessionInfo[] }>(

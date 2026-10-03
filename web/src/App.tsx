@@ -99,6 +99,11 @@ export default function App() {
   const [runningIds, setRunningIds] = useState<string[]>([])
   const [sessionsByWs, setSessionsByWs] = useState<Record<string, SessionInfo[]>>({})
   const [perm, setPerm] = useState({ mode: 'default', planMode: false })
+  const [sessionModel, setSessionModel] = useState<{
+    provider: string
+    model: string
+    override: boolean
+  } | null>(null)
   const [modelName, setModelName] = useState('')
   const [providers, setProviders] = useState<
     Array<{ name: string; model: string; protocol: string }>
@@ -243,10 +248,14 @@ export default function App() {
     }
   }, [openId])
 
-  // 打开会话的权限模式/计划模式回显
+  // 打开会话的权限模式/计划模式/生效模型回显
   useEffect(() => {
     if (!openId) return
     api.permissionMode(openId).then((r) => setPerm({ mode: r.mode, planMode: r.plan_mode })).catch(() => {})
+    api
+      .sessionModel(openId)
+      .then((r) => setSessionModel({ provider: r.provider, model: r.model, override: r.override }))
+      .catch(() => {})
   }, [openId])
 
   // 打开的会话正在后台运行:轮询状态,完成时自动刷新历史
@@ -578,6 +587,7 @@ export default function App() {
       setUsage(null)
       setTodos([])
       setPerm({ mode: 'default', planMode: false })
+      setSessionModel(null)
       await refreshMeta()
     } catch {
       /* ignore */
@@ -793,9 +803,10 @@ export default function App() {
                 await api.setPermissionMode(sid, mode)
                 await refreshMeta()
               }}
-              onModelSwitch={async () => {
-                await refreshMeta()
-              }}
+              sessionId={openId ?? ''}
+              sessionModel={sessionModel}
+              onSessionModelChange={(m) => setSessionModel(m)}
+              onOpenSettings={() => setSettingsOpen(true)}
             />
           </div>
         </div>

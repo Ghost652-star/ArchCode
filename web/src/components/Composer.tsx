@@ -15,11 +15,16 @@ interface Props {
   planMode: boolean
   modelName: string
   providers: Array<{ name: string; model: string; protocol: string }>
+  sessionId: string
+  /** 当前会话生效模型(服务端口径:override 或全局默认)。 */
+  sessionModel: { provider: string; model: string; override: boolean } | null
+  /** 切换成功后同步 App 侧状态(重置项的渲染条件依赖它)。 */
+  onSessionModelChange: (m: { provider: string; model: string; override: boolean }) => void
   onSend: (text: string) => void
   onAbort: () => void
   onNewSession: () => void
   onModeChange: (mode: string) => void
-  onModelSwitch: (name: string) => void
+  onOpenSettings: () => void
 }
 
 interface MenuEntry {
@@ -41,11 +46,14 @@ export default function Composer({
   planMode,
   modelName,
   providers,
+  sessionId,
+  sessionModel,
+  onSessionModelChange,
   onSend,
   onAbort,
   onNewSession,
   onModeChange,
-  onModelSwitch,
+  onOpenSettings,
 }: Props) {
   const [draft, setDraft] = useState('')
   const [menuOpen, setMenuOpen] = useState(false)
@@ -66,8 +74,9 @@ export default function Composer({
   }, [workspace])
 
   useEffect(() => {
-    setCurrentModel(modelName)
-  }, [modelName])
+    // 芯片显示当前会话生效模型(会话级选择优先,否则全局默认)
+    setCurrentModel(sessionModel?.model ?? modelName)
+  }, [sessionModel, modelName])
 
   useEffect(() => {
     const el = editorRef.current
@@ -363,38 +372,62 @@ export default function Composer({
             </button>
             {modelOpen && (
               <div className={styles.modelMenu}>
-                <div className={styles.menuSection}>模型</div>
                 {providers.length === 0 && (
                   <div className={styles.menuEmpty}>未配置 provider(设置中添加)</div>
                 )}
-                {providers.map((p) => (
+                {sessionModel?.override && (
                   <button
-                    key={p.name}
                     className={styles.modelItem}
                     onClick={async () => {
                       try {
-                        await api.switchModel(p.name)
-                        setCurrentModel(p.model)
+                        const r = await api.setSessionModel(sessionId, '', '')
+                        setCurrentModel(r.model)
+                        onSessionModelChange({ provider: r.provider, model: r.model, override: r.override })
                         setModelOpen(false)
                       } catch (e) {
                         alert(e instanceof Error ? e.message : String(e))
                       }
                     }}
                   >
-                    <span className={styles.menuName}>{p.model}</span>
-                    <span className={styles.menuDesc}>{p.protocol}</span>
-                    {p.model === currentModel && (
-                      <svg width={14} height={14} viewBox="0 0 16 16" fill="none" aria-hidden>
-                        <path
-                          d="M3 8.5l3.5 3.5L13 5"
-                          stroke="currentColor"
-                          strokeWidth="1.6"
-                          strokeLinecap="round"
-                        />
-                      </svg>
-                    )}
+                    <span className={styles.menuName}>跟随全局默认</span>
+                    <span className={styles.menuDesc}>{modelName}</span>
                   </button>
+                )}
+                {providers.map((p) => (
+                  <div key={p.name}>
+                    <div className={styles.menuSection}>{p.name}</div>
+                    <button
+                      className={styles.modelItem}
+                      onClick={async () => {
+                        try {
+                          const r = await api.setSessionModel(sessionId, p.name, p.model)
+                          setCurrentModel(r.model)
+                          onSessionModelChange({ provider: r.provider, model: r.model, override: r.override })
+                          setModelOpen(false)
+                        } catch (e) {
+                          alert(e instanceof Error ? e.message : String(e))
+                        }
+                      }}
+                    >
+                      <span className={styles.menuName}>{p.model}</span>
+                      <span className={styles.menuDesc}>{p.protocol}</span>
+                      {p.model === currentModel && (
+                        <svg width={14} height={14} viewBox="0 0 16 16" fill="none" aria-hidden>
+                          <path
+                            d="M3 8.5l3.5 3.5L13 5"
+                            stroke="currentColor"
+                            strokeWidth="1.6"
+                            strokeLinecap="round"
+                          />
+                        </svg>
+                      )}
+                    </button>
+                  </div>
                 ))}
+                <div className={styles.menuSection} />
+                <button className={styles.modelItem} onClick={onOpenSettings}>
+                  <span className={styles.menuName}>管理模型…</span>
+                </button>
               </div>
             )}
           </div>
