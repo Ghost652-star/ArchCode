@@ -130,13 +130,14 @@
   align-items: center;
   gap: 8px;
   width: 100%;
-  height: 30px;
+  height: 32px;
+  margin-top: 6px;
   padding: 0 8px;
   border-radius: 8px;
   text-align: left;
   color: var(--ac-label-primary);
   font-size: var(--ac-font-size-secondary);
-  font-weight: 500;
+  font-weight: 600;
   transition: background var(--ac-dur-fast) var(--ac-ease);
 }
 
@@ -155,7 +156,7 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: 15px;
-  font-weight: 500;
+  font-weight: 600;
 }
 
 .wsLive {
@@ -165,7 +166,12 @@
 }
 
 .sessionList {
-  padding-left: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 2px;
+  padding-left: 16px;
+  padding-bottom: 8px;
 }
 
 .addWs {
@@ -222,10 +228,10 @@
 .sessionMain {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 9px;
   flex: 1;
   min-width: 0;
-  padding: 5px 0 5px 8px;
+  padding: 8px 0 8px 10px;
   background: transparent;
   text-align: left;
 }
@@ -261,6 +267,7 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: 15px;
+  line-height: 1.45;
   color: var(--ac-label-primary);
 }
 
@@ -299,7 +306,7 @@
 
 .sessionTime {
   flex: none;
-  padding: 0 8px;
+  padding: 0 10px 0 6px;
   font-size: var(--ac-font-size-caption);
   color: var(--ac-label-dimmed);
 }

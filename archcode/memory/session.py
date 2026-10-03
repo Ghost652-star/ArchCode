@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import secrets
 import tempfile
 from dataclasses import dataclass, field
@@ -498,6 +499,9 @@ class SessionManager:
             if candidate.exists():
                 candidate.unlink()
                 deleted = True
+        if deleted:
+            # 删除路径零痕迹会让"会话去哪了"变成悬案,必留痕
+            logging.getLogger(__name__).info("session deleted: %s", session_id)
         return deleted
 
     def prune(self, max_age_days: int = DEFAULT_RETENTION_DAYS) -> int:

@@ -288,9 +288,11 @@ def api_rename_session(session_id: str, body: dict, workspace: str | None = None
     if not title:
         raise HTTPException(400, "title is required")
     ws = _workspace_or_error(workspace)
-    if not ws.session_manager.rename(session_id, title):
-        raise HTTPException(404, f"session not found: {session_id}")
+    # 草稿 id 也要能用:注册表别名解析到落盘后的正式 id(.meta 按正式 id 命名)
     rt = _registry().session(session_id)
+    effective_id = rt.session_id if rt is not None else session_id
+    if not ws.session_manager.rename(effective_id, title):
+        raise HTTPException(404, f"session not found: {session_id}")
     if rt is not None and rt.session is not None:
         rt.session.meta.title = title  # 同步内存态,防 _touch_meta 把旧名写回
     return {"ok": True}
@@ -300,13 +302,14 @@ def api_rename_session(session_id: str, body: dict, workspace: str | None = None
 def api_delete_session(session_id: str, workspace: str | None = None):
     ws = _workspace_or_error(workspace)
     rt = _registry().session(session_id)
+    effective_id = rt.session_id if rt is not None else session_id
     if rt is not None:
         if rt.running:
             raise HTTPException(409, "cannot delete the running session")
         if rt.session is not None:
             rt.session.close()  # 先关句柄,Windows 下不关无法删除
-        _registry().drop_session(session_id)
-    if not ws.session_manager.delete(session_id):
+        _registry().drop_session(effective_id)
+    if not ws.session_manager.delete(effective_id):
         raise HTTPException(404, f"session not found: {session_id}")
     return {"ok": True}
 
