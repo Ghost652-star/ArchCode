@@ -76,7 +76,7 @@
   color: var(--ac-label-primary);
 }
 
-/* ── 指令列表(DSH MenuView:全宽贴卡底,r16 菜单面)────────── */
+/* ── 指令列表(全宽贴卡底,r16 菜单面)────────── */
 .menu {
   position: absolute;
   bottom: calc(100% + 6px);

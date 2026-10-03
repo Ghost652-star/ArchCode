@@ -1,4 +1,4 @@
-/* 工作区文件树:每层缩进 18px,行紧贴,空气来自内边距(DSH FilesBody 几何)。 */
+/* 工作区文件树:每层缩进 18px,行紧贴,空气来自内边距。 */
 .root {
   display: flex;
   flex-direction: column;

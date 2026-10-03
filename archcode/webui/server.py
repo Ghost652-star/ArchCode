@@ -391,7 +391,7 @@ async def _run_session_message(rt: SessionRuntime, text: str) -> None:
                 rt.agent._abort_event.clear()  # 每条消息重置中断(同 TUI)
                 # 换脑通知:实际生成模型变了(会话级切换/重置)时,往对话注入
                 # 一条持久化的 user 通知——LLM 知道上文换过脑,UI 渲染成
-                # 分隔条(DSH modelSwitchNotice 同款);首条消息不发。
+                # 分隔条;首条消息不发。
                 cur_model = getattr(rt.agent._client, "model", "") or ""
                 if rt.last_used_model is not None and cur_model != rt.last_used_model:
                     rt.conversation.add_user(

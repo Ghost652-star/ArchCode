@@ -1,8 +1,8 @@
-/* ArchCode Web — 双层 Design Token(hooks-design 研读 §2/§3:DSH 同构)
+/* ArchCode Web — 双层 Design Token
    static 层:原始色板。alias 层:语义别名,组件只准引用 alias,禁止写死颜色。 */
 
 :root {
-  /* ── static:中性灰阶(偏蓝,DSH 同款 21 级)── */
+  /* ── static:中性灰阶(偏蓝,21 级)── */
   --ac-neutral-00: rgb(255, 255, 255);
   --ac-neutral-50: rgb(249, 250, 251);
   --ac-neutral-60: rgb(245, 246, 247);

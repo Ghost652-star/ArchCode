@@ -13,7 +13,7 @@ interface Segment {
   color: string
 }
 
-/** 上下文占用圈 + 悬停标签卡(ZCode/DSH 形态:composer 旁小圈,hover 出分类明细)。 */
+/** 上下文占用圈 + 悬停标签卡:composer 旁小圈,hover 出分类明细。 */
 export default function ContextMeter({
   context,
   cacheHit,

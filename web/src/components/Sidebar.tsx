@@ -29,7 +29,7 @@ function baseName(p: string): string {
   return parts[parts.length - 1] ?? p
 }
 
-/** last_active_ms → 相对时间(DSH 侧栏同款:20小时 / 2天 / 日期)。 */
+/** last_active_ms → 相对时间:分钟 / 小时 / 天,超 30 天回退日期。 */
 function relTime(ms?: number): string {
   if (!ms) return ''
   const diff = Date.now() - ms
@@ -144,7 +144,7 @@ export default function Sidebar({
     [activeWorkspace, onSessionsChanged],
   )
 
-  // 折叠 = 56px 图标栏(DSH 同款:展开入口常驻,不消失)
+  // 折叠 = 56px 图标栏:展开入口常驻,不消失
   if (collapsed) {
     return (
       <div className={styles.collapsed}>

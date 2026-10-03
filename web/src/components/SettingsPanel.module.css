@@ -247,7 +247,7 @@
   font-weight: 500;
 }
 
-/* ── 主从视图(列表 → 详情/编辑,ZCode 式)────────────────── */
+/* ── 主从视图(列表 → 详情/编辑)────────────────────────── */
 
 /* 列表头:计数 + 右侧新建按钮 */
 .listHeadRow {
@@ -393,7 +393,7 @@
   background: var(--ac-bg-hover);
 }
 
-/* ── 表单卡(新建/编辑视图,ZCode 式:作用域角标 + 字段分组)────── */
+/* ── 表单卡(新建/编辑视图:作用域角标 + 字段分组)────── */
 .formCard {
   position: relative;
   border: 0.5px solid var(--ac-border-l2);
@@ -454,7 +454,7 @@
   overflow-wrap: anywhere;
 }
 
-/* 空状态(ZCode 式:虚线框 + 居中引导) */
+/* 空状态(虚线框 + 居中引导) */
 .emptyState {
   display: flex;
   flex-direction: column;
@@ -478,7 +478,7 @@
   max-width: 420px;
 }
 
-/* ── 权限模式选择(ZCode 式:整行可选卡片 + 单选点)────────────── */
+/* ── 权限模式选择(整行可选卡片 + 单选点)────────────── */
 .permList {
   display: flex;
   flex-direction: column;

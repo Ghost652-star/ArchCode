@@ -31,7 +31,7 @@ export default function FilePanel({ workDir, showBrowsingHint }: Props) {
       })
       setActive((cur) => {
         if (cur !== path) return cur
-        // 关掉当前 tab → 回到"文件"树(不做 DSH 的邻位聚焦,单窗格够用)
+        // 关掉当前 tab → 回到"文件"树(单窗格,关闭后不自动跳到邻位文件)
         return 'tree'
       })
     },

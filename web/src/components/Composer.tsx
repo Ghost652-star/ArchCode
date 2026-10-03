@@ -223,7 +223,7 @@ export default function Composer({
         />
       </div>
 
-      {/* slash / + 触发的指令列表(DSH MenuView:全宽贴卡底) */}
+      {/* slash / + 触发的指令列表:全宽,贴卡底弹出 */}
       {menuOpen && (
         <div className={styles.menu} role="listbox">
           <div className={styles.menuSection}>指令</div>

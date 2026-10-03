@@ -238,7 +238,7 @@ class WorkspaceRuntime:
             usage=usage,
         )
         # 会话级持久化状态恢复(.meta):模型选择 + 权限模式——重启/换端后仍是
-        # 用户上次的选择(DSH model/selection 投影恢复的 meta 版对应实现)
+        # 用户上次的选择(.meta 活动即落盘,resume 时读回覆盖默认装配)
         if session is not None:
             meta = session.meta
             if meta.choice_provider and meta.choice_model:

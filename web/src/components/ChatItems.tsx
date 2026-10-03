@@ -7,7 +7,7 @@ import CodeBlock from './CodeBlock'
 import DiffBlock, { extractDiff } from './DiffBlock'
 import styles from './ChatItems.module.css'
 
-/** 最近一个已完成段落的首行(流式摘要,DSH ReasoningRow 同款逻辑)。 */
+/** 最近一个已完成段落的首行(流式摘要:答案未完成时取最后一段开头做预览)。 */
 function latestCompletedParagraphFirstLine(text: string): string {
   let summary = ''
   let paragraphStart = 0
