@@ -15,7 +15,7 @@ import asyncio
 import logging
 import uuid
 from collections import deque
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, AsyncIterator
 
@@ -26,6 +26,7 @@ from archcode.llm.client import create_client
 from archcode.logctx import set_session_id
 from archcode.mcp import MCPManager
 from archcode.memory import SessionManager
+from archcode.permissions import PermissionMode
 from archcode.runtime import build_agent_runtime
 
 logger = logging.getLogger(__name__)
@@ -119,6 +120,21 @@ class SessionRuntime:
     @property
     def running(self) -> bool:
         return self.run_task is not None and not self.run_task.done()
+
+    def apply_model_choice(self) -> None:
+        """按 model_choice 重建 agent._client(幂等;查不到供应商抛 ValueError)。
+
+        换的是引用不是实现:旧 client 若还被在飞请求引用,互不干扰。
+        """
+        if self.model_choice is None:
+            return
+        name, model = self.model_choice
+        provider = next((p for p in self.workspace.providers if p.name == name), None)
+        if provider is None:
+            raise ValueError(f"provider not found: {name}")
+        p = provider if model == provider.model else replace(provider, model=model)
+        self.agent._client = create_client(p)
+        self.agent._client.set_max_output_tokens(p.max_output_tokens)
 
     def record_usage(self, event) -> None:
         """单轮 LLM 用量:进会话累计;会话已落盘时同步进 .meta。"""
@@ -221,6 +237,26 @@ class WorkspaceRuntime:
             session=session,
             usage=usage,
         )
+        # 会话级持久化状态恢复(.meta):模型选择 + 权限模式——重启/换端后仍是
+        # 用户上次的选择(DSH model/selection 投影恢复的 meta 版对应实现)
+        if session is not None:
+            meta = session.meta
+            if meta.choice_provider and meta.choice_model:
+                rt.model_choice = (meta.choice_provider, meta.choice_model)
+                try:
+                    rt.apply_model_choice()
+                except ValueError as e:
+                    logger.warning("model choice restore skipped: %s", e)
+                    rt.model_choice = None
+            if meta.permission_mode:
+                checker = getattr(agent, "_permission_checker", None)
+                if checker is not None:
+                    try:
+                        checker.mode = PermissionMode(meta.permission_mode)
+                    except ValueError:
+                        logger.warning(
+                            "unknown persisted permission mode: %s", meta.permission_mode
+                        )
         set_session_id(sid)
         logger.info("session runtime built: %s (workspace %s, resumed=%s)", sid, self.work_dir, bool(resume_id))
         return rt

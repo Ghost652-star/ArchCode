@@ -19,7 +19,7 @@ import re
 import sys
 import time
 import uuid
-from dataclasses import asdict, replace
+from dataclasses import asdict
 from pathlib import Path, PurePosixPath
 
 from fastapi import FastAPI, HTTPException, Request
@@ -360,6 +360,19 @@ async def _run_session_message(rt: SessionRuntime, text: str) -> None:
             was_draft = rt.session is None
             rt.materialize()
             _registry().materialize(rt)
+            if was_draft and rt.session is not None:
+                # 草稿期间的会话级选择/权限模式落进 .meta(材料化后不丢)
+                meta = rt.session.meta
+                changed = False
+                if rt.model_choice is not None:
+                    meta.choice_provider, meta.choice_model = rt.model_choice
+                    changed = True
+                checker = getattr(rt.agent, "_permission_checker", None)
+                if checker is not None and checker.mode.value != "default":
+                    meta.permission_mode = checker.mode.value
+                    changed = True
+                if changed:
+                    meta.save(rt.session.path.with_suffix(".meta"))
             if was_draft:
                 # 草稿键已换正式 id:广播给订阅方同步换 id,后续 state/history 按新 id 才能找到
                 rt.events.publish({"type": "session_renamed", "session_id": rt.session_id})
@@ -371,7 +384,7 @@ async def _run_session_message(rt: SessionRuntime, text: str) -> None:
                     pname, pmodel = rt.model_choice
                     if getattr(rt.agent._client, "model", "") != pmodel:
                         try:
-                            _apply_session_model(rt, pname, pmodel)
+                            rt.apply_model_choice()
                         except ValueError as e:
                             rt.model_choice = None
                             rt.events.publish({"type": "notice", "text": f"模型切换失败：{e}"})
@@ -486,16 +499,31 @@ def _default_model_pair() -> tuple[str, str]:
     return (name, provider.model if provider else "")
 
 
-def _apply_session_model(rt: SessionRuntime, provider_name: str, model: str) -> None:
-    """把会话的模型选择落到 agent._client。查不到供应商抛 ValueError。"""
-    provider = next((p for p in rt.workspace.providers if p.name == provider_name), None)
+def _default_model_pair() -> tuple[str, str]:
+    """全局默认(供应商名, 模型名)。"""
+    assert STATE is not None
+    name = _registry().default_provider_name or ""
+    provider = next((p for p in STATE.providers if p.name == name), None)
+    return (name, provider.model if provider else "")
+
+
+def _provider_or_404(rt: SessionRuntime, provider_name: str) -> None:
+    provider = next(
+        (p for p in rt.workspace.providers if p.name == provider_name), None
+    )
     if provider is None and STATE is not None:
         provider = next((p for p in STATE.providers if p.name == provider_name), None)
     if provider is None:
-        raise ValueError(f"provider not found: {provider_name}")
-    p = provider if model == provider.model else replace(provider, model=model)
-    rt.agent._client = create_client(p)
-    rt.agent._client.set_max_output_tokens(p.max_output_tokens)
+        raise HTTPException(404, f"provider not found: {provider_name}")
+
+
+def _persist_session_model(rt: SessionRuntime, provider_name: str, model: str) -> None:
+    """把模型选择写进 .meta(内存对象同步,防 _touch_meta 写回旧值)。"""
+    if rt.session is None:
+        return
+    rt.session.meta.choice_provider = provider_name
+    rt.session.meta.choice_model = model
+    rt.workspace.session_manager.set_model_choice(rt.session_id, provider_name, model)
 
 
 @app.get("/api/sessions/{session_id}/model")
@@ -522,7 +550,7 @@ def api_session_model_set(session_id: str, body: dict):
     """切换本会话模型(不影响其他会话;provider 为空=重置回全局默认)。
 
     空闲会话立即重建 client;运行中的会话当前这条消息用原模型跑完,
-    批次下一条消息开头生效。
+    批次下一条消息开头生效。选择持久化到 .meta(重启/恢复后保留)。
     """
     assert STATE is not None
     rt = _session_or_error(session_id)
@@ -530,20 +558,29 @@ def api_session_model_set(session_id: str, body: dict):
     model = str((body or {}).get("model", "")).strip()
     if provider_name and not model:
         raise HTTPException(400, "model is required with provider")
-    if not provider_name:
-        provider_name, model = _default_model_pair()
-    try:
+    if provider_name:
+        _provider_or_404(rt, provider_name)
+        rt.model_choice = (provider_name, model)
         if not rt.running:
-            _apply_session_model(rt, provider_name, model)
-    except ValueError as e:
-        raise HTTPException(404, str(e))
-    rt.model_choice = (provider_name, model)
+            rt.apply_model_choice()
+    else:
+        # 重置:空闲=立即换默认 client 并清除选择(后续全局切换继续生效);
+        # 运行中=批次下一条对齐到当前默认(选择钉住,罕见边)
+        dpair = _default_model_pair()
+        if not rt.running:
+            rt.model_choice = dpair
+            rt.apply_model_choice()
+            rt.model_choice = None
+        else:
+            rt.model_choice = dpair
+        provider_name, model = dpair
+    _persist_session_model(rt, provider_name if provider_name else "", model)
     return {
         "ok": True,
         "provider": provider_name,
         "model": model,
         "applied": not rt.running,
-        "override": (provider_name, model) != _default_model_pair(),
+        "override": bool(provider_name) and (provider_name, model) != _default_model_pair(),
     }
 
 
@@ -814,6 +851,10 @@ def api_permission_mode(body: dict):
     checker = getattr(rt.agent, "_permission_checker", None)
     if checker is not None:
         checker.mode = PermissionMode(mode)
+    # 权限模式持久化(.meta):重启/恢复后各会话仍记得自己的选择
+    if rt.session is not None:
+        rt.session.meta.permission_mode = mode
+        rt.workspace.session_manager.set_permission_mode(rt.session_id, mode)
     return {"ok": True, "mode": mode}
 
 

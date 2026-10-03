@@ -202,6 +202,10 @@ class SessionMeta:
     cache_read_tokens: int = 0
     cache_creation_tokens: int = 0
     llm_rounds: int = 0
+    # 会话级持久化选择(重启/恢复后保留;空 = 跟随全局默认)
+    choice_provider: str = ""
+    choice_model: str = ""
+    permission_mode: str = ""
 
     def save(self, path: Path) -> None:
         payload = json.dumps(
@@ -216,6 +220,9 @@ class SessionMeta:
                 "cache_read_tokens": self.cache_read_tokens,
                 "cache_creation_tokens": self.cache_creation_tokens,
                 "llm_rounds": self.llm_rounds,
+                "choice_provider": self.choice_provider,
+                "choice_model": self.choice_model,
+                "permission_mode": self.permission_mode,
             },
             ensure_ascii=False,
             separators=(",", ":"),
@@ -243,6 +250,9 @@ class SessionMeta:
                 cache_read_tokens=int(data.get("cache_read_tokens", 0)),
                 cache_creation_tokens=int(data.get("cache_creation_tokens", 0)),
                 llm_rounds=int(data.get("llm_rounds", 0)),
+                choice_provider=str(data.get("choice_provider", "")),
+                choice_model=str(data.get("choice_model", "")),
+                permission_mode=str(data.get("permission_mode", "")),
             )
         except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError):
             return None
@@ -488,6 +498,27 @@ class SessionManager:
         if meta is None:
             return False
         meta.title = title.strip()
+        meta.save(meta_path)
+        return True
+
+    def set_model_choice(self, session_id: str, provider: str, model: str) -> bool:
+        """持久化会话级模型选择(.meta);provider 传空 = 清除,跟随全局默认。"""
+        meta_path = self.sessions_dir / f"{session_id}.meta"
+        meta = SessionMeta.load(meta_path)
+        if meta is None:
+            return False
+        meta.choice_provider = provider
+        meta.choice_model = model
+        meta.save(meta_path)
+        return True
+
+    def set_permission_mode(self, session_id: str, mode: str) -> bool:
+        """持久化会话权限模式(.meta);目标不存在返回 False。"""
+        meta_path = self.sessions_dir / f"{session_id}.meta"
+        meta = SessionMeta.load(meta_path)
+        if meta is None:
+            return False
+        meta.permission_mode = mode
         meta.save(meta_path)
         return True
 
