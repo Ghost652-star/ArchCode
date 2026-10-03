@@ -41,6 +41,8 @@ export type Item =
     }
   | { kind: 'assistant'; text: string; running: boolean; ts?: number }
   | { kind: 'turnEnd'; steps: number; elapsed: number; tokens?: number }
+  /** 模型切换分隔条(持久化在会话里的 <model-switch> 通知)。 */
+  | { kind: 'modelSwitch'; text: string }
   | { kind: 'error'; message: string }
   /** 服务端提示行(/plan 切换、斜杠命令不支持、请求重试等)。 */
   | { kind: 'notice'; text: string }

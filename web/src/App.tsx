@@ -74,6 +74,14 @@ function historyToItems(history: Array<Record<string, unknown>>): Item[] {
         tool.isError = Boolean(r['is_error'])
       }
     }
+    if (role === 'user' && content.startsWith('<model-switch>')) {
+      // 模型切换通知:持久化在会话里,恢复时渲染成分隔条而非用户气泡
+      restored.push({
+        kind: 'modelSwitch',
+        text: content.replace(/<\/?model-switch>/g, '').trim(),
+      })
+      continue
+    }
     if (role === 'user' && content) restored.push({ kind: 'user', text: content, ts })
     if (role === 'assistant' && content)
       restored.push({ kind: 'assistant', text: content, running: false })
@@ -444,6 +452,14 @@ export default function App() {
           list.push({
             kind: 'notice',
             text: `已加入队列（第 ${pos} 位），当前任务完成后执行：${t}`,
+          })
+          break
+        }
+        case 'model_switched': {
+          // 服务端换脑通知:渲染成分隔条(持久化消息恢复时同样渲染)
+          list.push({
+            kind: 'modelSwitch',
+            text: `模型已切换：${String(event['from'] ?? '')} → ${String(event['to'] ?? '')}`,
           })
           break
         }

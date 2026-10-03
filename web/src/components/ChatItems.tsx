@@ -77,6 +77,14 @@ function ItemView({ item }: { item: Item }) {
         </div>
       )
     }
+    case 'modelSwitch':
+      return (
+        <div className={styles.turnDivider}>
+          <span className={styles.turnLine} />
+          <span className={styles.turnText}>⇄ {item.text}</span>
+          <span className={styles.turnLine} />
+        </div>
+      )
     case 'notice':
       return <NoticeRow text={item.text} />
     case 'compact':

@@ -112,6 +112,8 @@ class SessionRuntime:
     # 会话级模型选择(provider_name, model):None = 尚未选择(跟随全局默认);
     # 空闲时立即换 client,运行中在批次下一条消息开头生效
     model_choice: tuple[str, str] | None = None
+    # 上一条消息实际生成所用的模型:换模型时据此注入"换脑通知"(LLM+UI)
+    last_used_model: str | None = None
     run_task: asyncio.Task | None = None
 
     @property
