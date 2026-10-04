@@ -89,11 +89,28 @@ function historyToItems(history: Array<Record<string, unknown>>): Item[] {
   return restored
 }
 
-/** 流结束后把仍在转动的条目落定(仅这三类携带 running 标志)。 */
+/** 流结束后把仍在转动的条目落定(仅这三类携带 running 标志);思考行补时长。 */
 function settleRunning(items: Item[]): void {
-  for (const item of items)
-    if (item.kind === 'reasoning' || item.kind === 'tool' || item.kind === 'assistant')
+  const now = Date.now()
+  for (const item of items) {
+    if (item.kind === 'reasoning') {
+      if (item.running) {
+        item.running = false
+        if (item.startTs && !item.elapsed) item.elapsed = now - item.startTs
+      }
+    } else if (item.kind === 'tool' || item.kind === 'assistant') {
       item.running = false
+    }
+  }
+}
+
+/** 思考行落定:下一条过程项(工具/文本)出现即思考结束,补时长。 */
+function settleReasoning(list: Item[]): void {
+  const last = list[list.length - 1]
+  if (last && last.kind === 'reasoning' && last.running) {
+    last.running = false
+    if (last.startTs && !last.elapsed) last.elapsed = Date.now() - last.startTs
+  }
 }
 
 const norm = (p: string) => p.replace(/\\/g, '/').toLowerCase()
@@ -333,7 +350,8 @@ export default function App() {
           if (last && last.kind === 'reasoning' && last.running) {
             last.text += text
           } else {
-            list.push({ kind: 'reasoning', text, running: true })
+            settleReasoning(list)
+            list.push({ kind: 'reasoning', text, running: true, startTs: Date.now() })
           }
           break
         }
@@ -342,6 +360,7 @@ export default function App() {
           if (last && last.kind === 'assistant' && last.running) {
             last.text += text
           } else {
+            settleReasoning(list)
             list.push({
               kind: 'assistant',
               text,
@@ -352,6 +371,7 @@ export default function App() {
           break
         }
         case 'tool_use': {
+          settleReasoning(list)
           list.push({
             kind: 'tool',
             toolId: String(event['tool_id']),
@@ -788,7 +808,7 @@ export default function App() {
             <Hero project={activeWorkspace} />
           ) : (
             <div className="contentColumn">
-              <ChatItems items={items} />
+              <ChatItems items={items} runStart={runStartRef.current} />
             </div>
           )}
         </div>

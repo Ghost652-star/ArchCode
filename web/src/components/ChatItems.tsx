@@ -44,13 +44,168 @@ function fmtElapsed(ms: number): string {
   return `${Math.floor(s / 60)}分${s % 60}秒`
 }
 
-export function ChatItems({ items }: { items: Item[] }) {
+export function ChatItems({ items, runStart }: { items: Item[]; runStart?: number }) {
   return (
     <>
-      {items.map((item, index) => (
-        <ItemView key={index} item={item} />
+      {groupTurns(items).map((block, index) => (
+        <BlockView key={index} block={block} runStart={runStart} />
       ))}
     </>
+  )
+}
+
+/** ── 轮次分组(§过程流容器):user/notice/modelSwitch/error 独立成块,
+ *  其余(思考/工具/assistant/压缩)归入轮次组,turnEnd 闭合并供出用时。 ── */
+type Block =
+  | { kind: 'single'; item: Item }
+  | {
+      kind: 'turn'
+      running: boolean
+      closed: boolean
+      elapsed?: number
+      steps?: number
+      tokens?: number
+      body: Item[]
+      final?: Extract<Item, { kind: 'assistant' }>
+    }
+
+function groupTurns(items: Item[]): Block[] {
+  const blocks: Block[] = []
+  let cur: Extract<Block, { kind: 'turn' }> | null = null
+  const flush = () => {
+    if (cur && cur.body.length + (cur.final ? 1 : 0) > 0) blocks.push(cur)
+    cur = null
+  }
+  for (const item of items) {
+    if (
+      item.kind === 'user' ||
+      item.kind === 'notice' ||
+      item.kind === 'modelSwitch' ||
+      item.kind === 'error'
+    ) {
+      flush()
+      blocks.push({ kind: 'single', item })
+      continue
+    }
+    if (item.kind === 'turnEnd') {
+      if (cur) {
+        cur.closed = true
+        cur.running = false
+        cur.elapsed = item.elapsed
+        cur.steps = item.steps
+        cur.tokens = item.tokens
+      }
+      flush()
+      continue
+    }
+    if (cur === null) {
+      cur = { kind: 'turn', running: false, closed: false, body: [] }
+    }
+    if (item.kind === 'assistant') {
+      // assistant 先挂 final;后续再来 assistant(多段文本)时把旧的挪回 body
+      if (cur.final) cur.body.push(cur.final)
+      cur.final = item
+    } else {
+      cur.body.push(item)
+    }
+  }
+  flush()
+  // running 判定:组内任何条目仍在流式 → 整组实时展开
+  for (const b of blocks) {
+    if (b.kind !== 'turn') continue
+    b.running = b.body.some((i) => i.kind === 'reasoning' || i.kind === 'tool' ? i.running : false) ||
+      (b.final?.running ?? false)
+  }
+  return blocks
+}
+
+/** 轮次内的文件变更统计(编辑/写入类工具,从 output 的 diff 统计增删行)。 */
+function turnFileStats(body: Item[]): { files: number; added: number; removed: number } {
+  let added = 0
+  let removed = 0
+  const files = new Set<string>()
+  for (const item of body) {
+    if (item.kind !== 'tool' || item.isError) continue
+    if (item.toolName !== 'EditFile' && item.toolName !== 'WriteFile') continue
+    const path = typeof item.args['file_path'] === 'string' ? item.args['file_path'] : ''
+    if (path) files.add(path)
+    const { diff } = extractDiff(item.output)
+    if (!diff) continue
+    for (const line of diff.split('\n')) {
+      if (line.startsWith('+') && !line.startsWith('+++')) added += 1
+      else if (line.startsWith('-') && !line.startsWith('---')) removed += 1
+    }
+  }
+  return { files: files.size, added, removed }
+}
+
+function BlockView({ block, runStart }: { block: Block; runStart?: number }) {
+  if (block.kind === 'single') return <ItemView item={block.item} />
+  return <TurnBlock group={block} runStart={runStart} />
+}
+
+/** 轮次容器(参考形态:头部"已工作 Xs"可折叠,过程项挂在左缘竖线上,正文在外)。 */
+function TurnBlock({
+  group,
+  runStart,
+}: {
+  group: Extract<Block, { kind: 'turn' }>
+  runStart?: number
+}) {
+  const [expanded, setExpanded] = useState(false)
+  const showBody = group.running || expanded
+  const stats = turnFileStats(group.body)
+  const headParts: string[] = []
+  if (group.running) {
+    headParts.push(runStart ? `已工作 ${fmtElapsed(Date.now() - runStart)}` : '工作中…')
+  } else if (group.elapsed) {
+    headParts.push(`已工作 ${fmtElapsed(group.elapsed)}`)
+  } else {
+    headParts.push('已完成')
+  }
+  const toolCount = group.body.filter((i) => i.kind === 'tool').length
+  if (toolCount > 0) headParts.push(`${toolCount} 次工具调用`)
+  return (
+    <div className={styles.turnRoot} data-running={group.running || undefined}>
+      <button
+        type="button"
+        className={styles.turnHead}
+        onClick={() => setExpanded((v) => !v)}
+      >
+        {group.running && <span className={styles.toolSpinner} />}
+        <span className={styles.turnHeadText}>{headParts.join(' · ')}</span>
+        {stats.files > 0 && (
+          <span className={styles.turnHeadStats}>
+            {stats.files} 个文件
+            <span className={styles.statAdd}> +{stats.added}</span>
+            <span className={styles.statDel}> -{stats.removed}</span>
+          </span>
+        )}
+        <svg
+          className={styles.toolChevron}
+          width={11}
+          height={11}
+          viewBox="0 0 16 16"
+          fill="none"
+          aria-hidden
+          data-open={showBody || undefined}
+        >
+          <path d="M3 6l5 5 5-5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+        </svg>
+      </button>
+      {showBody && (
+        <div className={styles.turnBody}>
+          {group.body.map((item, i) => (
+            <ItemView key={i} item={item} />
+          ))}
+        </div>
+      )}
+      {group.final && (
+        <div className={styles.turnFinal}>
+          <ItemView item={group.final} />
+        </div>
+      )}
+    </div>
   )
 }
 
@@ -66,17 +221,9 @@ function ItemView({ item }: { item: Item }) {
           {item.ts ? <div className={styles.userTime}>{fmtTime(item.ts)}</div> : null}
         </div>
       )
-    case 'turnEnd': {
-      const parts = [`本轮完成`, `${item.steps} 步`, fmtElapsed(item.elapsed)]
-      if (item.tokens && item.tokens > 0) parts.push(`${fmtTokens(item.tokens)} tok`)
-      return (
-        <div className={styles.turnDivider}>
-          <span className={styles.turnLine} />
-          <span className={styles.turnText}>{parts.join(' · ')}</span>
-          <span className={styles.turnLine} />
-        </div>
-      )
-    }
+    case 'turnEnd':
+      // 已并入轮次容器头部(groupTurns 消费),防御性兜底
+      return null
     case 'modelSwitch':
       return (
         <div className={styles.turnDivider}>
@@ -90,7 +237,7 @@ function ItemView({ item }: { item: Item }) {
     case 'compact':
       return <CompactCard item={item} />
     case 'reasoning':
-      return <ReasoningRow text={item.text} running={item.running} />
+      return <ReasoningRow text={item.text} running={item.running} elapsed={item.elapsed} />
     case 'tool':
       return <ToolCallRow item={item} />
     case 'assistant':
@@ -113,11 +260,20 @@ function ItemView({ item }: { item: Item }) {
 }
 
 /** 思考行:折叠 24px 摘要 + 流式扫描线 + 展开完整 Markdown(§5 规格)。 */
-function ReasoningRow({ text, running }: { text: string; running: boolean }) {
+function ReasoningRow({
+  text,
+  running,
+  elapsed,
+}: {
+  text: string
+  running: boolean
+  elapsed?: number
+}) {
   const [expanded, setExpanded] = useState(false)
   const summaryText = running ? latestCompletedParagraphFirstLine(text) : firstLine(text)
   const summary = summaryText.replaceAll('**', '')
   const showSummary = summary !== '' && (running || expanded === false)
+  const elapsedText = !running && elapsed && elapsed > 0 ? fmtElapsed(elapsed) : ''
   return (
     <div
       className={styles.reasoningRoot}
@@ -145,7 +301,9 @@ function ReasoningRow({ text, running }: { text: string; running: boolean }) {
             strokeWidth="1.2"
           />
         </svg>
-        <span className={styles.reasoningTitle}>Thinking</span>
+        <span className={styles.reasoningTitle}>
+          思考{!running && elapsedText ? ` · ${elapsedText}` : ''}
+        </span>
         {showSummary && (
           <>
             <span className={styles.separator} aria-hidden />
@@ -299,6 +457,94 @@ function CopyButton({ text, className }: { text: string; className?: string }) {
   )
 }
 
+/** 工具动词映射:过程行用动作词而非英文工具名(观感对齐参考形态)。 */
+const TOOL_VERBS: Record<string, string> = {
+  Bash: '终端',
+  ReadFile: '读取',
+  WriteFile: '写入',
+  EditFile: '编辑',
+  Grep: '搜索',
+  Glob: '查找',
+  Agent: '子代理',
+  TodoWrite: '任务清单',
+  LoadSkill: '技能',
+  TaskList: '任务',
+  TaskGet: '任务',
+}
+
+/** 工具行行首小图标(按类别:读/搜=放大镜,写/编=铅笔,Bash=终端,Agent=机器人)。 */
+function toolIcon(name: string): JSX.Element {
+  const stroke = 'currentColor'
+  const common = { width: 13, height: 13, viewBox: '0 0 16 16', fill: 'none', 'aria-hidden': true as const }
+  switch (name) {
+    case 'ReadFile':
+    case 'Grep':
+    case 'Glob':
+      return (
+        <svg {...common}>
+          <circle cx="7" cy="7" r="4.5" stroke={stroke} strokeWidth="1.3" />
+          <path d="M10.5 10.5L14 14" stroke={stroke} strokeWidth="1.3" strokeLinecap="round" />
+        </svg>
+      )
+    case 'WriteFile':
+    case 'EditFile':
+      return (
+        <svg {...common}>
+          <path d="M11.3 2.2l2.5 2.5L5 13.5l-3 .8.8-3 8.5-8.5z" stroke={stroke} strokeWidth="1.2" strokeLinejoin="round" />
+        </svg>
+      )
+    case 'Bash':
+      return (
+        <svg {...common}>
+          <rect x="1.8" y="2.8" width="12.4" height="10.4" rx="1.6" stroke={stroke} strokeWidth="1.2" />
+          <path d="M4.5 6.5L6.8 8.5L4.5 10.5M8.5 11h3" stroke={stroke} strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      )
+    case 'Agent':
+      return (
+        <svg {...common}>
+          <rect x="3" y="5" width="10" height="8" rx="2" stroke={stroke} strokeWidth="1.2" />
+          <path d="M8 5V2.8M5.8 8.6h.01M10.2 8.6h.01M6 10.5h4" stroke={stroke} strokeWidth="1.2" strokeLinecap="round" />
+        </svg>
+      )
+    case 'TodoWrite':
+    case 'TaskList':
+    case 'TaskGet':
+      return (
+        <svg {...common}>
+          <path d="M3 4.5h10M3 8h10M3 11.5h6" stroke={stroke} strokeWidth="1.3" strokeLinecap="round" />
+        </svg>
+      )
+    default:
+      return (
+        <svg {...common}>
+          <rect x="3" y="3" width="10" height="10" rx="2" stroke={stroke} strokeWidth="1.2" />
+        </svg>
+      )
+  }
+}
+
+/** 文件路径双色:文件名亮,目录弱(对齐参考形态)。 */
+function filePathParts(raw: string): { dir: string; base: string } {
+  const norm = raw.replaceAll('\\', '/')
+  const cut = Math.max(norm.lastIndexOf('/'), 0)
+  return { dir: norm.slice(0, cut), base: norm.slice(cut + 1) || raw }
+}
+
+/** 单工具的增删统计(编辑/写入类,从 output 的 diff 统计;无 diff 返回 null)。 */
+function toolDiffStat(item: Extract<Item, { kind: 'tool' }>): { added: number; removed: number } | null {
+  if (item.toolName !== 'EditFile' && item.toolName !== 'WriteFile') return null
+  const { diff } = extractDiff(item.output)
+  if (!diff) return null
+  let added = 0
+  let removed = 0
+  for (const line of diff.split('\n')) {
+    if (line.startsWith('+') && !line.startsWith('+++')) added += 1
+    else if (line.startsWith('-') && !line.startsWith('---')) removed += 1
+  }
+  return { added, removed }
+}
+
 /** 按工具定制的折叠摘要(bash 显示命令,文件类显示路径,搜索类显示 pattern)。 */
 function toolSummary(item: Extract<Item, { kind: 'tool' }>): string {
   const a = item.args
@@ -342,6 +588,16 @@ function ToolCallRow({
   const { summary: outputHead, diff } = showDiff
     ? extractDiff(item.output)
     : { summary: item.output, diff: null }
+  // 文件类工具:摘要用双色路径(文件名亮/目录弱);动词替代英文工具名
+  const pathArg =
+    (item.toolName === 'ReadFile' ||
+      item.toolName === 'WriteFile' ||
+      item.toolName === 'EditFile') &&
+    typeof item.args['file_path'] === 'string'
+      ? (item.args['file_path'] as string)
+      : null
+  const stat = toolDiffStat(item)
+  const verb = TOOL_VERBS[item.toolName] ?? item.toolName
   return (
     <div className={styles.toolRoot}>
       <button
@@ -350,9 +606,28 @@ function ToolCallRow({
         data-running={item.running || undefined}
         onClick={() => setExpanded((v) => !v)}
       >
-        <span className={styles.toolName}>{item.toolName}</span>
+        <span className={styles.toolIcon}>{toolIcon(item.toolName)}</span>
+        <span className={styles.toolName}>{verb}</span>
         {item.running && <span className={styles.toolSpinner} />}
-        <span className={styles.toolArgs}>{summary}</span>
+        {pathArg !== null ? (
+          (() => {
+            const { dir, base } = filePathParts(pathArg)
+            return (
+              <span className={styles.toolArgs}>
+                <span className={styles.fileBase}>{base}</span>
+                {dir && <span className={styles.fileDir}> {dir}</span>}
+              </span>
+            )
+          })()
+        ) : (
+          <span className={styles.toolArgs}>{summary}</span>
+        )}
+        {stat && (stat.added > 0 || stat.removed > 0) && (
+          <span className={styles.toolDiffStat}>
+            {stat.added > 0 && <span className={styles.statAdd}>+{stat.added}</span>}
+            {stat.removed > 0 && <span className={styles.statDel}>-{stat.removed}</span>}
+          </span>
+        )}
         {item.elapsed !== undefined && item.elapsed > 0 && (
           <span className={styles.toolElapsed}>{item.elapsed.toFixed(1)}s</span>
         )}
