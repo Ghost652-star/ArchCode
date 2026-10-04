@@ -1,8 +1,11 @@
-"""AgentTool:统一子 agent 工具(sub-agent-design §2/§3/§5/§8)。
+"""AgentTool:统一子 agent 工具(sub-agent-design §2/§3/§5/§8;worktree-design §5)。
 
-execute 流程(§3):caller is_fork 检查 → isolation stub 检查 → 按 subagent_type
+execute 流程(§3):caller is_fork 检查 → isolation 入口检查 → 按 subagent_type
 分流(Fork / 定义式)→ selectLLM 三级优先 → 四道防线过滤注册表(§4.3)→
 独立 checker(§10)→ 新建子 Agent → 前台 runToCompletion 或后台 launch(§8)。
+isolation=worktree 时展开为七步工作流(worktree-design §5):创建副本 →
+work_dir/sandbox 指向副本 → 注入上下文通知 → 运行 → auto_cleanup 验货 →
+保留时结果追加路径/分支。
 
 主 Agent 调它与调 Bash 完全同构:自动继承 _execute_tool 治理链(§1)。
 is_fork 内存标记 + caller 拦截是防递归兜底(§5.5)——主手段是四道防线在
@@ -42,7 +45,30 @@ class AgentToolParams(BaseModel):
     model: str | None = None            # 调用时覆盖定义里的模型(§3.2)
     run_in_background: bool = False     # 同步 vs 异步(§8)
     name: str | None = None             # 实例显示名(TaskList / 通知展示,§8.6)
-    isolation: str | None = None        # "worktree" → stub 报错(§7.2)
+    isolation: str | None = None        # "worktree" → 独立副本隔离(worktree-design §5)
+
+
+class _WorktreeBgRunner:
+    """后台任务的 worktree 收尾包装(worktree-design §5 步骤 5/6)。
+
+    TaskManager 只要求 `run_to_completion(task) -> str`——包装对象在跑完后
+    auto_cleanup 验货,保留时把路径/分支追加进结果,主 agent 据此 review/合并。
+    子 agent 崩溃则不收尾,孤儿由后台清理兜底(§6.2)。
+    """
+
+    def __init__(self, runner: Any, manager: Any, wt: Any) -> None:
+        self._runner = runner
+        self._manager = manager
+        self._wt = wt
+
+    async def run_to_completion(self, task: str) -> str:
+        result = await self._runner.run_to_completion(task)
+        cleanup = await self._manager.auto_cleanup(self._wt.name, self._wt.head_commit)
+        if cleanup.get("kept"):
+            result = (result or "") + (
+                f"\n[Worktree 保留在 {cleanup['path']}，分支 {cleanup['branch']}]"
+            )
+        return result
 
 
 class _SubAgentChecker:
@@ -96,14 +122,16 @@ class AgentTool(Tool):
     def __init__(
         self,
         agent_loader: Any,
-        task_manager: TaskManager,
+        task_manager: Any,
         parent_agent: Any,
         llm_factory: Callable[[str], Any] | None = None,
+        worktree_manager: Any | None = None,
     ) -> None:
         self._agent_loader = agent_loader
         self._task_manager = task_manager
         self._parent_agent = parent_agent
         self._llm_factory = llm_factory  # 按模型别名造子 client;失败/未配置 → 回落父
+        self._worktree_manager = worktree_manager  # worktree 隔离(worktree-design §5)
 
     async def execute(self, params: BaseModel) -> ToolResult:
         p: AgentToolParams = params  # type: ignore[assignment]
@@ -117,15 +145,8 @@ class AgentTool(Tool):
                 is_error=True,
             )
 
-        # isolation:worktree 只落 stub,报错不降级(§7.2 拍板)
-        if p.isolation not in (None, ""):
-            if p.isolation == "worktree":
-                log.info("sub-agent rejected: isolation=worktree 尚未实现(stub)")
-                return ToolResult(
-                    "Error: isolation='worktree' 尚未实现(worktree 模块为接口 stub,§7.2)。"
-                    "请去掉 isolation 参数重试。",
-                    is_error=True,
-                )
+        # isolation 入口检查:未知模式拒绝(worktree-design §5.3)
+        if p.isolation not in (None, "") and p.isolation != "worktree":
             log.info("sub-agent rejected: unknown isolation %r", p.isolation)
             return ToolResult(f"Error: 未知 isolation 模式: {p.isolation!r}", is_error=True)
 
@@ -169,6 +190,33 @@ class AgentTool(Tool):
                 )
             conversation = ConversationManager()
 
+        # isolation 生效值:调用参数优先,其次定义(worktree-design §5)
+        effective_isolation = p.isolation or definition.isolation
+        if fork_mode and effective_isolation:
+            log.info("sub-agent rejected: fork + isolation 互斥")
+            return ToolResult(
+                "Error: fork 继承父对话(含父目录路径),与 worktree 隔离互斥;请二选一。",
+                is_error=True,
+            )
+        use_worktree = effective_isolation == "worktree"
+        if use_worktree and self._worktree_manager is None:
+            return ToolResult(
+                "Error: worktree 模块未装配(WorktreeManager 不可用)。", is_error=True
+            )
+
+        # worktree 七步(§5):create → 通知注入前置;失败报错中止,不降级
+        wt = None
+        task_text = p.prompt
+        if use_worktree:
+            from archcode.worktree import WorktreeError, build_worktree_notice, generate_worktree_name
+
+            try:
+                wt = await self._worktree_manager.create(generate_worktree_name())
+            except WorktreeError as e:
+                log.info("sub-agent rejected: worktree create failed: %s", e)
+                return ToolResult(f"Error: 创建 worktree 失败: {e}", is_error=True)
+            task_text = build_worktree_notice(str(parent._work_dir), wt.path) + "\n\n" + p.prompt
+
         # selectLLM 三级优先(§3.2):params.model → definition.model → 父 client
         client = parent._client
         alias = p.model or (definition.model if definition.model not in ("", "inherit") else None)
@@ -182,6 +230,8 @@ class AgentTool(Tool):
         registry = resolve_agent_tools(parent._tool_registry, definition, is_background)
 
         # 独立 checker(§10):dontAsk=矩阵全放行;非 dontAsk 的 ask→拒绝
+        # worktree 模式下 sandbox 圈定到副本目录(§5 步骤 2)
+        sandbox_root = wt.path if wt is not None else parent._work_dir
         mode = (
             PermissionMode.DONT_ASK
             if definition.permission_mode == "dontAsk"
@@ -189,7 +239,7 @@ class AgentTool(Tool):
         )
         checker = PermissionChecker(
             mode=mode,
-            sandbox=PathSandbox(parent._work_dir) if parent._work_dir else None,
+            sandbox=PathSandbox(sandbox_root) if sandbox_root else None,
         )
         if definition.permission_mode != "dontAsk":
             checker = _SubAgentChecker(checker)
@@ -203,6 +253,7 @@ class AgentTool(Tool):
             checker=checker,
             max_iterations=definition.max_turns,
             clone_replacement_state=fork_mode,  # §5.2:fork 克隆父状态保 cache 前缀
+            work_dir=sandbox_root,
         )
         sub_agent.is_fork = fork_mode          # 防递归兜底标记(§5.5)
         sub_agent.parent_id = getattr(parent, "parent_id", None)
@@ -218,9 +269,12 @@ class AgentTool(Tool):
         )
 
         if is_background:
+            bg_agent: Any = runner
+            if wt is not None:
+                bg_agent = _WorktreeBgRunner(runner, self._worktree_manager, wt)
             task_id = self._task_manager.launch(
-                runner,
-                task="" if fork_mode else p.prompt,
+                bg_agent,
+                task="" if fork_mode else task_text,
                 name=display,
             )
             return ToolResult(
@@ -233,12 +287,19 @@ class AgentTool(Tool):
             )
 
         fg_start = time.monotonic()
-        result = await runner.run_to_completion(p.prompt)
+        result = await runner.run_to_completion(task_text)
         log.info(
             "sub-agent completed: type=%s elapsed=%.1fs",
             p.subagent_type,
             time.monotonic() - fg_start,
         )
+        # worktree 收尾(§5 步骤 5/6):auto_cleanup 验货,保留时追加路径/分支
+        if wt is not None:
+            cleanup = await self._worktree_manager.auto_cleanup(wt.name, wt.head_commit)
+            if cleanup.get("kept"):
+                result = (result or "") + (
+                    f"\n[Worktree 保留在 {cleanup['path']}，分支 {cleanup['branch']}]"
+                )
         return ToolResult(output=result or "(sub-agent returned no output)")
 
     @staticmethod
@@ -250,6 +311,7 @@ class AgentTool(Tool):
         checker: Any,
         max_iterations: int,
         clone_replacement_state: bool,
+        work_dir: Any = None,
     ) -> Any:
         from archcode.agent import Agent  # 延迟导入:避免模块级循环依赖
 
@@ -259,7 +321,7 @@ class AgentTool(Tool):
             tool_registry=registry,
             permission_checker=checker,
             max_iterations=max_iterations,
-            work_dir=parent._work_dir,
+            work_dir=work_dir if work_dir is not None else parent._work_dir,
         )
         # 基础设施共享(§6.2):hook 引擎与 skill 目录复用父的
         sub._hook_engine = parent._hook_engine

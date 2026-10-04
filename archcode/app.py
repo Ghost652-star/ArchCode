@@ -325,6 +325,10 @@ class ArchCodeApp(App):
         self._fire_session_hook("session_start", "startup")
         if self._mcp_server_configs:
             self._mcp_init_task = asyncio.create_task(self._init_mcp())
+        # worktree 后台清理:事件循环已就绪,惰性启动(§6.2)
+        wt_manager = getattr(self._agent, "_worktree_manager", None)
+        if wt_manager is not None:
+            wt_manager.ensure_cleanup_task()
 
     async def _init_mcp(self) -> None:
         """连接 MCP server + 注册工具到 registry。每个 server 的结果都报告。

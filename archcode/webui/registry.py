@@ -218,6 +218,10 @@ class WorkspaceRuntime:
             # build_agent_sync 固定用配置第一个供应商建 client,这里换绑选中的
             agent._client = create_client(provider)
             agent._client.set_max_output_tokens(provider.max_output_tokens)
+        # worktree 后台清理:Web 端事件循环已就绪,惰性启动(§6.2)
+        wt_manager = getattr(agent, "_worktree_manager", None)
+        if wt_manager is not None:
+            wt_manager.ensure_cleanup_task()
         if self.mcp_manager is not None:
             await self.mcp_manager.register_into(registry)
 
@@ -267,6 +271,9 @@ class WorkspaceRuntime:
                 await self.mcp_manager.shutdown()
             except Exception as e:
                 logger.warning("[workspace] MCP 收尾失败(忽略): %s", e)
+        wt_manager = getattr(self.agent, "_worktree_manager", None)
+        if wt_manager is not None:
+            await wt_manager.shutdown_cleanup_task()
 
 
 class RuntimeRegistry:

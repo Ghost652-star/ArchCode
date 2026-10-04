@@ -47,3 +47,12 @@ def debug_log_path(work_dir: str | Path) -> Path:
     目录已存在(project_data_dir 会 mkdir),此处只给路径。
     """
     return project_data_dir(work_dir) / "debug.log"
+
+
+def worktrees_dir(work_dir: str | Path) -> Path:
+    """worktree 统一落点(worktree-design §3.1):`<work_dir>/.archcode/worktrees/`。
+
+    项目级数据跟项目走(与 sessions/skills 同住);自身 gitignore 不入库。
+    session 文件与副本目录的路径一律经这里取。
+    """
+    return project_data_dir(work_dir) / "worktrees"

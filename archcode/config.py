@@ -145,12 +145,22 @@ class CompressionConfig:
 
 
 @dataclass
+class WorktreeConfig:
+    """worktree 隔离的运行参数(worktree-design §6.2/§2.3.4)。"""
+
+    stale_cleanup_interval: int = 3600   # 后台清理扫描间隔(秒)
+    stale_cutoff_hours: int = 24         # 过期阈值(小时)
+    symlink_directories: list[str] = field(default_factory=list)  # 创建后设置的依赖目录列表
+
+
+@dataclass
 class AppConfig:
     providers: list[ProviderConfig]
     system_prompt: str = ""
     mcp_servers: list[MCPServerConfig] = field(default_factory=list)
     compression: CompressionConfig = field(default_factory=CompressionConfig)
     hooks: list[dict] = field(default_factory=list)
+    worktree: WorktreeConfig = field(default_factory=WorktreeConfig)
 
 
 def _parse_provider(raw: dict) -> ProviderConfig:
@@ -218,6 +228,12 @@ def _load_file(path: Path) -> AppConfig:
     mcp_servers = [_parse_mcp_server(s) for s in raw.get("mcp_servers", [])]
     compression = _parse_compression(raw.get("compression", {}))
     hooks = _parse_hooks(raw.get("hooks") or [])
+    wt_raw = raw.get("worktree") or {}
+    worktree = WorktreeConfig(
+        stale_cleanup_interval=int(wt_raw.get("stale_cleanup_interval", 3600)),
+        stale_cutoff_hours=int(wt_raw.get("stale_cutoff_hours", 24)),
+        symlink_directories=[str(d) for d in wt_raw.get("symlink_directories", [])],
+    )
 
     return AppConfig(
         providers=providers,
@@ -225,6 +241,7 @@ def _load_file(path: Path) -> AppConfig:
         mcp_servers=mcp_servers,
         compression=compression,
         hooks=hooks,
+        worktree=worktree,
     )
 
 
@@ -328,6 +345,8 @@ def load_config(
                 merged.mcp_servers = layer.mcp_servers
             if layer.compression:
                 merged.compression = layer.compression
+            if layer.worktree != WorktreeConfig():
+                merged.worktree = layer.worktree
             merged.hooks = merged.hooks + tagged_hooks  # 追加合并,后层排后
 
     if merged is None:

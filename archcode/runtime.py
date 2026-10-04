@@ -61,20 +61,22 @@ def _wire_skills(agent: Agent, tool_registry, work_dir: Path) -> SkillExecutor:
     return executor
 
 
-def _wire_agents(agent: Agent, tool_registry, work_dir: Path, skill_executor=None) -> None:
+def _wire_agents(config, agent: Agent, tool_registry, work_dir: Path, skill_executor=None) -> None:
     """创建 AgentLoader / TaskManager / AgentTool 并接线(sub-agent-design §11/§13)。
 
     - loader 扫描三层 agent 定义,诊断打 stderr;
     - AgentTool / TaskList / TaskGet 注册进主注册表;
     - agent._background_notifier 接后台通知 drain(§9.2),agent._agent_loader 供
       Task 边界刷新 <agent-catalog>(§2.5);
-    - skill_executor.task_manager 供 skill fork 后台启动(§13)。
+    - skill_executor.task_manager 供 skill fork 后台启动(§13);
+    - WorktreeManager 单例 + restore_session(worktree-design §4/§2.7)。
     """
     from archcode.agents.loader import AgentLoader
     from archcode.agents.notification import make_background_notifier
     from archcode.agents.task_manager import TaskManager
     from archcode.tools.agent_tool import AgentTool
     from archcode.tools.task_tools import register_task_tools
+    from archcode.worktree import WorktreeManager
 
     loader = AgentLoader(work_dir=work_dir)
     loader.load_all()
@@ -82,8 +84,21 @@ def _wire_agents(agent: Agent, tool_registry, work_dir: Path, skill_executor=Non
         print(diagnostic, file=sys.stderr)
 
     task_manager = TaskManager()
+    # worktree 隔离:per work_dir 单例,启动时捡回未结束的会话(§2.7);
+    # 后台清理任务由事件循环就绪处惰性启动(manager.ensure_cleanup_task)
+    worktree_manager = WorktreeManager(work_dir)
+    worktree_manager.restore_session()
+    worktree_config = getattr(config, "worktree", None)
+    if worktree_config is not None:
+        worktree_manager._cleanup_interval = worktree_config.stale_cleanup_interval
+        worktree_manager._cleanup_cutoff = worktree_config.stale_cutoff_hours
+    agent._worktree_manager = worktree_manager
+
     agent_tool = AgentTool(
-        agent_loader=loader, task_manager=task_manager, parent_agent=agent
+        agent_loader=loader,
+        task_manager=task_manager,
+        parent_agent=agent,
+        worktree_manager=worktree_manager,
     )
     tool_registry.register(agent_tool)
     register_task_tools(tool_registry, task_manager)
@@ -123,7 +138,7 @@ def wire_all(config, work_dir: Path, agent: Agent, tool_registry) -> SkillExecut
     """hooks + skills + agents 三段接线(顺序与既有分支一致)。"""
     _wire_hooks(config, work_dir, agent)
     skill_executor = _wire_skills(agent, tool_registry, work_dir)
-    _wire_agents(agent, tool_registry, work_dir, skill_executor)
+    _wire_agents(config, agent, tool_registry, work_dir, skill_executor)
     return skill_executor
 
 
