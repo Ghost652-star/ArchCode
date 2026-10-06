@@ -132,6 +132,24 @@ export default function SettingsPanel({
             <option value="user">用户</option>
             <option value="project">项目</option>
           </select>
+          <button
+            className={styles.closeBtn}
+            title="重扫技能/子代理定义并重建 hooks(技能/代理/hooks 改动保存后点此即生效)"
+            onClick={async () => {
+              try {
+                const r = await api.reloadConfigs()
+                const diag = r.diagnostics?.length ? `;${r.diagnostics.length} 条诊断` : ''
+                setNotice(
+                  `已重载 ${r.sessions} 个会话(技能 ${r.skills} / 代理 ${r.agents} / hooks ${r.hooks})${diag}`,
+                )
+              } catch (e) {
+                setNotice(e instanceof Error ? e.message : String(e))
+              }
+              setTimeout(() => setNotice(''), 4000)
+            }}
+          >
+            ⟳
+          </button>
           <span className={styles.notice}>{notice}</span>
           <button className={styles.closeBtn} onClick={onClose} aria-label="关闭">
             ✕
@@ -293,7 +311,7 @@ export default function SettingsPanel({
                   )}
                   <div className={styles.hint}>
                     点击可编辑(内置定义只读);新建写入 当前作用域 的 `.archcode/agents/&lt;名字&gt;.md`,
-                    重启 ArchCode 后生效。
+                    保存后点右上 ⟳ 即生效。
                   </div>
                 </div>
               )
@@ -360,7 +378,7 @@ export default function SettingsPanel({
                   })}
                   <div className={styles.hint}>
                     8 类生命周期事件 × 4 种执行方式(命令/注入提示/HTTP/子 agent);保存写入当前作用域
-                    config.yaml,重启 ArchCode 后生效。条件用 if 表达式,留空 = 总是触发。
+                    config.yaml,保存后点右上 ⟳ 即生效。条件用 if 表达式,留空 = 总是触发。
                   </div>
                 </div>
               )
@@ -998,7 +1016,7 @@ function SkillDetail({
         </span>
       </div>
       <div className={styles.hint}>
-        编辑技能请修改对应 SKILL.md 文件,重启 ArchCode 后生效。
+        编辑技能请修改对应 SKILL.md 文件,保存后点右上 ⟳ 即生效。
       </div>
     </div>
   )
@@ -1069,7 +1087,7 @@ function AgentDetail({
         </div>
       )}
       <div className={styles.hint}>
-        修改定义请编辑对应 Markdown 文件,或复制一份自定义,重启 ArchCode 后生效。
+        修改定义请编辑对应 Markdown 文件,或复制一份自定义,保存后点右上 ⟳ 即生效。
       </div>
     </div>
   )

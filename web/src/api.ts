@@ -234,6 +234,17 @@ export const api = {
       { method: 'PUT', body: JSON.stringify({ key, items }) },
     ),
 
+  // 配置热重载(skills/agents/hooks 立即生效;MCP/providers 重启生效)
+  reloadConfigs: () =>
+    jsonFetch<{
+      ok: boolean
+      sessions: number
+      skills: number
+      agents: number
+      hooks: number
+      diagnostics: string[]
+    }>('/api/reload', { method: 'POST' }),
+
   // ── 工作区文件(按工作区)──
   listFiles: (workspace: string, path: string) =>
     jsonFetch<DirListing>(`/api/files${q({ workspace, path })}`),

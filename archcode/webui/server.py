@@ -1049,8 +1049,58 @@ def api_settings_put(scope: str, body: dict, workspace: str | None = None):
     buf = io.StringIO()
     _yaml.dump(data, buf)
     path.write_text(buf.getvalue(), encoding="utf-8")
-    restart_required = key in ("providers", "mcp_servers", "hooks")
+    restart_required = key in ("providers", "mcp_servers")
     return {"ok": True, "restart_required": restart_required}
+
+
+def _reload_configurable(sessions) -> dict:
+    """skills/agents/hooks 热重载核心(deferred #6 第一阶段)。
+
+    对每个会话的 agent 重挂三个可热部件:skill loader 重扫、agent loader
+    重扫 + 双 catalog 刷新、HookEngine 按各工作区 config 重建。引用替换
+    原子,运行中的会话下一轮生效;catalog 内容未变时不产生字节变化。
+    MCP/providers 不在此列(重启生效)。
+    """
+    from archcode.hooks.engine import HookEngine
+
+    counts = {"sessions": 0, "skills": 0, "agents": 0, "hooks": 0}
+    diagnostics: list[str] = []
+    seen_loaders: set[int] = set()
+    for rt in sessions:
+        agent = rt.agent
+        counts["sessions"] += 1
+
+        sk = getattr(agent, "_skill_loader", None)
+        if sk is not None:
+            counts["skills"] = max(counts["skills"], len(sk.scan()))
+
+        al = getattr(agent, "_agent_loader", None)
+        if al is not None and id(al) not in seen_loaders:
+            seen_loaders.add(id(al))
+            defs = al.load_all()
+            counts["agents"] = max(counts["agents"], len(defs))
+            diagnostics.extend(f"[agents] {d}" for d in al.diagnostics[:10])
+
+        ws_config = getattr(rt.workspace, "config", None)
+        if ws_config is not None:
+            engine, hook_diags = HookEngine.from_config(
+                ws_config.hooks, work_dir=rt.workspace.work_dir
+            )
+            agent._hook_engine = engine
+            counts["hooks"] += 1
+            diagnostics.extend(f"[hooks] {d}" for d in hook_diags[:10])
+
+        agent._refresh_skill_catalog()
+        agent._refresh_agent_catalog()
+
+    deduped = list(dict.fromkeys(diagnostics))
+    return {"ok": True, **counts, "diagnostics": deduped[:20]}
+
+
+@app.post("/api/reload")
+def api_reload():
+    """POST /api/reload:重扫技能/子代理定义并重建 hooks(保存即生效)。"""
+    return _reload_configurable(list(STATE.registry.sessions.values()))
 
 
 # ── 端点:工作区文件(只读浏览,圈定在工作区内)────────────────────────

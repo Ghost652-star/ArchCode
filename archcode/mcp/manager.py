@@ -82,15 +82,31 @@ class MCPManager:
 
         多会话并行设计(§多会话):每个对话一份 registry,包装指向共享的
         client/子进程——连接层共享,注册层按对话隔离。
+
+        所有权治理(deferred #2 关联发现落地):注册带 owner=f"mcp:{server}",
+        与已注册工具重名时不覆盖——既有 owner 是别的 server 或未标记
+        (内置/技能工具)则警告跳过;仅允许覆盖自己(重复调用幂等刷新)。
         """
         for name, client in self._clients.items():
             if not client.is_alive:
                 continue
             try:
                 tools = await client.list_tools()
+                existing = {t.name for t in registry.list_tools()}
                 for tool_def in tools:
                     wrapper = MCPToolWrapper(name, tool_def, client)
-                    registry.register(wrapper)
+                    if wrapper.name in existing:
+                        owner = registry.owner_of(wrapper.name)
+                        if owner == f"mcp:{name}":
+                            registry.register(wrapper, owner=owner)  # 幂等刷新
+                            continue
+                        logger.warning(
+                            "MCP 工具 '%s' 与既有注册冲突(owner=%s),跳过不覆盖",
+                            wrapper.name,
+                            owner or "(未标记)",
+                        )
+                        continue
+                    registry.register(wrapper, owner=f"mcp:{name}")
             except Exception as e:
                 logger.warning("MCP server '%s' 注册工具失败: %s", name, e)
 
