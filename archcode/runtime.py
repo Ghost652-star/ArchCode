@@ -74,8 +74,10 @@ def _wire_agents(config, agent: Agent, tool_registry, work_dir: Path, skill_exec
     from archcode.agents.loader import AgentLoader
     from archcode.agents.notification import make_background_notifier
     from archcode.agents.task_manager import TaskManager
+    from archcode.paths import teams_dir
     from archcode.tools.agent_tool import AgentTool
     from archcode.tools.task_tools import register_task_tools
+    from archcode.tools.team_tools import TeamCreateTool, TeamDeleteTool
     from archcode.worktree import WorktreeManager
 
     loader = AgentLoader(work_dir=work_dir)
@@ -94,13 +96,24 @@ def _wire_agents(config, agent: Agent, tool_registry, work_dir: Path, skill_exec
         worktree_manager._cleanup_cutoff = worktree_config.stale_cutoff_hours
     agent._worktree_manager = worktree_manager
 
+    # teams:per work_dir 单例(落点项目级,agent-teams-design §4.1)
+    from archcode.teams import TeamManager
+
+    team_manager = TeamManager(teams_dir(work_dir))
+    agent._team_manager = team_manager
+    teams_config = getattr(config, "teams", None)
+
     agent_tool = AgentTool(
         agent_loader=loader,
         task_manager=task_manager,
         parent_agent=agent,
         worktree_manager=worktree_manager,
+        team_manager=team_manager,
+        teams_config=teams_config,
     )
     tool_registry.register(agent_tool)
+    tool_registry.register(TeamCreateTool(team_manager, teams_config, registry=tool_registry))
+    tool_registry.register(TeamDeleteTool(team_manager))
     register_task_tools(tool_registry, task_manager)
 
     agent._agent_loader = loader

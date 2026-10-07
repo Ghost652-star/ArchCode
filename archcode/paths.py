@@ -56,3 +56,11 @@ def worktrees_dir(work_dir: str | Path) -> Path:
     session 文件与副本目录的路径一律经这里取。
     """
     return project_data_dir(work_dir) / "worktrees"
+
+
+def teams_dir(work_dir: str | Path) -> Path:
+    """teams 落点(agent-teams-design §4.1,2026-10-07 定稿项目级):
+    `<work_dir>/.archcode/teams/`——团队生命周期绑项目、防跨工作区同名撞车、
+    与 sessions 同款。config/tasks/mailbox/transcripts 都在这下面。
+    """
+    return project_data_dir(work_dir) / "teams"

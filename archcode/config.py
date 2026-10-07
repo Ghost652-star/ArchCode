@@ -154,6 +154,14 @@ class WorktreeConfig:
 
 
 @dataclass
+class TeamsConfig:
+    """teams 运行参数(agent-teams-design §7.1/§10)。"""
+
+    fork_teammate: bool = False      # 队员 fork 路径开关(默认关:防误触发大成本 fork)
+    coordinator_mode: bool = False   # Coordinator 配置锁(还需环境变量显式 opt-in)
+
+
+@dataclass
 class AppConfig:
     providers: list[ProviderConfig]
     system_prompt: str = ""
@@ -161,6 +169,7 @@ class AppConfig:
     compression: CompressionConfig = field(default_factory=CompressionConfig)
     hooks: list[dict] = field(default_factory=list)
     worktree: WorktreeConfig = field(default_factory=WorktreeConfig)
+    teams: TeamsConfig = field(default_factory=TeamsConfig)
 
 
 def _parse_provider(raw: dict) -> ProviderConfig:
@@ -234,6 +243,11 @@ def _load_file(path: Path) -> AppConfig:
         stale_cutoff_hours=int(wt_raw.get("stale_cutoff_hours", 24)),
         symlink_directories=[str(d) for d in wt_raw.get("symlink_directories", [])],
     )
+    tm_raw = raw.get("teams") or {}
+    teams = TeamsConfig(
+        fork_teammate=bool(tm_raw.get("fork_teammate", False)),
+        coordinator_mode=bool(tm_raw.get("coordinator_mode", False)),
+    )
 
     return AppConfig(
         providers=providers,
@@ -242,6 +256,7 @@ def _load_file(path: Path) -> AppConfig:
         compression=compression,
         hooks=hooks,
         worktree=worktree,
+        teams=teams,
     )
 
 
@@ -347,6 +362,8 @@ def load_config(
                 merged.compression = layer.compression
             if layer.worktree != WorktreeConfig():
                 merged.worktree = layer.worktree
+            if layer.teams != TeamsConfig():
+                merged.teams = layer.teams
             merged.hooks = merged.hooks + tagged_hooks  # 追加合并,后层排后
 
     if merged is None:

@@ -1126,6 +1126,13 @@ class Agent:
                         )
                     )
 
+                # ── 队员邮箱注入(teams §5.3):每轮 Loop 开头 drain 未读消息 ──
+                mailbox_drain = getattr(self, "_mailbox_drain", None)
+                if mailbox_drain is not None:
+                    team_text = mailbox_drain()
+                    if team_text:
+                        conversation.add_system_reminder(team_text)
+
                 # ── MCP 延迟工具注入(独立于 plan_mode,每轮都注) ────
                 if self._tool_registry is not None:
                     deferred_names = self._tool_registry.get_deferred_tool_names()
