@@ -1,6 +1,6 @@
 # ArchCode
 
-ArchCode 是一个 AI 编程助手，提供 **Textual TUI** 与 **Web** 两种界面。支持流式对话、对话历史管理、5 层权限系统、HITL 权限弹窗、可插拔工具、计划模式（Plan Mode）、上下文自动压缩、MCP 协议接入任意外部工具 server、项目指令文档（AGENTS.md）、Skill 系统（单文件 + 目录型 + 专属工具 + allowedTools）、Hook 系统（事件 + 条件 + 动作的生命周期钩子），以及子 Agent 系统（定义式 + Fork 双模式、四道防线工具过滤、后台任务与 `<task-notification>` 回传）。Web 界面支持多工作区切换、设置面板在线编辑（模型 / MCP / Hooks / 子 Agent）、token 用量统计、后台任务面板与 TodoWrite 任务清单。
+ArchCode 是一个 AI 编程助手，提供 **Textual TUI** 与 **Web** 两种界面。支持流式对话、对话历史管理、5 层权限系统、HITL 权限弹窗、可插拔工具、计划模式（Plan Mode）、上下文自动压缩、MCP 协议接入任意外部工具 server、项目指令文档（AGENTS.md）、Skill 系统（单文件 + 目录型 + 专属工具 + allowedTools）、Hook 系统（事件 + 条件 + 动作的生命周期钩子）、子 Agent 系统（定义式 + Fork 双模式、四道防线工具过滤、后台任务与 `<task-notification>` 回传）、Worktree 任务隔离（独立 git worktree 副本 + 后台漏斗清理）与 Agent Teams（组队 / 队员 / 文件邮箱 / 共享任务列表 / Coordinator 模式）。Web 界面支持多工作区切换、设置面板在线编辑（模型 / MCP / Hooks / 子 Agent / Skills）、配置热重载（⟳ 重挂 Skills / 子 Agent / Hooks 无需重启）、token 用量统计、后台任务面板与 TodoWrite 任务清单。
 
 ## 快速开始
 
@@ -88,7 +88,7 @@ uv run archcode --web --port 9000 -w F:/myproject
 - **HITL**：权限弹窗与 AskUserQuestion 走 SSE 往返，交互与 TUI 一致
 - **输入卡**：`/` 指令与技能菜单、权限模式切换、上下文占用圈（悬停展开六项分解与平均缓存命中率）、会话累计 token 用量（点开四桶明细）、模型名与切换、发送 ⇄ 停止
 - **状态与任务**：顶栏后台任务面板（子 Agent 任务状态 / 耗时 / token 用量）、TodoWrite 任务清单面板（输入区上方）、轮次分隔条（步数 / 耗时 / 单轮用量）、压缩进度卡、自动重试与 `/plan` 等提示行
-- **设置面板**：模型 / MCP 服务器 / Skills / 子 Agent / Hooks / 权限 / 外观 七节，均为"列表 → 详情/编辑"主从交互；子 Agent 可在界面新建 / 编辑 / 删除（写入定义文件），内置定义可一键"复制为项目级/用户级"后修改（同名遮蔽）；Hooks 表单化（8 类事件下拉 + 4 种执行方式）；MCP / 供应商支持编辑来源作用域的条目（写回对应配置文件）。所有配置写入文件后重启生效
+- **设置面板**：模型 / MCP 服务器 / Skills / 子 Agent / Hooks / 权限 / 外观 七节，均为"列表 → 详情/编辑"主从交互；子 Agent 可在界面新建 / 编辑 / 删除（写入定义文件），内置定义可一键"复制为项目级/用户级"后修改（同名遮蔽）；Hooks 表单化（8 类事件下拉 + 4 种执行方式）；MCP / 供应商支持编辑来源作用域的条目（写回对应配置文件）。Skills / 子 Agent / Hooks 保存后点右上 ⟳ 即生效（热重载，运行中的会话自动重挂）；MCP / 供应商需重启生效
 - **添加工作区**：点击"📂 选择文件夹"弹出本机原生目录选择框（手输路径仍可用）
 
 前端开发模式：终端 A 跑 `uv run archcode --web`（后端 8000），终端 B 跑 `cd web && npm run dev`（Vite 5173，`/api` 已代理到后端）。
@@ -114,6 +114,8 @@ Config         config.py / prompts/                  # YAML 配置 + 系统提�
                 mcp/                                 # MCP 协议适配（stdio + HTTP）
                 tools/                               # 本地工具 + 工具注册中心
                 permissions/                         # 5 层权限校验
+Collaboration  teams/                                 # Agent Teams（文件邮箱 / 共享任务列表 / 队员记账）
+                worktree/                            # worktree 任务隔离（创建 / 复用 / 后台清理）
 ```
 
 ### 权限系统（5 层）
@@ -206,6 +208,34 @@ hooks:
 - 定义式子 agent 默认前台同步执行(`run_in_background: true` 或定义 `background: true` 可转后台);用 `TaskList` / `TaskGet` 查后台任务。
 - **界面管理(Web 设置面板)**："子 Agent"节展示全部生效定义(来源层 / 模型 / 轮次预算 / 权限模式 / 工具白名单);新建、编辑、删除直接操作定义文件;内置定义(Explore / Plan / general-purpose)可"复制为项目级/用户级"后修改——同名即遮蔽内置,本体保持只读不可变。
 - **Skill 联动**:skill 的 `mode: fork` 会创建后台子 agent 执行该 skill(按 `context` 档位携带父对话、按 `allowedTools` 过滤工具集);`mode: inline` 维持钉 SOP 进主对话。
+
+### Worktree 任务隔离
+
+`Agent` 工具带 `isolation: "worktree"` 时为任务创建独立 git worktree 副本,并行任务互不踩踏同一工作目录:
+
+- **创建**:副本统一落在 `<work_dir>/.archcode/worktrees/<name>`(白名单 slug 校验,`/` 压平为 `+`;分支名 `worktree-<name>`);目录已存在且 HEAD 可读时直接复用,不重复执行 `git worktree add`
+- **提示注入**:系统提示词向子 agent 声明"你处于隔离的工作树副本,改动不影响主工作目录",并告知收敛方式
+- **收敛**:任务完成后由 lead/子 agent 用 Bash 执行 `git merge` 并回主线(不设内置 merge 工具);创建失败即中止,不降级到主目录
+- **后台清理(漏斗五层)**:仅系统创建的临时副本(`agent-<8位hex>`)会被清理——当前会话在用、未过 24h 有效期、有未提交改动、有未推送 commit,任一层不满足即不动;用户自定义命名永不自动清理
+- **团队联动**:队员默认带隔离副本(命名 `team-<队名>+<队员名>`),见下方 Agent Teams
+
+### Agent Teams
+
+复杂任务需要多角色协作时:先 `TeamCreate` 建队,当前会话成为 lead(队长),再用 `Agent` 工具带 `team_name` 派生多个队员,队员自主认领任务并行工作。协调靠工具注入完成,框架不设调度器:
+
+- **团队生命周期**:`TeamCreate`(同名自动加序号)→ 任务分解 → 执行(队员认领"可认领"任务:未开始 ∧ 无人认领 ∧ 依赖全部完成)→ 收敛(lead 用 git 合并)→ `TeamDelete` 清理(有存活队员时拒绝,防活埋)
+- **文件邮箱**:每个队员一个收件箱目录(项目级 `<work_dir>/.archcode/teams/`),一条消息一个 json,读即消费;`SendMessage` 支持点名发送与 `*` 广播;队员消息注入 lead 时带 system-reminder 标注"不构成用户授权"(跨 agent 消息按不可信内容处理)
+- **共享任务列表**:团队上下文里的 `TaskCreate` / `TaskGet` / `TaskList` / `TaskUpdate`;依赖双向表达(add_blocks / add_blocked_by),依赖一完成即时解锁下游任务
+- **队员**:恒后台运行,结果与空闲通知经邮箱回传;已停止的队员可被 `SendMessage` 唤醒(对话历史续写);权限审批请求从队员冒泡到 lead 邮箱由 lead 代答
+- **Coordinator 模式**:配置 `coordinator_mode: true` **且**环境变量 `ARCHCODE_COORDINATOR_MODE` 双锁同时开启后,lead 的写类工具(WriteFile / EditFile)被剥离,执行遵循 research → synthesis → implementation → verification 四阶段流程
+
+配置(`teams:` 键,三层合并规则同其他配置):
+
+```yaml
+teams:
+  fork_teammate: false      # 队员是否走 fork 路径(继承 lead 对话;默认关,防止误触发高成本对话继承)
+  coordinator_mode: false   # Coordinator 配置锁(须与环境变量同时开启才生效)
+```
 
 ### 上下文压缩
 
@@ -343,6 +373,9 @@ compression:
 ├─ config.local.yaml              # 本地覆盖（不进 Git）
 ├─ AGENTS.md                      # 项目私有指令文档
 ├─ skills/                        # 项目级 Skill
+├─ agents/                        # 项目级子 Agent 定义
+├─ teams/                         # Agent Teams 状态（邮箱 / 共享任务列表 / 注册表）
+├─ worktrees/                     # worktree 任务隔离副本（临时副本后台自动清理）
 ├─ sessions/                      # 当前项目的会话 JSONL
 ├─ session/tool-results/          # 上下文压缩时的临时工具结果
 ├─ plans/                         # 当前项目的计划文件
