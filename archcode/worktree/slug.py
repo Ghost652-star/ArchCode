@@ -10,7 +10,10 @@ from __future__ import annotations
 import re
 
 MAX_SLUG_LENGTH = 64
-_SEGMENT_RE = re.compile(r"^[a-zA-Z0-9._-]+$")
+# "+" 在字符集内:它是压平分隔符(flatten_slug 把 / 换成 +),组合名
+# `team-<队>+<队员>`(agent-teams-design §7.1 步骤 2)依赖它;+ 不是任何平台的
+# 路径分隔符,放行不削弱防穿越能力
+_SEGMENT_RE = re.compile(r"^[a-zA-Z0-9._+-]+$")
 
 
 def validate_slug(name: str) -> str | None:
@@ -27,7 +30,7 @@ def validate_slug(name: str) -> str | None:
         if seg in (".", ".."):
             return "name must not contain '.' or '..' as a segment"
         if not _SEGMENT_RE.match(seg):
-            return f"invalid segment: {seg!r} (allowed: letters, digits, '.', '-', '_')"
+            return f"invalid segment: {seg!r} (allowed: letters, digits, '.', '-', '_', '+')"
 
     return None
 

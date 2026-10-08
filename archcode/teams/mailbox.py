@@ -1,9 +1,16 @@
-"""文件邮箱(agent-teams-design §4/§5.4):队员间消息的持久化通道。
+"""文件邮箱(agent-teams-design §5.4,2026-10-08 修订为无锁):队员间消息的持久化通道。
 
 每队员一个收件箱目录,一条消息一个 json 文件(追加语义,读即消费)。
-写入三道关:格式校验(写时校验,坏消息不落盘)→ 收件箱锁(O_CREATE|O_EXCL 抢锁 +
-抖动重试 + stale 接管)→ 原子落盘。in-process 后端下协程并发也由文件锁串行,
-不需要额外的内存锁。
+
+**无锁的根据**(§5.4 修订):写方互斥的前提不存在——in-process 后端 (§4.3.5) 下
+所有写都跑在同一事件循环上,write/drain 临界区无 await,协程间天然串行;跨进程
+写方(Pane 后端)已裁,锁要防的那种竞争没有写方。消息完整性由三条保证:
+①文件名由内部生成的 msg_id 决定(非外部输入,撞名概率为零);②写走唯一临时文件
++ rename 原子发布(drain 永远读不到半条);③drain 解析失败即移除,不把损坏内容
+当消息消费。写时校验(坏消息不落盘)保留。
+
+若将来接回跨进程后端,必须重新引入锁并遵守 §4.3.3 的两条原则(一次性前置 +
+不静默降级)——不要在无写方互斥的前提下预先持锁。
 """
 
 from __future__ import annotations
@@ -11,19 +18,13 @@ from __future__ import annotations
 import json
 import logging
 import os
-import random
-import time
+import uuid
 from pathlib import Path
-from typing import Any
 
 from archcode.teams.models import MailboxMessage
 
 logger = logging.getLogger(__name__)
 
-_LOCK_RETRY_MAX = 10
-_LOCK_RETRY_MIN_MS = 5
-_LOCK_RETRY_MAX_MS = 100
-_LOCK_STALE_SECONDS = 10
 _MAX_CONTENT_CHARS = 20000
 _MAX_SUMMARY_CHARS = 60
 _MESSAGE_TYPES = {"text", "shutdown_request", "shutdown_response", "plan_approval_response"}
@@ -39,7 +40,7 @@ class TeamMailbox:
         return self._base / agent_name
 
     # ------------------------------------------------------------------
-    # 写入:写时校验 → 锁 → 原子落盘
+    # 写入:写时校验 → 唯一临时文件 → 原子 rename
     # ------------------------------------------------------------------
 
     def write(self, msg: MailboxMessage) -> None:
@@ -47,25 +48,29 @@ class TeamMailbox:
         inbox = self.inbox_dir(msg.to_name)
         inbox.mkdir(parents=True, exist_ok=True)
         target = inbox / f"msg-{msg.msg_id}.json"
-        with self._lock(inbox):
-            if target.exists():  # msg_id 唯一(重启重算),重复写视为幂等
-                return
-            payload = json.dumps(
-                {
-                    "msg_id": msg.msg_id,
-                    "from": msg.from_name,
-                    "to": msg.to_name,
-                    "type": msg.message_type,
-                    "content": msg.content,
-                    "summary": msg.summary,
-                    "created_at": msg.created_at,
-                },
-                ensure_ascii=False,
-                indent=2,
-            )
-            tmp = target.with_suffix(".tmp")
+        if target.exists():  # msg_id 唯一(重启重算),重复写视为幂等
+            return
+        payload = json.dumps(
+            {
+                "msg_id": msg.msg_id,
+                "from": msg.from_name,
+                "to": msg.to_name,
+                "type": msg.message_type,
+                "content": msg.content,
+                "summary": msg.summary,
+                "created_at": msg.created_at,
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+        # 临时名带 pid + 随机后缀:即使将来出现第二个写方(线程/进程),
+        # 并发写也落在不同临时文件上,不靠锁串行
+        tmp = inbox / f".tmp-{msg.msg_id}-{os.getpid()}-{uuid.uuid4().hex[:8]}"
+        try:
             tmp.write_text(payload, encoding="utf-8")
             tmp.replace(target)
+        finally:
+            tmp.unlink(missing_ok=True)
 
     @staticmethod
     def _validate(msg: MailboxMessage) -> None:
@@ -80,7 +85,7 @@ class TeamMailbox:
             raise ValueError(f"消息正文过长(>{_MAX_CONTENT_CHARS} 字符)")
 
     # ------------------------------------------------------------------
-    # 读取:读即消费(drain)
+    # 读取:读即消费(drain);坏文件移除(不把损坏内容当消息)
     # ------------------------------------------------------------------
 
     def drain(self, agent_name: str) -> list[MailboxMessage]:
@@ -88,26 +93,25 @@ class TeamMailbox:
         if not inbox.exists():
             return []
         msgs: list[MailboxMessage] = []
-        with self._lock(inbox):
-            for f in sorted(inbox.glob("msg-*.json")):
-                try:
-                    data = json.loads(f.read_text(encoding="utf-8"))
-                except (OSError, json.JSONDecodeError) as e:
-                    logger.warning("坏消息文件移除: %s (%s)", f.name, e)
-                    f.unlink(missing_ok=True)
-                    continue
-                msgs.append(
-                    MailboxMessage(
-                        msg_id=str(data.get("msg_id", "")),
-                        from_name=str(data.get("from", "")),
-                        to_name=str(data.get("to", "")),
-                        message_type=data.get("type", "text"),
-                        content=str(data.get("content", "")),
-                        summary=str(data.get("summary", "")),
-                        created_at=str(data.get("created_at", "")),
-                    )
+        for f in sorted(inbox.glob("msg-*.json")):
+            try:
+                data = json.loads(f.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError) as e:
+                logger.warning("坏消息文件移除: %s (%s)", f.name, e)
+                f.unlink(missing_ok=True)
+                continue
+            msgs.append(
+                MailboxMessage(
+                    msg_id=str(data.get("msg_id", "")),
+                    from_name=str(data.get("from", "")),
+                    to_name=str(data.get("to", "")),
+                    message_type=data.get("type", "text"),
+                    content=str(data.get("content", "")),
+                    summary=str(data.get("summary", "")),
+                    created_at=str(data.get("created_at", "")),
                 )
-                f.unlink(missing_ok=True)  # 读即消费
+            )
+            f.unlink(missing_ok=True)  # 读即消费
         return msgs
 
     def clear(self) -> None:
@@ -116,42 +120,3 @@ class TeamMailbox:
 
         if self._base.exists():
             shutil.rmtree(self._base, ignore_errors=True)
-
-    # ------------------------------------------------------------------
-    # 收件箱锁(O_CREATE|O_EXCL 原子创建即获锁)
-    # ------------------------------------------------------------------
-
-    class _Locked:
-        """锁上下文:退出时释放。"""
-
-        def __init__(self, lock_path: Path) -> None:
-            self._path = lock_path
-
-        def __enter__(self) -> "TeamMailbox._Locked":
-            return self
-
-        def __exit__(self, *exc: Any) -> None:
-            self._path.unlink(missing_ok=True)
-
-    def _lock(self, inbox: Path) -> "TeamMailbox._Locked":
-        lock = inbox / ".lock"
-        inbox.mkdir(parents=True, exist_ok=True)
-        for attempt in range(_LOCK_RETRY_MAX):
-            try:
-                fd = os.open(str(lock), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-                os.close(fd)
-                return TeamMailbox._Locked(lock)
-            except FileExistsError:
-                # stale 接管:超时未释放的锁直接抢掉(防崩溃残留死锁)
-                try:
-                    if time.time() - lock.stat().st_mtime > _LOCK_STALE_SECONDS:
-                        lock.unlink(missing_ok=True)
-                        continue
-                except OSError:
-                    continue
-                time.sleep(random.uniform(_LOCK_RETRY_MIN_MS, _LOCK_RETRY_MAX_MS) / 1000)
-        # 重试耗尽:视为 stale 强制接管(与 10s 超时同语义的最后兜底)
-        lock.unlink(missing_ok=True)
-        fd = os.open(str(lock), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-        os.close(fd)
-        return TeamMailbox._Locked(lock)

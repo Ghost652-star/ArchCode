@@ -12,6 +12,7 @@ import logging
 import re
 import uuid
 from pathlib import Path
+from typing import Any
 
 from archcode.teams.mailbox import TeamMailbox
 from archcode.teams.models import MailboxMessage, Team, TeamError, Teammate
@@ -24,10 +25,17 @@ logger = logging.getLogger(__name__)
 class TeamManager:
     """per work_dir 单例(装配层构造)。teams_dir 由 paths.teams_dir 提供。"""
 
-    def __init__(self, teams_dir: str | Path, lead_agent_id: str = "lead") -> None:
+    def __init__(
+        self,
+        teams_dir: str | Path,
+        lead_agent_id: str = "lead",
+        worktree_manager: Any = None,
+    ) -> None:
         self._base = Path(teams_dir)
         self._lead_agent_id = lead_agent_id
         self.registry = AgentNameRegistry()
+        # 删队动作序第②步用(§4.5/§6.5):清队员 worktree 副本;None = 未装配(测试/降级)
+        self._worktree_manager = worktree_manager
 
     # ------------------------------------------------------------------
     # 目录与配置
@@ -126,8 +134,9 @@ class TeamManager:
         logger.info("team created: %s (dir=%s)", final, self.team_dir(final))
         return team
 
-    def delete_team(self, name: str) -> None:
-        """删队:存在非空闲成员(活跃)则拒绝(防活埋,§6.5);通过则清目录。"""
+    async def delete_team(self, name: str) -> None:
+        """删队(§4.5 动作序):①校验全体队员空闲(防活埋)→ ②删各队员 worktree
+        (含分支清理)→ ③清邮箱与团队目录。唯一留存:合并进主分支的代码与 git 历史。"""
         import shutil
 
         team = self._load(name)
@@ -136,6 +145,15 @@ class TeamManager:
         busy = [m.name for m in team.members if m.name != "lead" and m.is_active is not False]
         if busy:
             raise TeamError(f"队员仍在活跃中: {', '.join(busy)}——等待空闲或先停止")
+        # ② 清队员副本(先取路径再清花名册;成员副本命名 team-<队>+<人>,非临时模式,
+        # 后台五层漏斗不会收——删队是它们唯一的回收点)
+        wt_paths = [m.worktree_path for m in team.members if m.worktree_path]
+        if wt_paths and self._worktree_manager is not None:
+            for path in wt_paths:
+                try:
+                    await self._worktree_manager.remove_path(path)
+                except Exception as e:  # 单条失败不阻断删队(漏斗+人工可兜底)
+                    logger.warning("队员副本删除失败(跳过): %s (%s)", path, e)
         for m in team.members:
             self.registry.unregister(m.name)
         shutil.rmtree(self.team_dir(name), ignore_errors=True)

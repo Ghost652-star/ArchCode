@@ -99,7 +99,7 @@ def _wire_agents(config, agent: Agent, tool_registry, work_dir: Path, skill_exec
     # teams:per work_dir 单例(落点项目级,agent-teams-design §4.1)
     from archcode.teams import TeamManager
 
-    team_manager = TeamManager(teams_dir(work_dir))
+    team_manager = TeamManager(teams_dir(work_dir), worktree_manager=worktree_manager)
     agent._team_manager = team_manager
     teams_config = getattr(config, "teams", None)
 

@@ -96,19 +96,25 @@ class TeamDeleteTool(Tool):
     async def execute(self, params: BaseModel) -> ToolResult:
         p: TeamDeleteTool.Params = params  # type: ignore[assignment]
         try:
-            self._manager.delete_team(p.team_name.strip())
+            await self._manager.delete_team(p.team_name.strip())
         except TeamError as e:
             return ToolResult(f"Error: {e}", is_error=True)
         return ToolResult(output=f"团队已删除: {p.team_name}")
 
 
 class SendMessageTool(Tool):
-    """队员专属:横向通信(fire-and-forget;text 必带 summary;"*" 广播)。"""
+    """队员专属:横向通信(fire-and-forget;text 必带 summary;"*" 广播)。
+
+    目标已停止(is_active=False)时走唤醒续写(§8.2):transcript 恢复 + 追加指令,
+    由构造时注入的 wake 回调执行(agent_tool 提供,闭包捕获 lead 上下文);
+    不可达(无 transcript)由 wake 返回错误,不静默丢弃(§5.3 报错纪律)。
+    """
 
     name = "SendMessage"
     description = (
         "Send a message to a teammate (to=name or agent id; to='*' broadcasts). "
-        "Fire-and-forget: delivery to the teammate's next loop."
+        "Fire-and-forget: delivery to the teammate's next loop. A stopped teammate "
+        "is woken with this message and resumes from its saved conversation."
     )
     category = "command"
 
@@ -120,10 +126,19 @@ class SendMessageTool(Tool):
 
     params_model = Params
 
-    def __init__(self, manager: TeamManager, team_name: str, from_name: str) -> None:
+    def __init__(
+        self,
+        manager: TeamManager,
+        team_name: str,
+        from_name: str,
+        wake: Any = None,
+    ) -> None:
         self._manager = manager
         self._team = team_name
         self._from = from_name
+        # wake: async (team_name, Teammate, message) -> ToolResult | None;
+        # None = 未接线(退化为纯投递)
+        self._wake = wake
 
     async def execute(self, params: BaseModel) -> ToolResult:
         p: SendMessageTool.Params = params  # type: ignore[assignment]
@@ -132,6 +147,10 @@ class SendMessageTool(Tool):
                 count = self._manager.broadcast(self._team, self._from, p.message, p.summary)
                 return ToolResult(output=f"已广播给 {count} 名队员")
             member = self._manager.resolve_member(self._team, p.to.strip())
+            # 已停止 → 唤醒续写(§8.2):跑过的队员有 transcript,恢复后追加指令;
+            # 未开始(is_active=None)不唤醒——消息留邮箱,它启动时第一轮 drain 读到
+            if member.is_active is False and self._wake is not None:
+                return await self._wake(self._team, member, p.message)
             self._manager.deliver(
                 self._team,
                 MailboxMessage(

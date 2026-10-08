@@ -175,6 +175,14 @@ class WorktreeManager:
             logger.info("worktree created: %s -> %s (%s)", name, wt_path, branch_name)
             return wt
 
+    async def ensure(self, name: str, base_branch: str = "HEAD") -> Worktree:
+        """取用现有副本或创建(队员唤醒续写用,agent-teams-design §8.2):
+        已在账本 → 直接复用;不在 → 走 create(目录残留则快速恢复,否则新建)。"""
+        wt = self.active.get(name)
+        if wt is not None:
+            return wt
+        return await self.create(name, base_branch)
+
     # ------------------------------------------------------------------
     # 删除序列(§6)
     # ------------------------------------------------------------------
@@ -189,6 +197,27 @@ class WorktreeManager:
             logger.warning("git branch -D 失败: %s", branch_result.stderr.strip())
         self.active.pop(name, None)
         logger.info("worktree removed: %s", name)
+
+    async def remove_path(self, path: str) -> None:
+        """按路径删除(不依赖 active 账本;TeamDelete 清队员副本用,§6.5 动作序②)。
+
+        队员副本可能已不在账本里(失败 spawn 残留 / 跨进程遗留):先 git remove,
+        再按命名约定推分支名;最后同步内存账本(的同路径条目)。
+        """
+        p = Path(path)
+        async with self.lock:
+            result = await self._run_git(["worktree", "remove", "--force", str(p)])
+            if result.returncode != 0:
+                logger.warning("git worktree remove 失败(继续删分支): %s", result.stderr.strip())
+            await asyncio.sleep(_LOCKFILE_WAIT_S)
+            branch_result = await self._run_git(["branch", "-D", f"worktree-{p.name}"])
+            if branch_result.returncode != 0:
+                logger.warning("git branch -D 失败: %s", branch_result.stderr.strip())
+            stale = [n for n, wt in self.active.items() if Path(wt.path) == p]
+            for n in stale:
+                self.active.pop(n, None)
+        if stale:
+            logger.info("worktree 账本清理: %s", ", ".join(stale))
 
     # ------------------------------------------------------------------
     # enter / exit(§2.1 记账不切 cwd;§6 变更保护 + 擦账本)
