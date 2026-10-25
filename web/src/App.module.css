@@ -5,17 +5,22 @@
   grid-template-rows: minmax(0, 1fr);
   height: 100%;
   overflow: hidden;
-  background: var(--ac-bg-base);
+  /* 极淡的钴蓝氛围层:只在主内容区露出一角,不抢信息 */
+  background:
+    radial-gradient(920px 540px at 6% -12%, var(--ac-brand-soft), transparent 62%),
+    var(--ac-bg-base);
 }
 
 /* 只有离散的折叠/展开切换才给轨道过渡(§11.3 动效纪律) */
 .frame[data-animating] {
-  transition: grid-template-columns 0.24s var(--ac-ease);
+  transition: grid-template-columns var(--ac-dur-slow) var(--ac-ease-out);
 }
 
 /* 拖拽按指针节奏写宽度,加过渡会让列边脱离指针 */
 .frame[data-dragging] {
   transition: none;
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 .sidebarCol {
@@ -44,10 +49,13 @@
   position: absolute;
   top: 0;
   bottom: 0;
-  width: 9px;
-  margin-left: -4px;
+  width: 13px;
+  margin-left: -6px;
   z-index: 30;
   cursor: col-resize;
+  user-select: none;
+  -webkit-user-select: none;
+  touch-action: none;
 }
 
 .handle::after {
@@ -55,15 +63,18 @@
   position: absolute;
   top: 0;
   bottom: 0;
-  left: 4px;
+  left: 6px;
   width: 1px;
-  background: transparent;
-  transition: background var(--ac-dur-fast) var(--ac-ease);
+  border-radius: var(--ac-radius-pill);
+  background: var(--ac-border-l2);
+  transition: background var(--ac-dur-fast) var(--ac-ease-out),
+    width var(--ac-dur-fast) var(--ac-ease-out);
 }
 
 .handle:hover::after,
 .handle[data-dragging]::after {
-  background: var(--ac-border-l3);
+  background: var(--ac-brand-400);
+  width: 2px;
 }
 
 /* ── 主栏头部(工作区名 + 文件面板开关)────────────────────────── */
@@ -71,15 +82,19 @@
   flex: none;
   display: flex;
   align-items: center;
-  gap: 8px;
-  height: 44px;
-  padding: 0 12px;
+  gap: var(--ac-space-4);
+  height: 46px;
+  padding: 0 var(--ac-space-5);
   border-bottom: 0.5px solid var(--ac-border-l2);
+  background: color-mix(in srgb, var(--ac-bg-base) 82%, transparent);
+  backdrop-filter: blur(8px);
 }
 
 .mainTitle {
-  font-size: var(--ac-font-size-secondary);
-  font-weight: 500;
+  font-family: var(--ac-font-display);
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
   color: var(--ac-label-primary);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -88,11 +103,13 @@
 
 .mainBadge {
   flex: none;
-  font-size: var(--ac-font-size-caption);
+  font-family: var(--ac-font-code);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
   color: var(--ac-label-caption);
   border: 0.5px solid var(--ac-border-l2);
-  border-radius: 8px;
-  padding: 1px 6px;
+  border-radius: var(--ac-radius-pill);
+  padding: 1px 7px;
 }
 
 .headerSpring {
@@ -104,11 +121,13 @@
   align-items: center;
   justify-content: center;
   flex: none;
-  width: 30px;
-  height: 30px;
-  border-radius: 8px;
+  width: var(--ac-control-md);
+  height: var(--ac-control-md);
+  border-radius: var(--ac-radius-md);
   color: var(--ac-label-tertiary);
-  transition: background var(--ac-dur-fast) var(--ac-ease), color var(--ac-dur-fast) var(--ac-ease);
+  transition: background var(--ac-dur-fast) var(--ac-ease-out),
+    color var(--ac-dur-fast) var(--ac-ease-out),
+    transform var(--ac-dur-fast) var(--ac-ease-out);
 }
 
 .iconBtn:hover {
@@ -116,9 +135,13 @@
   color: var(--ac-label-primary);
 }
 
+.iconBtn:active {
+  transform: scale(0.94);
+}
+
 .iconBtn[data-on] {
-  color: var(--ac-label-primary);
-  background: var(--ac-bg-active);
+  color: var(--ac-brand-ink);
+  background: var(--ac-brand-soft);
 }
 
 /* "回到底部"悬浮钮(§13-A3):脱离底部时浮在输入区上方 */
@@ -128,18 +151,21 @@
   left: 50%;
   transform: translateX(-50%);
   z-index: 10;
-  padding: 6px 14px;
-  border-radius: 16px;
-  background: var(--ac-bg-raised, var(--ac-neutral-100));
+  padding: 7px 14px;
+  border-radius: var(--ac-radius-pill);
+  background: var(--ac-bg-menu);
   border: 0.5px solid var(--ac-border-l2);
-  box-shadow: var(--ac-shadow-prominent);
+  box-shadow: var(--ac-shadow-2);
   font-size: var(--ac-font-size-caption);
   color: var(--ac-label-primary);
-  transition: background var(--ac-dur-fast) var(--ac-ease);
+  backdrop-filter: blur(10px);
+  transition: background var(--ac-dur-fast) var(--ac-ease-out),
+    transform var(--ac-dur-fast) var(--ac-ease-out);
 }
 
 .jumpBottom:hover {
   background: var(--ac-bg-hover);
+  transform: translateX(-50%) translateY(-1px);
 }
 
 .mainColumn .scroll {
@@ -176,18 +202,36 @@
 
 /* ── Hero 态(§10.2)────────────────────────────── */
 .hero {
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: center;
   height: 100%;
   padding: 0 24px;
+  overflow: hidden;
+}
+
+/* 空态氛围:一团极淡的钴蓝光,落在标题左上方 */
+.hero::before {
+  content: '';
+  position: absolute;
+  top: 18%;
+  left: 50%;
+  width: min(520px, 70vw);
+  height: min(320px, 46vh);
+  transform: translateX(-58%);
+  border-radius: 50%;
+  background: radial-gradient(circle, var(--ac-brand-soft) 0%, transparent 68%);
+  filter: blur(18px);
+  pointer-events: none;
 }
 
 .heroStack {
+  position: relative;
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 16px;
+  gap: 18px;
   width: 100%;
   max-width: var(--ac-content-width);
 }
@@ -195,24 +239,36 @@
 .heroHeadline {
   display: flex;
   align-items: center;
-  gap: 10px;
-  font-size: 30px;
-  line-height: 36px;
-  font-weight: 500;
+  gap: 12px;
+  font-family: var(--ac-font-display);
+  font-size: 34px;
+  line-height: 40px;
+  font-weight: 600;
+  letter-spacing: -0.025em;
   color: var(--ac-label-primary);
+}
+
+.heroHeadline svg {
+  width: 34px;
+  height: 34px;
+  filter: drop-shadow(0 4px 14px var(--ac-brand-soft-border));
 }
 
 .heroChip {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  min-height: 28px;
-  padding: 0 10px;
-  border-radius: 16px;
-  color: var(--ac-label-primary);
-  font-size: var(--ac-font-size-secondary);
+  gap: 7px;
+  min-height: 30px;
+  padding: 0 12px;
+  border-radius: var(--ac-radius-pill);
+  border: 0.5px solid var(--ac-border-l2);
+  background: var(--ac-bg-panel);
+  color: var(--ac-label-secondary);
+  font-family: var(--ac-font-code);
+  font-size: 12.5px;
   font-weight: 500;
-  transition: background var(--ac-dur-fast) var(--ac-ease);
+  transition: background var(--ac-dur-fast) var(--ac-ease-out),
+    border-color var(--ac-dur-fast) var(--ac-ease-out);
 }
 
 .heroLock {
@@ -223,4 +279,5 @@
 
 .heroChip:hover {
   background: var(--ac-bg-hover);
+  border-color: var(--ac-border-l3);
 }

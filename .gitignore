@@ -31,3 +31,7 @@ scripts/
 
 # 对比研究(本地,不入库)
 compare/
+
+# 本地杂物(其他工具数据/测试日志,不入库)
+.workbuddy/
+pytest*.log
