@@ -38,6 +38,10 @@ from archcode.conversation.models import estimate_tokens
 from archcode.llm.client import create_client
 from archcode.logctx import set_session_id
 from archcode.memory import SessionManager
+from archcode.memory.session import (
+    RECOVERY_BOUNDARY_MESSAGE,
+    TIME_GAP_BOUNDARY_MESSAGE,
+)
 from archcode.runtime import build_agent_runtime
 from archcode.webui.registry import EventChannel, RuntimeRegistry, SessionRuntime
 
@@ -637,7 +641,7 @@ async def api_abort(body: dict):
 
 @app.get("/api/history")
 def api_history(session_id: str):
-    """该会话的全量历史(刷新恢复用);内部注入的 user 消息不进 UI。"""
+    """该会话的全量历史(刷新恢复用);内部注入的提醒消息不进 UI。"""
     rt = _session_or_error(session_id)
     internal_prefixes = (
         "<system-reminder>",
@@ -646,9 +650,17 @@ def api_history(session_id: str):
         "<memory-context>",  # 长期记忆索引(非持久化注入段)
         "<active-skills>",  # 激活 Skill 钉住段(同上)
     )
+    # 与上述 user 提醒配套的 assistant 边界说明也是内部注入的静态文本,
+    # 只应进入模型上下文,不应渲染成"已完成"的助手回复(2026-10-19 显示修正)。
+    internal_assistant = {
+        RECOVERY_BOUNDARY_MESSAGE.strip(),
+        TIME_GAP_BOUNDARY_MESSAGE.strip(),
+    }
     out = []
     for m in rt.conversation.history:
         if m.role == "user" and m.content.startswith(internal_prefixes):
+            continue
+        if m.role == "assistant" and m.content.strip() in internal_assistant:
             continue
         entry: dict = {"role": m.role, "content": m.content, "created_at": m.created_at}
         if m.tool_uses:
@@ -754,7 +766,11 @@ def api_todo(session_id: str):
 
 @app.get("/api/tasks")
 def api_tasks(session_id: str):
-    """后台任务清单(TaskManager 只读快照):状态/耗时/token 用量/结果预览。"""
+    """后台任务清单(TaskManager 只读快照):状态/耗时/token/实时活动/结果预览。
+
+    activity/tool_calls 来自 ProgressRecorder 的实时更新(队员与后台子 agent
+    挂了 recorder;未挂的任务两字段为空/0)。
+    """
     rt = _session_or_error(session_id)
     manager = getattr(rt.agent, "_task_manager", None)
     if manager is None:
@@ -770,6 +786,8 @@ def api_tasks(session_id: str):
                 "elapsed": max(end - bg.start_time, 0.0),
                 "input_tokens": bg.progress.input_tokens,
                 "output_tokens": bg.progress.output_tokens,
+                "tool_calls": bg.progress.tool_call_count,
+                "activity": bg.progress.last_activity,
                 "result_preview": (bg.result or "")[:200],
             }
         )
