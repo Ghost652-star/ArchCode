@@ -120,6 +120,9 @@ class _TeammateRunner:
         try:
             result = await self._runner.run_to_completion(task)
         finally:
+            # 总量透传:TaskManager 收尾快照读 runner 的 total_*(§8.2)
+            for _attr in ("total_input_tokens", "total_output_tokens"):
+                setattr(self, _attr, getattr(self._runner, _attr, 0))
             self._manager.mark_teammate_state(self._team, self._me, is_active=False)
             self._save_transcript()
             try:
@@ -462,6 +465,10 @@ class AgentTool(Tool):
         )
 
         if is_background:
+            from archcode.agents.task_manager import ProgressRecorder
+
+            recorder = ProgressRecorder()
+            sub_agent._progress_recorder = recorder  # 实时进度(任务面板)
             bg_agent: Any = runner
             if wt is not None:
                 bg_agent = _WorktreeBgRunner(runner, self._worktree_manager, wt)
@@ -470,6 +477,9 @@ class AgentTool(Tool):
                 task="" if fork_mode else task_text,
                 name=display,
             )
+            bg = self._task_manager.get(task_id)
+            if bg is not None:
+                recorder.bind_task(bg)
             return ToolResult(
                 f"Sub-agent launched in background.\n"
                 f"Task ID: {task_id}\n"
@@ -598,6 +608,12 @@ class AgentTool(Tool):
 
         sub_agent._mailbox_drain = _drain_mailbox  # agent.py 动态注入点消费
 
+        # 实时进度:队员的工具活动/用量经 recorder 进 bg.progress(/api/tasks)
+        from archcode.agents.task_manager import ProgressRecorder
+
+        recorder = ProgressRecorder()
+        sub_agent._progress_recorder = recorder
+
         runner = SubAgentRunner(sub_agent, conversation, inject_task=inject_task)
         log.info(
             "teammate launched: team=%s name=%s mode=%s resume=%s",
@@ -624,11 +640,15 @@ class AgentTool(Tool):
                 ),
             )
         # _TeammateRunner:跑完标记空闲 + transcript 落盘 + lead 邮箱通知(§8.1/§8.2)
-        return self._task_manager.launch(
+        task_id = self._task_manager.launch(
             _TeammateRunner(runner, self._team_manager, team_name, teammate_name, agent_id),
             task=task,
             name=f"{team_name}/{teammate_name}",
         )
+        bg = self._task_manager.get(task_id)
+        if bg is not None:
+            recorder.bind_task(bg)  # /api/tasks 与 TaskGet 读同一 ProgressInfo,实时
+        return task_id
 
     async def _wake_teammate(
         self,

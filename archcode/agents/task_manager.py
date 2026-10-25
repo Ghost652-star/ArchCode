@@ -33,6 +33,63 @@ class ProgressInfo:
     last_activity: str = ""
 
 
+def describe_tool_call(tool_name: str, args: dict[str, Any] | None) -> str:
+    """工具调用的人读一句话摘要(任务面板"此刻在干嘛"/TaskGet 用)。"""
+    args = args or {}
+
+    def _short(value: str, limit: int = 48) -> str:
+        return value if len(value) <= limit else value[: limit - 1] + "…"
+
+    path = str(args.get("file_path") or args.get("path") or "").strip()
+    if tool_name in ("ReadFile", "WriteFile", "EditFile") and path:
+        verb = {"ReadFile": "读取", "WriteFile": "写入", "EditFile": "编辑"}[tool_name]
+        from pathlib import Path as _P
+
+        return f"{verb} {_short(_P(path).name or path)}"
+    if tool_name == "Bash":
+        return f"运行 {_short(str(args.get('command', '')).strip() or '(空命令)')}"
+    if tool_name in ("Grep", "Glob"):
+        return f"搜索 {args.get('pattern', '')}"
+    if tool_name == "Agent":
+        return f"派发 {args.get('description') or args.get('subagent_type') or '子任务'}"
+    if tool_name == "SendMessage":
+        return f"发消息给 {args.get('to', '')}"
+    if tool_name in ("TaskCreate", "TaskUpdate", "TaskGet", "TaskList"):
+        return f"{tool_name} {str(args.get('task_id') or args.get('subject') or '')}".strip()
+    return tool_name
+
+
+class ProgressRecorder:
+    """后台任务(队员/子 agent)运行中的实时进度记录器。
+
+    挂在子 Agent 的 `_progress_recorder` 上:agent._execute_tool 入口喂工具
+    调用,用量在每轮 UsageEvent 处累计;launch 后把 `BackgroundTask.progress`
+    重绑到 recorder.info(同一对象双引用),/api/tasks 与 TaskGet 读它即实时。
+    单事件循环内更新,不加锁;/api/tasks 是 sync endpoint(线程池读),CPython
+    下 int/str 赋值原子,最坏读到上一次的值,可接受。
+    """
+
+    def __init__(self) -> None:
+        self.info = ProgressInfo()
+
+    def bind_task(self, bg: "BackgroundTask") -> None:
+        """把 BackgroundTask.progress 换成 recorder 持有的实例(保留已有累计)。"""
+        self.info.tool_call_count = bg.progress.tool_call_count or self.info.tool_call_count
+        self.info.input_tokens = bg.progress.input_tokens or self.info.input_tokens
+        self.info.output_tokens = bg.progress.output_tokens or self.info.output_tokens
+        self.info.last_activity = self.info.last_activity or bg.progress.last_activity
+        bg.progress = self.info
+
+    def record_tool(self, tool_name: str, args: dict[str, Any] | None) -> None:
+        self.info.tool_call_count += 1
+        self.info.last_activity = describe_tool_call(tool_name, args)
+
+    def record_usage(self, input_tokens: int, output_tokens: int) -> None:
+        """累计制:agent 每轮把自身累计总量传入(非增量)。"""
+        self.info.input_tokens = input_tokens
+        self.info.output_tokens = output_tokens
+
+
 @dataclass
 class BackgroundTask:
     """一个后台任务的完整生命周期记录(§8.2 结构图)。"""
@@ -88,8 +145,11 @@ class TaskManager:
                 bg.result = f"Error: {exc}"
             finally:
                 bg.end_time = time.monotonic()
-                bg.progress.input_tokens = int(getattr(bg.agent, "total_input_tokens", 0) or 0)
-                bg.progress.output_tokens = int(getattr(bg.agent, "total_output_tokens", 0) or 0)
+                # 有 recorder 的任务 progress 已实时累计(不覆盖);无 recorder 的
+                # 结束时一次性快照(runner 暴露 total_* 才有值)
+                if not bg.progress.input_tokens and not bg.progress.output_tokens:
+                    bg.progress.input_tokens = int(getattr(bg.agent, "total_input_tokens", 0) or 0)
+                    bg.progress.output_tokens = int(getattr(bg.agent, "total_output_tokens", 0) or 0)
                 self._async_tasks.pop(task_id, None)
                 if bg.status == "completed":
                     log.info(

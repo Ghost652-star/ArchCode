@@ -151,6 +151,8 @@ export const api = {
         elapsed: number
         input_tokens: number
         output_tokens: number
+        tool_calls: number
+        activity: string
         result_preview: string
       }>
     }>(`/api/tasks${q({ session_id: sessionId })}`),

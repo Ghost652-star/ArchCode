@@ -10,6 +10,8 @@ interface TaskInfo {
   elapsed: number
   input_tokens: number
   output_tokens: number
+  tool_calls: number
+  activity: string
   result_preview: string
 }
 
@@ -80,6 +82,14 @@ export default function TaskMonitor({ sessionId }: { sessionId: string }) {
                 <span className={styles.status}>{t.status}</span>
                 <span className={styles.elapsed}>{fmtElapsed(t.elapsed)}</span>
               </div>
+              {t.status === 'running' && (t.activity || t.tool_calls > 0) && (
+                <div className={styles.activity}>
+                  <span className={styles.activityText}>{t.activity || '运行中'}</span>
+                  {t.tool_calls > 0 && (
+                    <span className={styles.toolCount}>{t.tool_calls} 次工具</span>
+                  )}
+                </div>
+              )}
               {(t.input_tokens > 0 || t.output_tokens > 0) && (
                 <div className={styles.tokens}>
                   tok {fmtTokens(t.input_tokens + t.output_tokens)}

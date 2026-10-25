@@ -444,6 +444,13 @@ class Agent:
         self.parent_id: str | None = None            # 父 agent 标识(caller 判定/诊断,§5.5)
         self._spawned: bool = False                   # 子 agent 标记(由 AgentTool/skill fork 构造处置位;日志 who 列)
 
+        # ── 运行计量(后台任务进度/收尾快照的数据源)──────────
+        # 每轮 LLM 用量在此累计;_progress_recorder 由后台派发置位(队员/后台
+        # 子 agent),主 agent 不挂(零开销)——见 task_manager.ProgressRecorder
+        self.total_input_tokens = 0
+        self.total_output_tokens = 0
+        self._progress_recorder = None
+
         # ── Hook 子系统(hooks-design §6.1) ─────────────────
         self._hook_engine = None                     # HookEngine,启动接线时设置
 
@@ -699,6 +706,11 @@ class Agent:
                 False,
             )
             return
+
+        # 实时进度:后台子 agent/队员的工具活动(主 agent 无 recorder,零开销)
+        recorder = self._progress_recorder
+        if recorder is not None:
+            recorder.record_tool(tc.tool_name, tc.arguments)
 
         tool = self._tool_registry.get(tc.tool_name)
         start = time.monotonic()
@@ -1413,6 +1425,13 @@ class Agent:
                     result_collector.response.cache_read,
                     result_collector.response.stop_reason,
                 )
+                # 运行计量:每轮累计(后台任务进度实时更新 + 收尾快照的数据源)
+                self.total_input_tokens += result_collector.response.input_tokens
+                self.total_output_tokens += result_collector.response.output_tokens
+                if self._progress_recorder is not None:
+                    self._progress_recorder.record_usage(
+                        self.total_input_tokens, self.total_output_tokens
+                    )
                 yield UsageEvent(
                     input_tokens=result_collector.response.input_tokens,
                     output_tokens=result_collector.response.output_tokens,
