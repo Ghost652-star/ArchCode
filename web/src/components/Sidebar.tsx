@@ -392,6 +392,25 @@ export default function Sidebar({
             </div>
           )
         })}
+        {workspaces.length === 0 && !searchOpen && !adding && (
+          <div className={styles.wsEmpty}>
+            <div className={styles.wsEmptyIcon} aria-hidden>
+              <svg width={18} height={18} viewBox="0 0 16 16" fill="none">
+                <path
+                  d="M2 4.5A1.5 1.5 0 0 1 3.5 3h3l1.5 2h4.5A1.5 1.5 0 0 1 14 6.5v5A1.5 1.5 0 0 1 12.5 13h-9A1.5 1.5 0 0 1 2 11.5v-7z"
+                  stroke="currentColor"
+                  strokeWidth="1.2"
+                  strokeLinejoin="round"
+                />
+              </svg>
+            </div>
+            <div className={styles.wsEmptyTitle}>还没有工作区</div>
+            <div className={styles.wsEmptyDesc}>添加一个项目文件夹后就能开始对话</div>
+            <button className={styles.wsEmptyBtn} onClick={() => setAdding(true)}>
+              + 添加工作区
+            </button>
+          </div>
+        )}
         {contentResults.length > 0 && (
           <div className={styles.contentResults}>
             <div className={styles.groupLabel}>内容匹配(当前工作区)</div>

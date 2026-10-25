@@ -12,12 +12,13 @@
   border: none;
   background: none;
   padding: 4px 8px;
-  border-radius: 10px;
+  border-radius: var(--ac-radius-md);
   color: var(--ac-label-tertiary);
   font-size: var(--ac-font-size-caption);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
-  transition: background var(--ac-dur-fast) var(--ac-ease), color var(--ac-dur-fast) var(--ac-ease);
+  transition: background var(--ac-dur-fast) var(--ac-ease-out),
+    color var(--ac-dur-fast) var(--ac-ease-out);
 }
 
 .chip:hover,
@@ -42,10 +43,11 @@
   z-index: 50;
   width: 300px;
   padding: 12px 14px;
-  border-radius: 14px;
+  border-radius: var(--ac-radius-2xl);
   background: var(--ac-bg-menu);
   border: 0.5px solid var(--ac-border-l2);
-  box-shadow: 0 8px 28px rgb(0 0 0 / 16%);
+  box-shadow: var(--ac-shadow-2);
+  backdrop-filter: blur(14px);
   cursor: default;
 }
 
@@ -68,17 +70,17 @@
 
 .bar {
   margin: 10px 0 12px;
-  height: 4px;
-  border-radius: 2px;
+  height: 5px;
+  border-radius: var(--ac-radius-pill);
   background: var(--ac-border-l2);
   overflow: hidden;
 }
 
 .barFill {
   height: 100%;
-  border-radius: 2px;
+  border-radius: var(--ac-radius-pill);
   background: var(--ac-brand-400);
-  transition: width var(--ac-dur-fast) var(--ac-ease);
+  transition: width var(--ac-dur) var(--ac-ease-out);
 }
 
 .barFill[data-warn] {
@@ -98,7 +100,7 @@
   flex: none;
   width: 7px;
   height: 7px;
-  border-radius: 4px;
+  border-radius: var(--ac-radius-pill);
 }
 
 .label {

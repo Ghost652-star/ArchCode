@@ -1,4 +1,12 @@
-/* 全局:布局骨架 + 共享控件(按钮胶囊、输入、菜单)。 */
+/* 全局:布局骨架 + 共享控件 + 可访问性基线。 */
+
+:root {
+  color-scheme: light;
+}
+
+:root[data-theme='dark'] {
+  color-scheme: dark;
+}
 
 * {
   box-sizing: border-box;
@@ -16,9 +24,16 @@ body {
   font-size: var(--ac-font-size);
   line-height: var(--ac-line-height);
   font-weight: 400;
+  letter-spacing: 0.005em;
   color: var(--ac-label-primary);
   background: var(--ac-bg-base);
   -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+::selection {
+  background: var(--ac-brand-soft-border);
+  color: var(--ac-label-primary);
 }
 
 button {
@@ -29,6 +44,7 @@ button {
   border: none;
   padding: 0;
   cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
 }
 
 button:disabled {
@@ -51,7 +67,14 @@ input::placeholder {
   color: var(--ac-label-caption);
 }
 
-/* 应用骨架:侧栏 + 主列 */
+/* 键盘焦点:所有可交互元素统一 2px 钴蓝环 + 2px 偏移。
+   鼠标点击不出现焦点环,避免桌面端“到处都是框”。 */
+:where(button, a, input, textarea, select, [tabindex]):focus-visible {
+  outline: 2px solid var(--ac-focus-ring);
+  outline-offset: 2px;
+}
+
+/* 应用骨架:三栏 grid 由 App.module.css 接管,这里保留旧结构的兼容类 */
 .frame {
   display: flex;
   height: 100%;
@@ -83,16 +106,21 @@ input::placeholder {
   align-items: center;
   justify-content: center;
   flex: none;
-  width: 32px;
-  height: 32px;
-  border-radius: 16px;
+  width: var(--ac-control-md);
+  height: var(--ac-control-md);
+  border-radius: var(--ac-radius-pill);
   background: var(--ac-label-primary);
   color: var(--ac-bg-base);
-  transition: background var(--ac-dur-fast) var(--ac-ease);
+  transition: background var(--ac-dur-fast) var(--ac-ease-out),
+    transform var(--ac-dur-fast) var(--ac-ease-out);
 }
 
 .primaryBtn:hover:not(:disabled) {
   background: var(--ac-label-secondary);
+}
+
+.primaryBtn:active:not(:disabled) {
+  transform: scale(0.96);
 }
 
 .primaryBtn:disabled {
@@ -111,21 +139,36 @@ input::placeholder {
   margin: 0;
 }
 
-/* 滚动条(细) */
+/* 滚动条:细、低对比,悬停才加深 */
 ::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
+  width: 9px;
+  height: 9px;
 }
 
 ::-webkit-scrollbar-thumb {
-  border-radius: 4px;
+  border: 2px solid transparent;
+  border-radius: var(--ac-radius-pill);
   background: var(--ac-border-l3);
+  background-clip: content-box;
 }
 
 ::-webkit-scrollbar-thumb:hover {
   background: var(--ac-label-caption);
+  background-clip: content-box;
 }
 
 ::-webkit-scrollbar-track {
   background: transparent;
+}
+
+/* 动效降级:系统要求减少动态时,只保留状态变化,不做位移/缩放/循环动画 */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }

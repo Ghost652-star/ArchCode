@@ -6,18 +6,20 @@
   align-items: flex-end;
   justify-content: center;
   padding: 24px;
-  background: var(--ac-bg-active);
+  background: var(--ac-overlay);
+  backdrop-filter: blur(5px);
 }
 
 .card {
-  width: min(420px, calc(100vw - 48px));
+  width: min(440px, calc(100vw - 48px));
   margin-bottom: 96px;
-  padding: 16px;
-  border-radius: 16px;
+  padding: 18px;
+  border: 0.5px solid var(--ac-border-l2);
+  border-radius: var(--ac-radius-3xl);
   background: var(--ac-bg-menu);
-  backdrop-filter: blur(12px);
-  box-shadow: var(--ac-shadow-prominent);
-  animation: ac-dialog-in var(--ac-dur) var(--ac-ease);
+  backdrop-filter: blur(14px);
+  box-shadow: var(--ac-shadow-3);
+  animation: ac-dialog-in var(--ac-dur-slow) var(--ac-ease-out);
 }
 
 @keyframes ac-dialog-in {
@@ -83,14 +85,15 @@
   flex-direction: column;
   align-items: flex-start;
   gap: 2px;
-  text-align: left;
-  padding: 8px 12px;
-  border-radius: 10px;
+  padding: 9px 12px;
+  border-radius: var(--ac-radius-lg);
   border: 0.5px solid var(--ac-border-l2);
+  background: var(--ac-bg-panel);
   text-align: left;
   font-size: var(--ac-font-size-secondary);
   color: var(--ac-label-primary);
-  transition: background var(--ac-dur-fast) var(--ac-ease);
+  transition: background var(--ac-dur-fast) var(--ac-ease-out),
+    border-color var(--ac-dur-fast) var(--ac-ease-out);
 }
 
 .option:hover {
@@ -98,8 +101,8 @@
 }
 
 .optionChecked {
-  border-color: var(--ac-state-brand);
-  background: var(--ac-bg-active);
+  border-color: var(--ac-brand-soft-border);
+  background: var(--ac-brand-soft);
 }
 
 .actions {
@@ -110,26 +113,40 @@
 }
 
 .confirmBtn {
-  padding: 7px 18px;
-  border-radius: 16px;
-  background: var(--ac-label-primary);
-  color: var(--ac-bg-base);
+  height: var(--ac-control-lg);
+  padding: 0 18px;
+  border-radius: var(--ac-radius-pill);
+  background: var(--ac-brand-500);
+  color: #fff;
   font-size: var(--ac-font-size-secondary);
   font-weight: 500;
-  transition: opacity var(--ac-dur-fast) var(--ac-ease);
+  transition: background var(--ac-dur-fast) var(--ac-ease-out),
+    transform var(--ac-dur-fast) var(--ac-ease-out);
 }
 
 .confirmBtn:hover {
-  opacity: 0.85;
+  background: var(--ac-brand-450);
+}
+
+.confirmBtn:active {
+  transform: scale(0.97);
 }
 
 .denyBtn {
-  padding: 7px 18px;
-  border-radius: 16px;
+  height: var(--ac-control-lg);
+  padding: 0 18px;
+  border-radius: var(--ac-radius-pill);
   border: 0.5px solid var(--ac-border-l2);
+  background: var(--ac-bg-panel);
   font-size: var(--ac-font-size-secondary);
   color: var(--ac-label-secondary);
-  transition: background var(--ac-dur-fast) var(--ac-ease);
+  transition: background var(--ac-dur-fast) var(--ac-ease-out),
+    color var(--ac-dur-fast) var(--ac-ease-out);
+}
+
+.denyBtn:hover {
+  background: var(--ac-bg-hover);
+  color: var(--ac-label-primary);
 }
 
 .denyBtn:hover {

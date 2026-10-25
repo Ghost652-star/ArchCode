@@ -16,13 +16,14 @@
 
 .rootPath {
   flex: none;
-  padding: 8px 12px;
+  padding: 9px 12px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   direction: rtl; /* 超长路径保留尾段(文件名一侧)可见 */
   text-align: left;
-  font-size: var(--ac-font-size-caption);
+  font-family: var(--ac-font-code);
+  font-size: 11.5px;
   color: var(--ac-label-caption);
   border-bottom: 0.5px solid var(--ac-border-l1);
 }
@@ -40,12 +41,13 @@
   align-items: center;
   gap: 6px;
   width: 100%;
-  padding: 5px 8px 5px 0;
-  border-radius: 8px;
+  height: var(--ac-row-sm);
+  padding: 0 8px 0 0;
+  border-radius: var(--ac-radius-sm);
   text-align: left;
   color: var(--ac-label-primary);
-  font-size: var(--ac-font-size-secondary);
-  transition: background var(--ac-dur-fast) var(--ac-ease);
+  font-size: 13.5px;
+  transition: background var(--ac-dur-fast) var(--ac-ease-out);
 }
 
 .row:hover {
@@ -91,7 +93,9 @@
 
 .size {
   flex: none;
-  font-size: var(--ac-font-size-caption);
+  font-family: var(--ac-font-code);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
   color: var(--ac-label-caption);
 }
 

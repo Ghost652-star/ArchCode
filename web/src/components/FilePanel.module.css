@@ -4,8 +4,8 @@
   flex-direction: column;
   height: 100%;
   min-height: 0;
-  background: var(--ac-bg-base);
-  border-left: 0.5px solid var(--ac-border-l2);
+  background: var(--ac-bg-panel);
+  border-left: 0.5px solid var(--ac-border-l1);
 }
 
 .strip {
@@ -13,9 +13,9 @@
   display: flex;
   align-items: center;
   gap: 2px;
-  height: 44px;
+  height: 46px;
   padding: 0 8px;
-  border-bottom: 0.5px solid var(--ac-border-l2);
+  border-bottom: 0.5px solid var(--ac-border-l1);
 }
 
 .chip {
@@ -23,12 +23,13 @@
   align-items: center;
   gap: 6px;
   max-width: 160px;
-  min-height: 30px;
-  padding: 0 10px;
-  border-radius: 9px;
+  min-height: var(--ac-control-sm);
+  padding: 0 9px;
+  border-radius: var(--ac-radius-md);
   font-size: var(--ac-font-size-caption);
   color: var(--ac-label-secondary);
-  transition: background var(--ac-dur-fast) var(--ac-ease), color var(--ac-dur-fast) var(--ac-ease);
+  transition: background var(--ac-dur-fast) var(--ac-ease-out),
+    color var(--ac-dur-fast) var(--ac-ease-out);
 }
 
 .chip:hover {
@@ -36,8 +37,8 @@
 }
 
 .chipActive {
-  background: var(--ac-bg-active);
-  color: var(--ac-label-primary);
+  background: var(--ac-brand-soft);
+  color: var(--ac-brand-ink);
 }
 
 .chipName {
@@ -74,16 +75,22 @@
   align-items: center;
   justify-content: center;
   flex: none;
-  width: 30px;
-  height: 30px;
-  border-radius: 8px;
+  width: var(--ac-control-md);
+  height: var(--ac-control-md);
+  border-radius: var(--ac-radius-md);
   color: var(--ac-label-tertiary);
-  transition: background var(--ac-dur-fast) var(--ac-ease), color var(--ac-dur-fast) var(--ac-ease);
+  transition: background var(--ac-dur-fast) var(--ac-ease-out),
+    color var(--ac-dur-fast) var(--ac-ease-out),
+    transform var(--ac-dur-fast) var(--ac-ease-out);
 }
 
 .iconBtn:hover {
   background: var(--ac-bg-hover);
   color: var(--ac-label-primary);
+}
+
+.iconBtn:active {
+  transform: scale(0.94);
 }
 
 .body {

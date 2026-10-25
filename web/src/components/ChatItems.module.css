@@ -5,7 +5,7 @@
   display: flex;
   flex-direction: column;
   align-items: flex-end;
-  padding: 2px 0;
+  padding: 4px 0;
 }
 
 .userLine {
@@ -21,14 +21,16 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 24px;
-  height: 24px;
+  width: 26px;
+  height: 26px;
   border: none;
-  border-radius: 7px;
+  border-radius: var(--ac-radius-sm);
   background: none;
   color: var(--ac-label-caption);
   opacity: 0;
-  transition: opacity var(--ac-dur-fast) var(--ac-ease), background var(--ac-dur-fast) var(--ac-ease);
+  transition: opacity var(--ac-dur-fast) var(--ac-ease-out),
+    background var(--ac-dur-fast) var(--ac-ease-out),
+    color var(--ac-dur-fast) var(--ac-ease-out);
 }
 
 .copyBtn:hover {
@@ -50,9 +52,9 @@
 .atChip {
   display: inline-block;
   padding: 0 6px;
-  border-radius: 6px;
-  background: var(--ac-brand-50);
-  color: var(--ac-brand-500);
+  border-radius: var(--ac-radius-sm);
+  background: var(--ac-brand-soft);
+  color: var(--ac-brand-ink);
   font-size: 0.92em;
 }
 
@@ -70,7 +72,8 @@
 .bubble {
   max-width: min(var(--ac-bubble-max), 82%);
   background: var(--ac-bg-bubble);
-  border-radius: 22px;
+  border: 0.5px solid var(--ac-border-l1);
+  border-radius: var(--ac-radius-3xl);
   padding: 10px 16px;
   font-size: var(--ac-font-size);
   line-height: var(--ac-line-height);
@@ -81,9 +84,10 @@
 
 /* 用户气泡下的时间(§13-A1) */
 .userTime {
-  padding: 4px 8px 0 0;
+  padding: 5px 8px 0 0;
   font-size: var(--ac-font-size-caption);
-  color: var(--ac-label-dimmed);
+  font-variant-numeric: tabular-nums;
+  color: var(--ac-label-caption);
 }
 
 /* ── 轮次分隔(§13-A2:细线 + 居中 caption)────────────────── */
@@ -91,18 +95,19 @@
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 14px 0 6px;
+  padding: 18px 0 8px;
 }
 
 .turnLine {
   flex: 1;
   height: 0.5px;
-  background: var(--ac-border-l2);
+  background: var(--ac-border-l1);
 }
 
 .turnText {
   flex: none;
   font-size: var(--ac-font-size-caption);
+  font-variant-numeric: tabular-nums;
   color: var(--ac-label-caption);
 }
 
@@ -117,16 +122,20 @@
   align-items: center;
   gap: 8px;
   width: 100%;
-  padding: 2px 4px;
+  min-height: 28px;
+  padding: 2px 6px;
   border: none;
+  border-radius: var(--ac-radius-sm);
   background: none;
   color: var(--ac-label-caption);
   font-size: var(--ac-font-size-caption);
   text-align: left;
-  transition: color var(--ac-dur-fast) var(--ac-ease);
+  transition: color var(--ac-dur-fast) var(--ac-ease-out),
+    background var(--ac-dur-fast) var(--ac-ease-out);
 }
 
 .turnHead:hover {
+  background: var(--ac-bg-hover);
   color: var(--ac-label-secondary);
 }
 
@@ -145,8 +154,8 @@
 
 .turnBody {
   margin-left: 10px;
-  padding-left: 12px;
-  border-left: 1.5px solid var(--ac-border-l2);
+  padding-left: 14px;
+  border-left: 1px solid var(--ac-border-l2);
   min-width: 0;
 }
 
@@ -175,16 +184,17 @@
 }
 
 .markdown p {
-  margin: 8px 0;
+  margin: 10px 0;
 }
 
 .markdown pre {
   overflow-x: auto;
-  margin: 10px 0;
-  padding: 12px 14px;
-  border-radius: 12px;
+  margin: 12px 0;
+  padding: 14px 16px;
+  border-radius: var(--ac-radius-xl);
   background: var(--ac-bg-code);
   border: 0.5px solid var(--ac-border-l1);
+  box-shadow: var(--ac-shadow-1);
   font-family: var(--ac-font-code);
   font-size: var(--ac-font-size-secondary);
   line-height: var(--ac-line-height-secondary);
@@ -192,9 +202,9 @@
 
 .markdown code {
   font-family: var(--ac-font-code);
-  font-size: 0.92em;
+  font-size: 0.9em;
   background: var(--ac-bg-code);
-  border-radius: 5px;
+  border-radius: var(--ac-radius-xs);
   padding: 1px 5px;
 }
 
@@ -204,35 +214,70 @@
 }
 
 .markdown table {
-  border-collapse: collapse;
-  margin: 10px 0;
+  border-collapse: separate;
+  border-spacing: 0;
+  margin: 12px 0;
+  border: 0.5px solid var(--ac-border-l2);
+  border-radius: var(--ac-radius-md);
+  overflow: hidden;
   font-size: var(--ac-font-size-secondary);
 }
 
 .markdown th,
 .markdown td {
-  border: 0.5px solid var(--ac-border-l2);
-  padding: 5px 10px;
+  border-bottom: 0.5px solid var(--ac-border-l1);
+  padding: 6px 12px;
   text-align: left;
 }
 
+.markdown th {
+  background: var(--ac-bg-layer-2);
+  font-weight: 600;
+  color: var(--ac-label-secondary);
+}
+
+.markdown tr:last-child td {
+  border-bottom: none;
+}
+
 .markdown blockquote {
-  margin: 8px 0;
-  padding: 2px 0 2px 12px;
-  border-left: 2px solid var(--ac-border-l3);
+  margin: 10px 0;
+  padding: 8px 12px;
+  border-left: 2px solid var(--ac-brand-soft-border);
+  border-radius: 0 var(--ac-radius-sm) var(--ac-radius-sm) 0;
+  background: var(--ac-brand-soft);
   color: var(--ac-label-secondary);
 }
 
 .markdown a {
   color: var(--ac-state-brand);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
 }
 
 .markdown h1,
 .markdown h2,
 .markdown h3,
 .markdown h4 {
-  margin: 16px 0 8px;
-  font-weight: 500;
+  margin: 18px 0 8px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.markdown h1 {
+  font-family: var(--ac-font-display);
+  font-size: 22px;
+  line-height: 28px;
+}
+
+.markdown h2 {
+  font-size: 18px;
+  line-height: 24px;
+}
+
+.markdown h3 {
+  font-size: 16px;
+  line-height: 22px;
 }
 
 /* ── 思考行(§5:折叠 24px + 扫描线 + 渐隐摘要)────────────── */
@@ -245,7 +290,7 @@
 
 .reasoningRoot:not([data-expanded]) {
   contain: size layout;
-  height: calc(28px + 4px);
+  height: calc(var(--ac-row-sm) + 4px);
 }
 
 .reasoningRow {
@@ -254,17 +299,19 @@
   align-items: center;
   gap: 6px;
   width: 100%;
-  height: 28px;
+  height: var(--ac-row-sm);
   min-width: 0;
-  padding: 0 4px;
-  border-radius: 6px;
+  padding: 0 6px;
+  border-radius: var(--ac-radius-sm);
   overflow: hidden;
   text-align: left;
   color: var(--ac-label-tertiary);
-  transition: color var(--ac-dur-fast) var(--ac-ease);
+  transition: color var(--ac-dur-fast) var(--ac-ease-out),
+    background var(--ac-dur-fast) var(--ac-ease-out);
 }
 
 .reasoningRow:hover {
+  background: var(--ac-bg-hover);
   color: var(--ac-label-secondary);
 }
 
@@ -371,18 +418,21 @@
   align-items: center;
   gap: 8px;
   width: 100%;
-  height: 30px;
+  height: var(--ac-row-md);
   min-width: 0;
-  padding: 0 4px 8px;
+  padding: 0 6px;
   border: none;
-  border-bottom: 0.5px solid var(--ac-border-l2);
+  border-bottom: 0.5px solid var(--ac-border-l1);
+  border-radius: var(--ac-radius-sm);
   background: none;
   color: var(--ac-label-caption);
   text-align: left;
-  transition: color var(--ac-dur-fast) var(--ac-ease);
+  transition: color var(--ac-dur-fast) var(--ac-ease-out),
+    background var(--ac-dur-fast) var(--ac-ease-out);
 }
 
 .toolRow:hover {
+  background: var(--ac-bg-hover);
   color: var(--ac-label-secondary);
 }
 
@@ -486,8 +536,8 @@
 
 .toolPre {
   margin: 0;
-  padding: 10px 12px;
-  border-radius: 10px;
+  padding: 12px 14px;
+  border-radius: var(--ac-radius-xl);
   background: var(--ac-bg-code);
   border: 0.5px solid var(--ac-border-l1);
   font-family: var(--ac-font-code);
@@ -504,7 +554,10 @@
   display: flex;
   align-items: flex-start;
   gap: 8px;
-  padding: 4px 0;
+  padding: 8px 10px;
+  border: 0.5px solid color-mix(in srgb, var(--ac-state-error) 26%, transparent);
+  border-radius: var(--ac-radius-md);
+  background: color-mix(in srgb, var(--ac-state-error) 8%, transparent);
   font-size: var(--ac-font-size-secondary);
 }
 
@@ -513,7 +566,7 @@
   width: 7px;
   height: 7px;
   margin-top: 6px;
-  border-radius: 4px;
+  border-radius: var(--ac-radius-pill);
   background: var(--ac-state-error);
 }
 
@@ -533,7 +586,7 @@
 .noticeLine {
   flex: 1;
   height: 0.5px;
-  background: var(--ac-border-l2);
+  background: var(--ac-border-l1);
 }
 
 .noticeText {
@@ -555,18 +608,20 @@
   align-items: center;
   gap: 8px;
   width: 100%;
-  height: 30px;
+  height: var(--ac-row-sm);
   min-width: 0;
-  padding: 0 4px;
+  padding: 0 6px;
   border: none;
-  border-radius: 8px;
+  border-radius: var(--ac-radius-sm);
   background: none;
   color: var(--ac-label-tertiary);
   text-align: left;
-  transition: color var(--ac-dur-fast) var(--ac-ease);
+  transition: color var(--ac-dur-fast) var(--ac-ease-out),
+    background var(--ac-dur-fast) var(--ac-ease-out);
 }
 
 .compactRow:hover:not(:disabled) {
+  background: var(--ac-bg-hover);
   color: var(--ac-label-secondary);
 }
 

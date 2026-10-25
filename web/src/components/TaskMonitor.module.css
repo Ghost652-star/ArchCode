@@ -9,13 +9,14 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 28px;
-  height: 28px;
+  width: var(--ac-control-sm);
+  height: var(--ac-control-sm);
   border: none;
-  border-radius: 8px;
+  border-radius: var(--ac-radius-sm);
   background: none;
   color: var(--ac-label-tertiary);
-  transition: background var(--ac-dur-fast) var(--ac-ease), color var(--ac-dur-fast) var(--ac-ease);
+  transition: background var(--ac-dur-fast) var(--ac-ease-out),
+    color var(--ac-dur-fast) var(--ac-ease-out);
 }
 
 .trigger:hover,
@@ -31,7 +32,7 @@
   min-width: 14px;
   height: 14px;
   padding: 0 3px;
-  border-radius: 7px;
+  border-radius: var(--ac-radius-pill);
   background: var(--ac-brand-500);
   color: #fff;
   font-size: 10px;
@@ -42,17 +43,18 @@
 
 .panel {
   position: absolute;
-  top: calc(100% + 6px);
+  top: calc(100% + 8px);
   right: 0;
   z-index: 60;
   width: 340px;
   max-height: 420px;
   overflow-y: auto;
   padding: 8px;
-  border-radius: 12px;
+  border-radius: var(--ac-radius-2xl);
   background: var(--ac-bg-menu);
   border: 0.5px solid var(--ac-border-l2);
-  box-shadow: 0 8px 28px rgb(0 0 0 / 14%);
+  box-shadow: var(--ac-shadow-2);
+  backdrop-filter: blur(14px);
 }
 
 .head {
@@ -77,8 +79,8 @@
 }
 
 .row {
-  padding: 7px 8px;
-  border-radius: 8px;
+  padding: 8px;
+  border-radius: var(--ac-radius-md);
 }
 
 .row:hover {
@@ -96,7 +98,7 @@
   flex: none;
   width: 7px;
   height: 7px;
-  border-radius: 4px;
+  border-radius: var(--ac-radius-pill);
   background: var(--ac-border-l3);
 }
 
@@ -149,10 +151,36 @@
   color: var(--ac-label-tertiary);
 }
 
+/* 运行中的实时活动行:此刻在干嘛 + 工具计数(ProgressRecorder 提供) */
+.activity {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 3px 0 0 14px;
+  min-width: 0;
+}
+
+.activityText {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--ac-font-size-caption);
+  color: var(--ac-label-secondary);
+}
+
+.toolCount {
+  flex: none;
+  font-size: var(--ac-font-size-caption);
+  font-variant-numeric: tabular-nums;
+  color: var(--ac-label-tertiary);
+}
+
 .preview {
-  margin-top: 4px;
-  padding: 6px 8px;
-  border-radius: 8px;
+  margin-top: 5px;
+  padding: 7px 9px;
+  border-radius: var(--ac-radius-sm);
   background: var(--ac-bg-code);
   font-size: var(--ac-font-size-caption);
   line-height: 1.45;

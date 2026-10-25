@@ -31,12 +31,14 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 10px 12px 6px;
+  padding: 10px 10px 4px 14px;
 }
 
 .brand {
-  font-weight: 500;
-  font-size: 16px;
+  font-family: var(--ac-font-display);
+  font-weight: 600;
+  font-size: 15px;
+  letter-spacing: -0.01em;
   color: var(--ac-label-primary);
 }
 
@@ -44,12 +46,14 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 34px;
-  height: 34px;
-  border-radius: 10px;
-  font-size: 17px;
+  width: var(--ac-control-md);
+  height: var(--ac-control-md);
+  border-radius: var(--ac-radius-md);
+  font-size: 16px;
   color: var(--ac-label-tertiary);
-  transition: background var(--ac-dur-fast) var(--ac-ease);
+  transition: background var(--ac-dur-fast) var(--ac-ease-out),
+    color var(--ac-dur-fast) var(--ac-ease-out),
+    transform var(--ac-dur-fast) var(--ac-ease-out);
 }
 
 .iconBtn:hover {
@@ -57,29 +61,54 @@
   color: var(--ac-label-primary);
 }
 
+.iconBtn:active {
+  transform: scale(0.94);
+}
+
 .newBtn {
-  margin: 4px 12px 8px;
-  padding: 11px 14px;
-  font-size: var(--ac-font-size);
-  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  height: var(--ac-control-lg);
+  margin: 2px 12px 8px;
+  padding: 0 12px;
+  border-radius: var(--ac-radius-lg);
   border: 0.5px solid var(--ac-border-l2);
+  background: var(--ac-bg-panel);
   text-align: left;
   font-size: var(--ac-font-size-secondary);
+  font-weight: 500;
   color: var(--ac-label-primary);
-  transition: background var(--ac-dur-fast) var(--ac-ease);
+  transition: background var(--ac-dur-fast) var(--ac-ease-out),
+    border-color var(--ac-dur-fast) var(--ac-ease-out),
+    transform var(--ac-dur-fast) var(--ac-ease-out);
 }
 
 .newBtn:hover {
   background: var(--ac-bg-hover);
+  border-color: var(--ac-border-l3);
+}
+
+.newBtn:active {
+  transform: scale(0.99);
 }
 
 .search {
+  height: var(--ac-control-sm);
   margin: 0 12px 8px;
-  padding: 6px 10px;
+  padding: 0 10px;
   width: calc(100% - 24px);
-  border-radius: 10px;
+  border-radius: var(--ac-radius-md);
+  border: 0.5px solid transparent;
   background: var(--ac-bg-layer-2);
   font-size: var(--ac-font-size-caption);
+  transition: border-color var(--ac-dur-fast) var(--ac-ease-out),
+    background var(--ac-dur-fast) var(--ac-ease-out);
+}
+
+.search:focus {
+  border-color: var(--ac-border-l3);
+  background: var(--ac-bg-panel);
 }
 
 .list {
@@ -91,7 +120,9 @@
 
 .groupLabel {
   padding: 6px 8px 4px;
-  font-size: var(--ac-font-size-caption);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.08em;
   color: var(--ac-label-caption);
 }
 
@@ -125,20 +156,76 @@
   padding: 0 6px 8px;
 }
 
+/* 空态:不摆一张“空卡片”,用轻量引导把动作留在原地 */
+.wsEmpty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  margin: 12px 6px 0;
+  padding: 22px 14px 18px;
+  border: 1px dashed var(--ac-border-l2);
+  border-radius: var(--ac-radius-2xl);
+  text-align: center;
+}
+
+.wsEmptyIcon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border-radius: var(--ac-radius-pill);
+  background: var(--ac-brand-soft);
+  color: var(--ac-brand-ink);
+}
+
+.wsEmptyTitle {
+  margin-top: 2px;
+  font-size: var(--ac-font-size-secondary);
+  font-weight: 600;
+  color: var(--ac-label-primary);
+}
+
+.wsEmptyDesc {
+  font-size: var(--ac-font-size-caption);
+  line-height: 1.5;
+  color: var(--ac-label-caption);
+}
+
+.wsEmptyBtn {
+  height: var(--ac-control-sm);
+  margin-top: 4px;
+  padding: 0 12px;
+  border-radius: var(--ac-radius-pill);
+  border: 0.5px solid var(--ac-brand-soft-border);
+  background: var(--ac-brand-soft);
+  color: var(--ac-brand-ink);
+  font-size: var(--ac-font-size-caption);
+  font-weight: 500;
+  transition: background var(--ac-dur-fast) var(--ac-ease-out),
+    border-color var(--ac-dur-fast) var(--ac-ease-out);
+}
+
+.wsEmptyBtn:hover {
+  background: var(--ac-brand-soft-border);
+  border-color: var(--ac-brand-400);
+}
+
 .wsRow {
   display: flex;
   align-items: center;
   gap: 8px;
   width: 100%;
-  height: 32px;
-  margin-top: 6px;
+  height: var(--ac-row-md);
+  margin-top: 4px;
   padding: 0 8px;
-  border-radius: 8px;
+  border-radius: var(--ac-radius-md);
   text-align: left;
   color: var(--ac-label-primary);
   font-size: var(--ac-font-size-secondary);
   font-weight: 600;
-  transition: background var(--ac-dur-fast) var(--ac-ease);
+  transition: background var(--ac-dur-fast) var(--ac-ease-out);
 }
 
 .wsRow:hover {
@@ -146,7 +233,8 @@
 }
 
 .wsActive {
-  background: var(--ac-bg-active);
+  background: var(--ac-brand-soft);
+  box-shadow: inset 2px 0 0 var(--ac-brand-400);
 }
 
 .wsName {
@@ -155,14 +243,16 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 15px;
+  font-size: 14px;
   font-weight: 600;
 }
 
 .wsLive {
   flex: none;
-  font-size: 8px;
-  color: var(--ac-state-success);
+  width: 6px;
+  height: 6px;
+  border-radius: var(--ac-radius-pill);
+  background: var(--ac-state-success);
 }
 
 .sessionList {
@@ -176,26 +266,51 @@
 
 .addWs {
   display: flex;
-  gap: 4px;
+  flex-direction: column;
+  gap: 6px;
   margin: 0 12px 6px;
 }
 
 .addWsInput {
   flex: 1;
   min-width: 0;
-  padding: 8px 10px;
-  border-radius: 10px;
+  height: var(--ac-control-md);
+  padding: 0 10px;
+  border-radius: var(--ac-radius-md);
   background: var(--ac-bg-layer-2);
-  font-size: var(--ac-font-size-secondary);
+  border: 0.5px solid var(--ac-border-l2);
+  color: var(--ac-label-primary);
+  font-size: var(--ac-font-size-caption);
+  outline: none;
+  transition: border-color var(--ac-dur-fast) var(--ac-ease-out),
+    background var(--ac-dur-fast) var(--ac-ease-out);
+}
+
+.addWsInput::placeholder {
+  color: var(--ac-label-caption);
+}
+
+.addWsInput:focus {
+  background: var(--ac-bg-panel);
+  border-color: var(--ac-brand-soft-border);
 }
 
 .addWsBtn {
   flex: none;
-  padding: 0 10px;
-  border-radius: 8px;
+  height: var(--ac-control-md);
+  padding: 0 12px;
+  border-radius: var(--ac-radius-md);
   border: 0.5px solid var(--ac-border-l2);
   font-size: var(--ac-font-size-caption);
+  font-weight: 500;
   color: var(--ac-label-secondary);
+  transition: background var(--ac-dur-fast) var(--ac-ease-out),
+    color var(--ac-dur-fast) var(--ac-ease-out);
+}
+
+.addWsBtn:hover:not(:disabled) {
+  background: var(--ac-bg-hover);
+  color: var(--ac-label-primary);
 }
 
 .addWsBtn:disabled {
@@ -213,8 +328,9 @@
   display: flex;
   align-items: center;
   width: 100%;
-  border-radius: 8px;
-  transition: background var(--ac-dur-fast) var(--ac-ease);
+  min-height: var(--ac-row-sm);
+  border-radius: var(--ac-radius-md);
+  transition: background var(--ac-dur-fast) var(--ac-ease-out);
 }
 
 .sessionRow:hover {
@@ -231,7 +347,7 @@
   gap: 9px;
   flex: 1;
   min-width: 0;
-  padding: 8px 0 8px 10px;
+  padding: 7px 0 7px 10px;
   background: transparent;
   text-align: left;
 }
@@ -266,8 +382,8 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 15px;
-  line-height: 1.45;
+  font-size: 14px;
+  line-height: 20px;
   color: var(--ac-label-primary);
 }
 
@@ -283,10 +399,10 @@
   width: 100%;
   padding: 6px 8px;
   border: none;
-  border-radius: 8px;
+  border-radius: var(--ac-radius-md);
   background: none;
   text-align: left;
-  transition: background var(--ac-dur-fast) var(--ac-ease);
+  transition: background var(--ac-dur-fast) var(--ac-ease-out);
 }
 
 .contentRow:hover {
@@ -330,12 +446,13 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 22px;
-  height: 22px;
-  border-radius: 6px;
+  width: 24px;
+  height: 24px;
+  border-radius: var(--ac-radius-sm);
   font-size: 12px;
   color: var(--ac-label-tertiary);
-  transition: background var(--ac-dur-fast) var(--ac-ease), color var(--ac-dur-fast) var(--ac-ease);
+  transition: background var(--ac-dur-fast) var(--ac-ease-out),
+    color var(--ac-dur-fast) var(--ac-ease-out);
 }
 
 .rowAction:hover {
@@ -350,10 +467,12 @@
 .renameInput {
   flex: 1;
   min-width: 0;
+  height: var(--ac-control-sm);
   margin: 2px 6px 2px 4px;
-  padding: 4px 8px;
-  border-radius: 6px;
-  background: var(--ac-bg-layer-2);
+  padding: 0 8px;
+  border-radius: var(--ac-radius-sm);
+  border: 0.5px solid var(--ac-brand-soft-border);
+  background: var(--ac-bg-panel);
   font-size: var(--ac-font-size-caption);
 }
 
@@ -364,14 +483,19 @@
 }
 
 .settingsBtn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   width: 100%;
-  padding: 11px 12px;
-  border-radius: 12px;
+  height: var(--ac-control-lg);
+  padding: 0 12px;
+  border-radius: var(--ac-radius-lg);
   text-align: left;
-  font-size: var(--ac-font-size);
+  font-size: var(--ac-font-size-secondary);
   font-weight: 500;
   color: var(--ac-label-secondary);
-  transition: background var(--ac-dur-fast) var(--ac-ease);
+  transition: background var(--ac-dur-fast) var(--ac-ease-out),
+    color var(--ac-dur-fast) var(--ac-ease-out);
 }
 
 .settingsBtn:hover {
@@ -394,14 +518,15 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 18px;
-  height: 18px;
+  width: 20px;
+  height: 20px;
   border: none;
-  border-radius: 5px;
+  border-radius: var(--ac-radius-sm);
   background: none;
   color: var(--ac-label-caption);
   cursor: pointer;
-  transition: transform var(--ac-dur-fast) var(--ac-ease), background var(--ac-dur-fast) var(--ac-ease);
+  transition: transform var(--ac-dur-fast) var(--ac-ease-out),
+    background var(--ac-dur-fast) var(--ac-ease-out);
 }
 
 .wsFold:hover {
@@ -427,19 +552,22 @@
 /* 选择文件夹按钮 */
 .pickBtn {
   width: 100%;
-  padding: 8px 10px;
+  height: var(--ac-control-md);
+  padding: 0 10px;
   border: 0.5px solid var(--ac-border-l2);
-  border-radius: 9px;
+  border-radius: var(--ac-radius-md);
   background: var(--ac-bg-layer-2);
-  color: var(--ac-label-primary);
-  font-size: var(--ac-font-size-secondary);
+  color: var(--ac-label-secondary);
+  font-size: var(--ac-font-size-caption);
   cursor: pointer;
   margin-bottom: 6px;
-  transition: background var(--ac-dur-fast) var(--ac-ease);
+  transition: background var(--ac-dur-fast) var(--ac-ease-out),
+    color var(--ac-dur-fast) var(--ac-ease-out);
 }
 
 .pickBtn:hover {
   background: var(--ac-bg-hover);
+  color: var(--ac-label-primary);
 }
 
 .pickBtn:disabled {
