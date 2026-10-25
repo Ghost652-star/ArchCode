@@ -2,11 +2,20 @@
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 
 def application_root() -> Path:
-    """返回 ArchCode 当前源码/安装根目录。"""
+    """返回 ArchCode 当前源码/安装根目录。
+
+    打包环境(PyInstaller exe)下代码位于 _internal 内部目录,
+    应用根改指 exe 所在目录——用户级 .archcode 与程序文件平级,
+    升级替换 exe 时数据不随 _internal 覆盖而丢失。
+    源码运行行为完全不变(应用根 = 源码根)。
+    """
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
     return Path(__file__).resolve().parent.parent
 
 

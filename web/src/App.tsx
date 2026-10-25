@@ -21,8 +21,8 @@ const SIDEBAR_MAX = 420
 const SIDEBAR_DEFAULT = 280
 const SIDEBAR_COLLAPSED = 56
 const FILES_MIN = 300
-const FILES_MAX_RATIO = 0.7
-const FILES_DEFAULT_RATIO = 0.45
+const FILES_MAX_RATIO = 0.62
+const FILES_DEFAULT_RATIO = 0.34
 
 function loadNum(key: string, fallback: number): number {
   const raw = Number(localStorage.getItem(key))
@@ -137,9 +137,12 @@ export default function App() {
   const [workspaces, setWorkspaces] = useState<string[]>(loadWorkspaces)
   // 同步镜像:异步回调(refreshSessions/addWorkspace)里读 ref,避开闭包捕获旧清单
   const workspacesRef = useRef<string[]>(workspaces)
-  const [activeWorkspace, setActiveWorkspace] = useState(
-    () => localStorage.getItem(ACTIVE_WS_KEY) ?? '',
-  )
+  const [activeWorkspace, setActiveWorkspace] = useState(() => {
+    // 只接受仍在工作区清单里的持久值;避免旧 localStorage 指向已移除目录,
+    // 导致右栏占着一整列却渲染不出内容。
+    const saved = localStorage.getItem(ACTIVE_WS_KEY) ?? ''
+    return workspaces.includes(saved) ? saved : ''
+  })
   // 当前打开的对话(草稿或已落盘)——多会话并行下"看哪里"与"跑哪里"解耦
   const [openSession, setOpenSession] = useState<{ id: string; workspace: string } | null>(
     null,
@@ -179,6 +182,8 @@ export default function App() {
   const openWs = openSession?.workspace ?? activeWorkspace
   const openId = openSession?.id ?? null
   const openRunning = openId !== null && runningIds.includes(openId)
+  // 文件面板必须“开关打开 + 有工作区”才占列;否则第三列会留下一条空白
+  const showFiles = filesOpen && Boolean(openWs)
 
   /** itemsRef 变更后 rAF 批量刷新(高频 delta 不逐条 setState)。 */
   const render = useCallback(() => {
@@ -244,9 +249,13 @@ export default function App() {
     // 仅启动时执行一次
   }, [])
 
-  // 无激活工作区时,默认选第一个
+  // 激活工作区必须存在于清单里:无则默认第一个,指向已移除目录则回落
   useEffect(() => {
-    if (!activeWorkspace && workspaces.length) setActiveWorkspace(workspaces[0])
+    if (activeWorkspace && !workspaces.includes(activeWorkspace)) {
+      setActiveWorkspace(workspaces[0] ?? '')
+    } else if (!activeWorkspace && workspaces.length) {
+      setActiveWorkspace(workspaces[0])
+    }
   }, [workspaces, activeWorkspace])
 
   // 打开会话:加载其历史(静态快照;运行中的实时跟播为 v2)
@@ -762,7 +771,7 @@ export default function App() {
       className={styles.frame}
       style={{
         gridTemplateColumns: `${sidebarCollapsed ? SIDEBAR_COLLAPSED : sidebarW}px minmax(360px, 1fr) ${
-          filesOpen ? `${filesW}px` : '0px'
+          showFiles ? `${filesW}px` : '0px'
         }`,
       }}
       data-dragging={dragging || undefined}
@@ -794,8 +803,9 @@ export default function App() {
           <button
             className={styles.iconBtn}
             onClick={toggleFiles}
-            data-on={filesOpen || undefined}
-            title={filesOpen ? '收起文件面板' : '打开文件面板'}
+            disabled={!openWs}
+            data-on={showFiles || undefined}
+            title={!openWs ? '先添加工作区' : showFiles ? '收起文件面板' : '打开文件面板'}
           >
             <svg width={16} height={16} viewBox="0 0 16 16" fill="none" aria-hidden>
               <rect x="2" y="2.5" width="12" height="11" rx="1.5" stroke="currentColor" strokeWidth="1.2" />
@@ -848,7 +858,7 @@ export default function App() {
         </div>
         <StatusBar model={modelName} running={running} />
       </div>
-      {filesOpen && openWs && (
+      {showFiles && (
         <div className={styles.filesCol}>
           <FilePanel workDir={openWs} />
         </div>
@@ -856,7 +866,7 @@ export default function App() {
       {!sidebarCollapsed && (
         <DragHandle left={`${sidebarW}px`} onStart={onSidebarStart} onDrag={onSidebarDrag} onEnd={onDragEnd} />
       )}
-      {filesOpen && (
+      {showFiles && (
         <DragHandle
           left={`calc(100% - ${filesW}px)`}
           onStart={onFilesStart}
@@ -876,8 +886,8 @@ export default function App() {
   )
 }
 
-/** 列宽拖拽手柄:跨在列边界上的浮层,pointer capture + rAF 节流(设计 §11.3)。
- *  capture 只是加固——窗口级监听才是手势主路(滚动容器会抢手势,合成指针会抛 NotFoundError)。 */
+/** 列宽拖拽手柄:跨在列边界上的浮层,鼠标事件 + rAF 节流(设计 §11.3)。
+ *  用 window 级 mousemove/mouseup 兜底,避免 pywebview/WebView2 对 pointer capture 支持不佳导致拖不动。 */
 function DragHandle(props: {
   left: string
   onStart: () => void
@@ -885,11 +895,10 @@ function DragHandle(props: {
   onEnd: () => void
 }) {
   const [active, setActive] = useState(false)
-  const captured = useRef(false)
+  const dragging = useRef(false)
   const origin = useRef(0)
   const latest = useRef(0)
   const raf = useRef<number | null>(null)
-  const listeners = useRef<{ move: (e: PointerEvent) => void; up: () => void } | null>(null)
   const cb = useRef(props)
   cb.current = props
 
@@ -897,67 +906,54 @@ function DragHandle(props: {
     latest.current = clientX
     if (raf.current === null) {
       raf.current = requestAnimationFrame(() => {
-        raf.current = 0
+        raf.current = null
         cb.current.onDrag(latest.current - origin.current)
       })
     }
   }, [])
 
+  const onMouseMove = useCallback(
+    (e: MouseEvent) => {
+      if (!dragging.current) return
+      reportMove(e.clientX)
+    },
+    [reportMove],
+  )
+
   const finish = useCallback(() => {
-    if (!captured.current) return
-    captured.current = false
-    const l = listeners.current
-    if (l) {
-      window.removeEventListener('pointermove', l.move)
-      window.removeEventListener('pointerup', l.up)
-      window.removeEventListener('pointercancel', l.up)
-      listeners.current = null
-    }
+    if (!dragging.current) return
+    dragging.current = false
+    window.removeEventListener('mousemove', onMouseMove)
+    window.removeEventListener('mouseup', finish)
     if (raf.current !== null) {
       cancelAnimationFrame(raf.current)
       raf.current = null
     }
     setActive(false)
     cb.current.onEnd()
-  }, [])
+  }, [onMouseMove])
 
   const start = useCallback(
     (clientX: number) => {
+      if (dragging.current) return
+      dragging.current = true
       origin.current = clientX
       latest.current = clientX
       setActive(true)
       cb.current.onStart()
-      const move = (e: PointerEvent) => reportMove(e.clientX)
-      const up = () => finish()
-      listeners.current = { move, up }
-      window.addEventListener('pointermove', move)
-      window.addEventListener('pointerup', up)
-      window.addEventListener('pointercancel', up)
+      window.addEventListener('mousemove', onMouseMove)
+      window.addEventListener('mouseup', finish)
     },
-    [reportMove, finish],
+    [onMouseMove, finish],
   )
 
-  const onPointerDown = useCallback(
-    (e: React.PointerEvent<HTMLDivElement>) => {
-      if (e.button !== 0 || captured.current) return
+  const onMouseDown = useCallback(
+    (e: React.MouseEvent<HTMLDivElement>) => {
+      if (e.button !== 0) return
       e.preventDefault()
-      try {
-        e.currentTarget.setPointerCapture(e.pointerId)
-      } catch {
-        /* 无效指针(合成事件):窗口监听兜底 */
-      }
-      captured.current = true
       start(e.clientX)
     },
     [start],
-  )
-
-  const onPointerMove = useCallback(
-    (e: React.PointerEvent<HTMLDivElement>) => {
-      if (!captured.current) return
-      reportMove(e.clientX)
-    },
-    [reportMove],
   )
 
   return (
@@ -965,10 +961,7 @@ function DragHandle(props: {
       className={styles.handle}
       style={{ left: props.left }}
       data-dragging={active || undefined}
-      onPointerDown={onPointerDown}
-      onPointerMove={onPointerMove}
-      onPointerUp={finish}
-      onPointerCancel={finish}
+      onMouseDown={onMouseDown}
     />
   )
 }

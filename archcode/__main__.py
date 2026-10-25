@@ -126,24 +126,33 @@ def main() -> None:
         "--web",
         action="store_true",
         default=False,
-        help="以 Web 界面启动(FastAPI 服务 + 浏览器)代替 TUI",
+        help="以 Web 界面启动(FastAPI 服务 + 浏览器)代替桌面窗口",
+    )
+    parser.add_argument(
+        "--tui",
+        action="store_true",
+        default=False,
+        help="以终端 TUI 模式启动(默认是桌面窗口)",
     )
     parser.add_argument(
         "--port",
         type=int,
         default=8000,
-        help="Web 模式服务端口(默认 8000)",
+        help="Web/桌面模式服务端口(默认 8000)",
     )
     args = parser.parse_args()
 
-    # -w 缺省语义分模式:TUI/-p 取当前目录;--web 允许"空启动"——工作区由
-    # 前端按需注册(侧栏添加,localStorage 持久化)。避免从源码根启动时把
-    # 源码根变成工作区(路径纪律:项目级运行数据不进源码根)。
+    # 无参数 = 桌面窗口(打包 exe 的默认形态);-p/--web/--tui 各走各的
+    desktop_default = not (args.p is not None or args.web or args.tui)
+
+    # -w 缺省语义分模式:TUI/-p 取当前目录;桌面窗口/--web 允许"空启动"——
+    # 工作区由前端按需注册(侧栏添加,localStorage 持久化)。避免从源码根
+    # 启动时把源码根变成工作区(路径纪律:项目级运行数据不进源码根)。
     if args.work_dir:
         work_dir: Path | None = Path(args.work_dir).resolve()
         project_data_dir(work_dir).mkdir(parents=True, exist_ok=True)
         _setup_logging(work_dir)
-    elif args.web:
+    elif args.web or desktop_default:
         work_dir = None
         _setup_logging(application_root())
     else:
@@ -160,7 +169,8 @@ def main() -> None:
 
     _log.info(
         "archcode start: mode=%s work_dir=%s provider=%s model=%s",
-        "oneshot" if args.p is not None else ("web" if args.web else "tui"),
+        "oneshot" if args.p is not None
+        else ("web" if args.web else ("tui" if args.tui else "desktop")),
         work_dir,
         config.providers[0].protocol,
         config.providers[0].model,
@@ -191,6 +201,11 @@ def main() -> None:
             from archcode.webui.server import run_web
 
             run_web(work_dir=work_dir, config=config, port=args.port)
+        elif desktop_default:
+            # 桌面路径(默认):pywebview 原生窗口渲染 Web UI
+            from archcode.desktop import run_desktop
+
+            run_desktop(work_dir=work_dir, config=config, port=args.port)
         else:
             # TUI 路径:build 同步做(create_default_registry 不需要 await),
             # MCP 连接放到 background task,在 TUI 的 event loop 里跑。
